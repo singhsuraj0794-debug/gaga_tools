@@ -1,5 +1,8 @@
-import axios from "axios";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { logger } from "./logger";
+
+const execFileAsync = promisify(execFile);
 
 export interface Product {
   id: string;
@@ -16,47 +19,24 @@ interface ScrapedPage {
   total: number;
 }
 
-const PAGE_SIZE = 20;
-let cachedProducts: Product[] | null = null;
+const PAGE_SIZE = 5;
+let cachedProducts: Product[] = [];
 let lastScrapeTime = 0;
-const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_TTL_MS = 15 * 60 * 1000;
 
 const GATEWAY_BASE = "https://gatewayservice.gajab.com";
 const GATEWAY_KEY = "8097571064818418";
 const IMAGE_CDN = "https://resize.gajab.com";
 
-const gatewayClient = axios.create({
-  baseURL: GATEWAY_BASE,
-  headers: {
-    "Content-type": "application/json",
-    key: GATEWAY_KEY,
-    "Cache-Control": "no-cache",
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    Origin: "https://gajab.com",
-    Referer: "https://gajab.com/product-list/all",
-  },
-  timeout: 8000,
-});
-
 function buildImageUrl(containerName: string | null, image: string | null): string | null {
   if (!image) return null;
   if (image.startsWith("http")) return image;
-  const container = containerName || "";
-  return `${IMAGE_CDN}/${container}${image}?height=300&width=300`;
+  return `${IMAGE_CDN}/${containerName || ""}${image}?height=300&width=300`;
 }
 
-function buildProductUrl(slug: string): string {
-  return `https://gajab.com/product/${slug}`;
-}
-
-function formatPrice(price: number | string | null, mrp: number | string | null): string | null {
-  if (price != null && price !== "") {
-    return `₹${Number(price).toLocaleString("en-IN")}`;
-  }
-  if (mrp != null && mrp !== "") {
-    return `₹${Number(mrp).toLocaleString("en-IN")}`;
-  }
+function formatPrice(price: any, mrp: any): string | null {
+  const v = price != null && price !== "" ? price : mrp;
+  if (v != null && v !== "") return `₹${Number(v).toLocaleString("en-IN")}`;
   return null;
 }
 
@@ -69,69 +49,91 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-async function fetchAllProducts(): Promise<Product[]> {
-  const allProducts: Product[] = [];
-
-  for (let page = 1; page <= 5; page++) {
-    try {
-      const resp = await gatewayClient.get("/product/api/list/custom-product-list", {
-        params: { page, limit: 50 },
-      });
-
-      const data = resp.data;
-      const items: any[] = Array.isArray(data?.data) ? data.data : [];
-
-      const products: Product[] = items.map((item: any): Product => {
-        const id = `gajab-${item.productId || item.skuId || item.itemId || Math.random()}`;
-        const slug = item.productSlug || "";
-        return {
-          id,
-          name: item.productName || item.variantName || "Unknown Product",
-          price: formatPrice(item.price, item.mrpPrice),
-          imageUrl: buildImageUrl(item.containerName, item.image),
-          url: slug ? buildProductUrl(slug) : "https://gajab.com/product-list/all",
-          category: item.categorySlug || null,
-        };
-      });
-
-      allProducts.push(...products);
-      if (items.length < 50) break;
-    } catch (err) {
-      logger.warn({ page, err }, "Failed to fetch page, stopping");
-      break;
-    }
-  }
-
+function dedupeByProductId(products: Product[]): Product[] {
   const seen = new Set<string>();
-  return allProducts.filter((p) => {
+  return products.filter((p) => {
     if (seen.has(p.id)) return false;
     seen.add(p.id);
     return true;
   });
 }
 
+function mapItems(items: any[]): Product[] {
+  return items.map((item: any): Product => ({
+    id: `gajab-${item.productId || item.skuId || Math.random()}`,
+    name: item.productName || item.variantName || "Unknown Product",
+    price: formatPrice(item.price, item.mrpPrice),
+    imageUrl: buildImageUrl(item.containerName, item.image),
+    url: item.productSlug
+      ? `https://gajab.com/product/${item.productSlug}`
+      : "https://gajab.com/product-list/all",
+    category: item.categorySlug || item.categoryName || "general",
+  }));
+}
+
+// Use curl to bypass Node.js TLS fingerprinting issues with the gateway
+async function gatewayGet(params: Record<string, string | number>): Promise<any[]> {
+  const qs = Object.entries(params)
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+    .join("&");
+  const url = `${GATEWAY_BASE}/product/api/list/custom-product-list?${qs}`;
+
+  const { stdout } = await execFileAsync("curl", [
+    "-s",
+    "--max-time", "15",
+    url,
+    "-H", `key: ${GATEWAY_KEY}`,
+    "-H", "Origin: https://gajab.com",
+    "-H", "Referer: https://gajab.com/",
+    "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+  ]);
+
+  const data = JSON.parse(stdout);
+  return Array.isArray(data?.data) ? data.data : [];
+}
+
+async function fetchProducts(): Promise<Product[]> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const items = await gatewayGet({ page: 1, limit: 50 });
+      const products = dedupeByProductId(mapItems(items));
+      logger.info({ count: products.length, attempt }, "Fetched products from gajab.com");
+      return products;
+    } catch (err: any) {
+      logger.warn({ attempt, msg: err?.message?.slice(0, 80) }, "Product fetch failed");
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+  return cachedProducts; // return whatever we have on full failure
+}
+
+// Called at server startup: fetch products and populate cache
+export async function warmUp(): Promise<void> {
+  const products = await fetchProducts();
+  if (products.length > 0) {
+    cachedProducts = products;
+    lastScrapeTime = Date.now();
+    logger.info({ count: cachedProducts.length }, "Cache warmed — products ready");
+  } else {
+    logger.warn("warmUp: no products fetched, cache empty");
+  }
+}
+
 export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
   const now = Date.now();
-  if (!forceRefresh && cachedProducts && cachedProducts.length > 0 && now - lastScrapeTime < CACHE_TTL_MS) {
+  const cacheValid = cachedProducts.length > 0 && now - lastScrapeTime < CACHE_TTL_MS;
+
+  if (!forceRefresh && cacheValid) {
     logger.info({ count: cachedProducts.length }, "Returning cached products");
     return cachedProducts;
   }
 
-  logger.info("Fetching products from gajab.com gateway API");
-
-  try {
-    const unique = await fetchAllProducts();
-
-    if (unique.length > 0) {
-      cachedProducts = unique;
-      lastScrapeTime = Date.now();
-    }
-    logger.info({ count: unique.length }, "Product fetch complete");
-    return unique;
-  } catch (err) {
-    logger.error({ err }, "Product fetch failed");
-    throw err;
+  const products = await fetchProducts();
+  if (products.length > 0) {
+    cachedProducts = products;
+    lastScrapeTime = Date.now();
   }
+  return cachedProducts;
 }
 
 export function getPaginatedProducts(
@@ -144,6 +146,5 @@ export function getPaginatedProducts(
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(Math.max(1, page), totalPages);
   const start = (safePage - 1) * PAGE_SIZE;
-  const products = pool.slice(start, start + PAGE_SIZE);
-  return { products, total, totalPages };
+  return { products: pool.slice(start, start + PAGE_SIZE), total, totalPages };
 }
