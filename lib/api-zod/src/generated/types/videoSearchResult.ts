@@ -5,7 +5,9 @@
  * API specification for Product Video Finder
  * OpenAPI spec version: 0.1.0
  */
+import type { VideoResult } from './videoResult';
 
-export interface HealthStatus {
-  status: string;
+export interface VideoSearchResult {
+  results: VideoResult[];
+  searchedProducts: string[];
 }

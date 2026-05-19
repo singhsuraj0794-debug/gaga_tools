@@ -5,7 +5,8 @@
  * API specification for Product Video Finder
  * OpenAPI spec version: 0.1.0
  */
+import type { DownloadedFile } from './downloadedFile';
 
-export interface HealthStatus {
-  status: string;
+export interface DownloadList {
+  downloads: DownloadedFile[];
 }

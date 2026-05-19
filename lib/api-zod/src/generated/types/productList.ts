@@ -5,7 +5,11 @@
  * API specification for Product Video Finder
  * OpenAPI spec version: 0.1.0
  */
+import type { Product } from './product';
 
-export interface HealthStatus {
-  status: string;
+export interface ProductList {
+  products: Product[];
+  total: number;
+  page: number;
+  totalPages: number;
 }

@@ -3,13 +3,18 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: API specification for Product Video Finder
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: products
+    description: Product scraping operations
+  - name: videos
+    description: Video search and download operations
+
 paths:
   /healthz:
     get:
@@ -24,6 +29,103 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /products:
+    get:
+      operationId: scrapeProducts
+      tags: [products]
+      summary: Scrape products from gajab.com
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: refresh
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: List of scraped products
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductList"
+
+  /videos/search:
+    post:
+      operationId: searchVideos
+      tags: [videos]
+      summary: Search for product videos across platforms
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VideoSearchInput"
+      responses:
+        "200":
+          description: Video search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoSearchResult"
+
+  /videos/download:
+    post:
+      operationId: downloadVideo
+      tags: [videos]
+      summary: Download a video by URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VideoDownloadInput"
+      responses:
+        "200":
+          description: Download initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadJob"
+
+  /videos/downloads:
+    get:
+      operationId: listDownloads
+      tags: [videos]
+      summary: List all downloaded video files
+      responses:
+        "200":
+          description: List of downloaded files
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadList"
+
+  /videos/downloads/{jobId}/status:
+    get:
+      operationId: getDownloadStatus
+      tags: [videos]
+      summary: Get the status of a download job
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Download job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadJob"
+        "404":
+          description: Job not found
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +136,165 @@ components:
       required:
         - status
 
+    Product:
+      type: object
+      required: [id, name, url]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        price:
+          type: ["string", "null"]
+        imageUrl:
+          type: ["string", "null"]
+        url:
+          type: string
+        category:
+          type: ["string", "null"]
+
+    ProductList:
+      type: object
+      required: [products, total, page, totalPages]
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+
+    VideoSearchInput:
+      type: object
+      required: [products]
+      properties:
+        products:
+          type: array
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+          minItems: 1
+          maxItems: 5
+        platforms:
+          type: array
+          items:
+            type: string
+          default: ["youtube", "instagram", "tiktok"]
+
+    VideoResult:
+      type: object
+      required: [id, platform, title, url, productId]
+      properties:
+        id:
+          type: string
+        platform:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        embedUrl:
+          type: ["string", "null"]
+        thumbnailUrl:
+          type: ["string", "null"]
+        channelName:
+          type: ["string", "null"]
+        duration:
+          type: ["string", "null"]
+        viewCount:
+          type: ["integer", "null"]
+        productId:
+          type: string
+        productName:
+          type: string
+
+    VideoSearchResult:
+      type: object
+      required: [results, searchedProducts]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoResult"
+        searchedProducts:
+          type: array
+          items:
+            type: string
+
+    VideoDownloadInput:
+      type: object
+      required: [url, platform, title]
+      properties:
+        url:
+          type: string
+        platform:
+          type: string
+        title:
+          type: string
+        productId:
+          type: ["string", "null"]
+
+    DownloadJob:
+      type: object
+      required: [jobId, status, url, title]
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [pending, downloading, completed, failed]
+        url:
+          type: string
+        title:
+          type: string
+        platform:
+          type: ["string", "null"]
+        filePath:
+          type: ["string", "null"]
+        fileName:
+          type: ["string", "null"]
+        fileSize:
+          type: ["integer", "null"]
+        progress:
+          type: ["integer", "null"]
+        error:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    DownloadedFile:
+      type: object
+      required: [jobId, fileName, filePath, title, platform, fileSize, createdAt]
+      properties:
+        jobId:
+          type: string
+        fileName:
+          type: string
+        filePath:
+          type: string
+        title:
+          type: string
+        platform:
+          type: string
+        fileSize:
+          type: integer
+        createdAt:
+          type: string
+
+    DownloadList:
+      type: object
+      required: [downloads]
+      properties:
+        downloads:
+          type: array
+          items:
+            $ref: "#/components/schemas/DownloadedFile"
