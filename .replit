@@ -38,4 +38,3 @@ externalPort = 3000
 [userenv]
 
 [userenv.shared]
-GAJAB_API_KEY = "8097571064818418"
