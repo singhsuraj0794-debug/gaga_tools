@@ -54,6 +54,10 @@ const ALLOWED_DOWNLOAD_DOMAINS = new Set([
   "www.facebook.com",
   "m.facebook.com",
   "fb.watch",
+  "tiktok.com",
+  "www.tiktok.com",
+  "vm.tiktok.com",
+  "vt.tiktok.com",
 ]);
 
 export function isAllowedDownloadUrl(rawUrl: string): boolean {

@@ -34,3 +34,8 @@ externalPort = 3002
 [[ports]]
 localPort = 20489
 externalPort = 3000
+
+[userenv]
+
+[userenv.shared]
+GAJAB_API_KEY = "8097571064818418"

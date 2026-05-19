@@ -48,7 +48,7 @@ export const ScrapeProductsResponse = zod.object({
  */
 export const searchVideosBodyProductsMax = 5;
 
-export const searchVideosBodyPlatformsDefault = [`youtube`, `instagram`, `facebook`];
+export const searchVideosBodyPlatformsDefault = [`youtube`, `instagram`, `tiktok`];
 
 export const SearchVideosBody = zod.object({
   "products": zod.array(zod.object({

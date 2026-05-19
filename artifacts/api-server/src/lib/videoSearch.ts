@@ -278,18 +278,79 @@ async function searchFacebook(
   }
 }
 
+// ─── TikTok via tiktok-scraper7 (RapidAPI) ────────────────────────────────
+
+async function searchTikTok(
+  productName: string,
+  productId: string,
+  rapidApiKey: string,
+): Promise<VideoResult[]> {
+  try {
+    const query = buildSearchQuery(productName);
+    const resp = await axios.get(
+      "https://tiktok-scraper7.p.rapidapi.com/feed/search",
+      {
+        params: { keywords: query, count: 5, cursor: 0, publish_time: 0 },
+        headers: {
+          "x-rapidapi-host": "tiktok-scraper7.p.rapidapi.com",
+          "x-rapidapi-key": rapidApiKey,
+        },
+        timeout: 12000,
+      },
+    );
+
+    const items: any[] =
+      resp.data?.data?.videos || resp.data?.videos || [];
+
+    return items.slice(0, 5).map((item: any): VideoResult => {
+      const videoId = String(item.video_id || item.aweme_id || item.id || "");
+      const authorId = item.author?.unique_id || item.author?.nickname || "";
+      return {
+        id: `tt-${videoId}`,
+        platform: "tiktok",
+        title: item.title || item.desc || productName,
+        url: item.video_url || `https://www.tiktok.com/@${authorId}/video/${videoId}`,
+        embedUrl: null,
+        thumbnailUrl: item.cover || item.thumbnail || null,
+        channelName: item.author?.nickname || item.author?.unique_id || null,
+        duration: item.video?.duration
+          ? `${Math.round(item.video.duration)}s`
+          : null,
+        viewCount:
+          item.statistics?.play_count ?? item.play_count ?? null,
+        productId,
+        productName,
+      };
+    });
+  } catch (err: any) {
+    // Gracefully skip if subscription is not active for this endpoint
+    const status = err?.response?.status;
+    if (status === 403 || status === 402 || status === 401) {
+      logger.info(
+        { productName },
+        "TikTok search skipped — RapidAPI plan does not cover tiktok-scraper7",
+      );
+    } else {
+      logger.warn({ err: err?.message, productName }, "TikTok search failed");
+    }
+    return [];
+  }
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────
 
 export async function searchVideosForProducts(
   products: Array<{ id: string; name: string }>,
-  platforms: string[] = ["youtube", "instagram", "facebook"],
+  platforms: string[] = ["youtube", "instagram", "tiktok"],
 ): Promise<VideoResult[]> {
   // Support both GOOGLE_API_KEY and YOUTUBE_API_KEY env var names
   const googleKey = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
   const rapidApiKey = process.env.RAPIDAPI_KEY;
 
   if (!rapidApiKey) {
-    logger.warn("RAPIDAPI_KEY not set — Instagram and Facebook search will be skipped");
+    logger.warn(
+      "RAPIDAPI_KEY not set — Instagram, TikTok, and Facebook search will be skipped",
+    );
   }
   if (!googleKey) {
     logger.warn("GOOGLE_API_KEY not set — YouTube will use HTML scrape fallback");
@@ -305,6 +366,9 @@ export async function searchVideosForProducts(
     }
     if (platforms.includes("instagram") && rapidApiKey) {
       tasks.push(searchInstagram(product.name, product.id, rapidApiKey));
+    }
+    if (platforms.includes("tiktok") && rapidApiKey) {
+      tasks.push(searchTikTok(product.name, product.id, rapidApiKey));
     }
     if (platforms.includes("facebook") && rapidApiKey) {
       tasks.push(searchFacebook(product.name, product.id, rapidApiKey));

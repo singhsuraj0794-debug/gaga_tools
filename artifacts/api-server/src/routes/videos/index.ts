@@ -33,8 +33,15 @@ router.post("/videos/search", async (req, res): Promise<void> => {
   if (platforms.includes("youtube") && !googleKey) {
     warnings.push("GOOGLE_API_KEY not set — YouTube will use scrape fallback");
   }
-  if ((platforms.includes("instagram") || platforms.includes("facebook")) && !rapidApiKey) {
-    warnings.push("RAPIDAPI_KEY not set — Instagram and Facebook search skipped");
+  if (
+    (platforms.includes("instagram") ||
+      platforms.includes("tiktok") ||
+      platforms.includes("facebook")) &&
+    !rapidApiKey
+  ) {
+    warnings.push(
+      "RAPIDAPI_KEY not set — Instagram, TikTok, and Facebook search skipped",
+    );
   }
   if (warnings.length > 0) {
     req.log.warn({ warnings }, "Missing API keys for video search");
@@ -43,7 +50,7 @@ router.post("/videos/search", async (req, res): Promise<void> => {
   try {
     const results = await searchVideosForProducts(
       products,
-      platforms ?? ["youtube", "instagram", "facebook"],
+      platforms ?? ["youtube", "instagram", "tiktok"],
     );
     res.json({
       results,
