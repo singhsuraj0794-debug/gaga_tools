@@ -134,6 +134,7 @@ export default function Dashboard() {
   const platformColors: Record<string, string> = {
     youtube: "bg-red-500/10 text-red-600 border-red-500/20",
     instagram: "bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/20",
+    facebook: "bg-blue-600/10 text-blue-600 border-blue-600/20",
     tiktok: "bg-slate-800/10 text-slate-800 border-slate-800/20 dark:bg-white/10 dark:text-white dark:border-white/20",
   };
 

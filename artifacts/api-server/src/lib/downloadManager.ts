@@ -154,43 +154,77 @@ export function startDownload(
 
   const child = spawn(ytDlpPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 
-  let resolvedFileName: string | null = null;
+  // Track all destination files mentioned by yt-dlp (last one wins = merged file)
+  let lastDestination: string | null = null;
+  const startTime = Date.now();
+  let stdoutBuf = "";
 
   child.stdout.on("data", (chunk: Buffer) => {
-    const line = chunk.toString();
+    stdoutBuf += chunk.toString();
+    const lines = stdoutBuf.split("\n");
+    stdoutBuf = lines.pop() ?? "";
 
-    // Parse progress percentage
-    const progressMatch = line.match(/(\d+\.?\d*)%/);
-    if (progressMatch) {
-      job.progress = Math.floor(parseFloat(progressMatch[1]));
-    }
+    for (const line of lines) {
+      const progressMatch = line.match(/(\d+\.?\d*)%/);
+      if (progressMatch) {
+        const pct = Math.floor(parseFloat(progressMatch[1]));
+        // Only go to 99 until close fires, so UI doesn't show 100 before file is ready
+        job.progress = Math.min(pct, 99);
+      }
 
-    // Extract filename from output
-    const destMatch = line.match(/\[download\] Destination: (.+)/);
-    if (destMatch) {
-      resolvedFileName = destMatch[1].trim();
-    }
-    const mergeMatch = line.match(/\[Merger\] Merging formats into "(.+)"/);
-    if (mergeMatch) {
-      resolvedFileName = mergeMatch[1].trim();
+      const destMatch = line.match(/\[download\] Destination: (.+)/);
+      if (destMatch) lastDestination = destMatch[1].trim();
+
+      // Merger output: final merged mp4 path
+      const mergeMatch = line.match(/\[Merger\] Merging formats into "(.+)"/);
+      if (mergeMatch) lastDestination = mergeMatch[1].trim();
+
+      // ffmpeg output line also contains the final file
+      const moveMatch = line.match(/\[download\] (.+\.mp4) has already been downloaded/);
+      if (moveMatch) lastDestination = moveMatch[1].trim();
     }
   });
 
   child.stderr.on("data", (chunk: Buffer) => {
-    logger.warn({ jobId, stderr: chunk.toString().trim() }, "yt-dlp stderr");
+    const text = chunk.toString().trim();
+    // Only log real errors, not INFO/WARNING lines
+    if (text && !text.startsWith("WARNING:") && !text.startsWith("[debug]")) {
+      logger.warn({ jobId, stderr: text }, "yt-dlp stderr");
+    }
   });
 
   child.on("close", (code) => {
     if (code === 0) {
-      // Find the actual downloaded file
-      let finalPath = resolvedFileName;
-      if (!finalPath) {
-        // Scan downloads dir for newest file
+      // Priority 1: use the last destination yt-dlp reported
+      let finalPath = lastDestination;
+
+      // Priority 2: scan downloads dir for the newest file created after job started
+      if (!finalPath || !fs.existsSync(finalPath)) {
         try {
-          const files = fs.readdirSync(DOWNLOADS_DIR)
-            .map((f) => ({ name: f, path: path.join(DOWNLOADS_DIR, f), mtime: fs.statSync(path.join(DOWNLOADS_DIR, f)).mtimeMs }))
+          const files = fs
+            .readdirSync(DOWNLOADS_DIR)
+            .map((f) => {
+              const p = path.join(DOWNLOADS_DIR, f);
+              const stat = fs.statSync(p);
+              return { p, mtime: stat.mtimeMs };
+            })
+            .filter((f) => f.mtime >= startTime)
             .sort((a, b) => b.mtime - a.mtime);
-          if (files.length > 0) finalPath = files[0].path;
+          if (files.length > 0) finalPath = files[0].p;
+        } catch {}
+      }
+
+      // Priority 3: newest file in downloads dir regardless of time
+      if (!finalPath || !fs.existsSync(finalPath)) {
+        try {
+          const files = fs
+            .readdirSync(DOWNLOADS_DIR)
+            .map((f) => {
+              const p = path.join(DOWNLOADS_DIR, f);
+              return { p, mtime: fs.statSync(p).mtimeMs };
+            })
+            .sort((a, b) => b.mtime - a.mtime);
+          if (files.length > 0) finalPath = files[0].p;
         } catch {}
       }
 
