@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   useScrapeProducts, 
   useSearchVideos, 
@@ -76,9 +76,13 @@ export default function Dashboard() {
   // State
   const [page, setPage] = useState(1);
   const [selectedProducts, setSelectedProducts] = useState<any[]>([]);
-  
+  const [forceRefresh, setForceRefresh] = useState(false);
+
   // Queries & Mutations
-  const { data: productsData, isLoading: isLoadingProducts, refetch: refetchProducts } = useScrapeProducts({ page });
+  const { data: productsData, isLoading: isLoadingProducts } = useScrapeProducts(
+    { page, refresh: forceRefresh || undefined },
+    { query: { staleTime: 0 } }
+  );
   
   const searchVideos = useSearchVideos();
   const downloadVideo = useDownloadVideo();
@@ -87,9 +91,16 @@ export default function Dashboard() {
 
   const [searchResults, setSearchResults] = useState<any>(null);
 
+  // Reset forceRefresh once data arrives
+  useEffect(() => {
+    if (forceRefresh && productsData) {
+      setForceRefresh(false);
+    }
+  }, [productsData, forceRefresh]);
+
   // Handlers
   const handleScrape = () => {
-    refetchProducts();
+    setForceRefresh(true);
   };
 
   const handleProductToggle = (product: any, checked: boolean) => {
@@ -196,9 +207,12 @@ export default function Dashboard() {
                 })}
               </div>
             ) : (
-              <div className="p-8 text-center text-muted-foreground flex flex-col items-center">
-                <AlertCircle className="w-8 h-8 mb-2 opacity-20" />
-                <p className="text-sm">Click refresh to load products</p>
+              <div className="p-8 text-center text-muted-foreground flex flex-col items-center gap-3">
+                <AlertCircle className="w-8 h-8 opacity-20" />
+                <p className="text-sm">No products found</p>
+                <Button size="sm" variant="outline" onClick={handleScrape} className="h-7 text-xs px-3">
+                  <RefreshCw className="w-3 h-3 mr-1.5" /> Retry
+                </Button>
               </div>
             )}
           </ScrollArea>

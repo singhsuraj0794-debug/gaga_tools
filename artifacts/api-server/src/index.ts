@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { scrapeProducts } from "./lib/productScraper";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,8 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  scrapeProducts(false).catch((e) =>
+    logger.warn({ err: e }, "Startup product pre-fetch failed")
+  );
 });

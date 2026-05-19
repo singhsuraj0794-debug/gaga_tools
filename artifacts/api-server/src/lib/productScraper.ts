@@ -36,7 +36,7 @@ const gatewayClient = axios.create({
     Origin: "https://gajab.com",
     Referer: "https://gajab.com/product-list/all",
   },
-  timeout: 15000,
+  timeout: 8000,
 });
 
 function buildImageUrl(containerName: string | null, image: string | null): string | null {
@@ -115,8 +115,10 @@ export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
       return true;
     });
 
-    cachedProducts = unique;
-    lastScrapeTime = Date.now();
+    if (unique.length > 0) {
+      cachedProducts = unique;
+      lastScrapeTime = Date.now();
+    }
     logger.info({ count: unique.length }, "Product fetch complete");
     return unique;
   } catch (err) {
