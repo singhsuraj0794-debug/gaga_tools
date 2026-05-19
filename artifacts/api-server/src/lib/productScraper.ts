@@ -60,33 +60,59 @@ function formatPrice(price: number | string | null, mrp: number | string | null)
   return null;
 }
 
-async function fetchPage(page: number): Promise<{ products: Product[]; total: number }> {
-  const resp = await gatewayClient.get("/product/api/list/custom-product-list", {
-    params: { page, limit: PAGE_SIZE },
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+async function fetchAllProducts(): Promise<Product[]> {
+  const allProducts: Product[] = [];
+
+  for (let page = 1; page <= 5; page++) {
+    try {
+      const resp = await gatewayClient.get("/product/api/list/custom-product-list", {
+        params: { page, limit: 50 },
+      });
+
+      const data = resp.data;
+      const items: any[] = Array.isArray(data?.data) ? data.data : [];
+
+      const products: Product[] = items.map((item: any): Product => {
+        const id = `gajab-${item.productId || item.skuId || item.itemId || Math.random()}`;
+        const slug = item.productSlug || "";
+        return {
+          id,
+          name: item.productName || item.variantName || "Unknown Product",
+          price: formatPrice(item.price, item.mrpPrice),
+          imageUrl: buildImageUrl(item.containerName, item.image),
+          url: slug ? buildProductUrl(slug) : "https://gajab.com/product-list/all",
+          category: item.categorySlug || null,
+        };
+      });
+
+      allProducts.push(...products);
+      if (items.length < 50) break;
+    } catch (err) {
+      logger.warn({ page, err }, "Failed to fetch page, stopping");
+      break;
+    }
+  }
+
+  const seen = new Set<string>();
+  return allProducts.filter((p) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
   });
-
-  const data = resp.data;
-  const items: any[] = Array.isArray(data?.data) ? data.data : [];
-
-  const products: Product[] = items.map((item: any): Product => {
-    const id = `gajab-${item.productId || item.skuId || item.itemId || Math.random()}`;
-    const slug = item.productSlug || "";
-    return {
-      id,
-      name: item.productName || item.variantName || "Unknown Product",
-      price: formatPrice(item.price, item.mrpPrice),
-      imageUrl: buildImageUrl(item.containerName, item.image),
-      url: slug ? buildProductUrl(slug) : "https://gajab.com/product-list/all",
-      category: item.categorySlug || null,
-    };
-  });
-
-  return { products, total: items.length };
 }
 
 export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
   const now = Date.now();
-  if (!forceRefresh && cachedProducts && now - lastScrapeTime < CACHE_TTL_MS) {
+  if (!forceRefresh && cachedProducts && cachedProducts.length > 0 && now - lastScrapeTime < CACHE_TTL_MS) {
     logger.info({ count: cachedProducts.length }, "Returning cached products");
     return cachedProducts;
   }
@@ -94,26 +120,7 @@ export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
   logger.info("Fetching products from gajab.com gateway API");
 
   try {
-    const allProducts: Product[] = [];
-    const maxPages = 5;
-
-    for (let page = 1; page <= maxPages; page++) {
-      try {
-        const { products, total } = await fetchPage(page);
-        allProducts.push(...products);
-        if (products.length < PAGE_SIZE) break;
-      } catch (err) {
-        logger.warn({ page, err }, "Failed to fetch page, stopping");
-        break;
-      }
-    }
-
-    const seen = new Set<string>();
-    const unique = allProducts.filter((p) => {
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
+    const unique = await fetchAllProducts();
 
     if (unique.length > 0) {
       cachedProducts = unique;
@@ -130,11 +137,13 @@ export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
 export function getPaginatedProducts(
   allProducts: Product[],
   page: number,
+  randomize = false,
 ): ScrapedPage {
-  const total = allProducts.length;
+  const pool = randomize ? shuffle(allProducts) : allProducts;
+  const total = pool.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(Math.max(1, page), totalPages);
   const start = (safePage - 1) * PAGE_SIZE;
-  const products = allProducts.slice(start, start + PAGE_SIZE);
+  const products = pool.slice(start, start + PAGE_SIZE);
   return { products, total, totalPages };
 }

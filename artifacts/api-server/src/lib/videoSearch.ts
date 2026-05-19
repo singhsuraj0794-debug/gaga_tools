@@ -30,12 +30,18 @@ function formatDuration(iso: string): string {
 
 // ─── YouTube via Data API v3 ───────────────────────────────────────────────
 
+function buildSearchQuery(productName: string): string {
+  // Use exact product name as primary query — no generic suffixes
+  // Strip size/color variants in parentheses to keep the core name
+  return productName.replace(/\s*\([^)]+\)\s*/g, " ").trim();
+}
+
 async function searchYouTubeWithApi(
   productName: string,
   productId: string,
   apiKey: string,
 ): Promise<VideoResult[]> {
-  const query = `${productName} review unboxing`;
+  const query = buildSearchQuery(productName);
   const searchResp = await axios.get("https://www.googleapis.com/youtube/v3/search", {
     params: { key: apiKey, q: query, part: "snippet", type: "video", maxResults: 5 },
     timeout: 10000,
@@ -84,7 +90,7 @@ async function searchYouTubeScrape(
   productName: string,
   productId: string,
 ): Promise<VideoResult[]> {
-  const query = encodeURIComponent(`${productName} review unboxing`);
+  const query = encodeURIComponent(buildSearchQuery(productName));
   const resp = await axios.get(`https://www.youtube.com/results?search_query=${query}`, {
     headers: {
       "User-Agent":
@@ -229,7 +235,7 @@ async function searchFacebook(
   rapidApiKey: string,
 ): Promise<VideoResult[]> {
   try {
-    const query = `${productName} review unboxing`;
+    const query = buildSearchQuery(productName);
     const resp = await axios.get("https://facebook-scraper3.p.rapidapi.com/search/videos", {
       params: { query, limit: 5 },
       headers: {

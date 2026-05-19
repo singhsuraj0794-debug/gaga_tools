@@ -11,7 +11,7 @@ router.get("/products", async (req, res): Promise<void> => {
 
   try {
     const allProducts = await scrapeProducts(refresh);
-    const { products, total, totalPages } = getPaginatedProducts(allProducts, page);
+    const { products, total, totalPages } = getPaginatedProducts(allProducts, page, refresh);
     res.json({ products, total, page, totalPages });
   } catch (err: any) {
     req.log.error({ err }, "Failed to scrape products");
