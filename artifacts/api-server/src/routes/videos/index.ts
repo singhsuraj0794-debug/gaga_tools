@@ -82,7 +82,7 @@ router.post("/videos/download", async (req, res): Promise<void> => {
 
   if (!isAllowedDownloadUrl(url)) {
     res.status(400).json({
-      error: "URL not allowed. Only YouTube, Instagram, and Facebook URLs are accepted.",
+      error: "URL not allowed. Only YouTube, Instagram, Facebook, and TikTok URLs are accepted.",
     });
     return;
   }

@@ -82,19 +82,20 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
           fileSize?: number;
           error?: string;
         };
-        if (data.error) {
-          es.close();
-          return;
-        }
+        // Apply status and fields first, then check for terminal conditions.
+        // Server may send both status:"failed" and error together — we must
+        // process status before deciding to close.
         if (data.status) setLiveStatus(data.status);
         if (data.progress !== undefined) setProgress(data.progress);
         if (data.filePath) setFilePath(data.filePath);
         if (data.fileSize) setFileSize(data.fileSize);
 
-        if (data.status === "completed" || data.status === "failed") {
+        if (data.status === "completed" || data.status === "failed" || data.error) {
           es.close();
           queryClient.invalidateQueries({ queryKey: getListDownloadsQueryKey() });
-          onComplete?.(job.jobId);
+          if (data.status === "completed" || data.status === "failed") {
+            onComplete?.(job.jobId);
+          }
         }
       } catch {}
     };

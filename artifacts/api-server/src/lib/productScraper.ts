@@ -102,14 +102,19 @@ async function gatewayGet(params: Record<string, string | number>): Promise<any[
 // ─── Puppeteer-based crawl (primary) ─────────────────────────────────────
 
 async function scrapeWithPuppeteer(): Promise<Product[]> {
-  // Resolve chromium from common system paths in the Replit/NixOS environment
+  // Resolve chromium executable.
+  // Priority: PUPPETEER_EXECUTABLE_PATH env var (set this in Replit Secrets
+  // or the environment to enable Puppeteer in production/NixOS). Falls back
+  // to common system paths for local development environments.
+  // If none are found the caller falls back to the gateway API.
   const executablePath = (() => {
     const candidates = [
       process.env.PUPPETEER_EXECUTABLE_PATH,
-      "/nix/store/chromium/bin/chromium",
+      process.env.CHROME_BIN,
       "/usr/bin/chromium",
       "/usr/bin/chromium-browser",
       "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
     ].filter(Boolean) as string[];
     const fs = require("fs") as typeof import("fs");
     for (const p of candidates) {
@@ -119,7 +124,10 @@ async function scrapeWithPuppeteer(): Promise<Product[]> {
   })();
 
   if (!executablePath) {
-    throw new Error("No chromium executable found — cannot use Puppeteer scraper");
+    throw new Error(
+      "No Chromium executable found. Set PUPPETEER_EXECUTABLE_PATH or CHROME_BIN " +
+      "to enable Puppeteer scraping. Falling back to gateway API."
+    );
   }
 
   const browser = await puppeteer.launch({
