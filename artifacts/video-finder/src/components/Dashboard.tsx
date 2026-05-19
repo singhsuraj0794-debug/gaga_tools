@@ -261,10 +261,17 @@ export default function Dashboard() {
 
       {/* 3-panel layout */}
       <main className="flex-1 flex overflow-hidden">
-        {/* ── Left Panel: Products ── */}
-        <section className="w-[400px] border-r flex flex-col bg-card/50">
+        {/* ── Left Panel: Products spreadsheet table ── */}
+        <section className="w-[480px] border-r flex flex-col bg-card/50 shrink-0">
           <div className="p-3 border-b flex items-center justify-between bg-card">
-            <h2 className="font-medium text-sm">Products</h2>
+            <h2 className="font-medium text-sm">
+              Products
+              {selectedProducts.length > 0 && (
+                <span className="ml-2 text-muted-foreground font-normal">
+                  ({selectedProducts.length}/5 selected)
+                </span>
+              )}
+            </h2>
             <Button
               size="sm"
               variant="outline"
@@ -279,77 +286,96 @@ export default function Dashboard() {
             </Button>
           </div>
 
-          <ScrollArea className="flex-1">
-            {isLoadingProducts ? (
-              <div className="p-4 space-y-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} className="h-16 w-full" />
-                ))}
-              </div>
-            ) : productsData?.products?.length ? (
-              <div className="divide-y">
-                {productsData.products.map((p) => {
-                  const isSelected = selectedProducts.some(
-                    (sp) => sp.id === p.id
-                  );
-                  return (
-                    <div
-                      key={p.id}
-                      className={`flex items-start gap-3 p-3 hover:bg-muted/50 transition-colors ${
-                        isSelected ? "bg-primary/5" : ""
-                      }`}
-                    >
-                      <Checkbox
-                        checked={isSelected}
-                        onCheckedChange={(c) => handleProductToggle(p, !!c)}
-                        className="mt-1"
-                      />
-                      {p.imageUrl ? (
-                        <div className="w-12 h-12 shrink-0 rounded overflow-hidden bg-muted border">
-                          <img
-                            src={p.imageUrl}
-                            alt={p.name}
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                      ) : (
-                        <div className="w-12 h-12 shrink-0 rounded bg-muted border flex items-center justify-center">
-                          <FileVideo className="w-4 h-4 text-muted-foreground" />
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-sm font-medium leading-tight truncate">
-                          {p.name}
-                        </h3>
-                        <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
-                          {p.price && <span>{p.price}</span>}
-                          {p.category && (
-                            <span className="truncate">{p.category}</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="p-8 text-center text-muted-foreground flex flex-col items-center gap-3">
-                <AlertCircle className="w-8 h-8 opacity-20" />
-                <p className="text-sm">No products found</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleScrape}
-                  className="h-7 text-xs px-3"
-                >
-                  <RefreshCw className="w-3 h-3 mr-1.5" /> Retry
-                </Button>
-              </div>
-            )}
-          </ScrollArea>
+          {/* Spreadsheet-style table */}
+          <div className="flex-1 overflow-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead className="sticky top-0 z-10 bg-muted/80 backdrop-blur-sm">
+                <tr className="border-b">
+                  <th className="w-8 px-2 py-2 text-center font-medium text-muted-foreground"></th>
+                  <th className="w-10 px-1 py-2 text-left font-medium text-muted-foreground">Img</th>
+                  <th className="px-2 py-2 text-left font-medium text-muted-foreground">Name</th>
+                  <th className="w-20 px-2 py-2 text-left font-medium text-muted-foreground">Price</th>
+                  <th className="w-10 px-2 py-2 text-left font-medium text-muted-foreground">URL</th>
+                </tr>
+              </thead>
+              <tbody>
+                {isLoadingProducts
+                  ? [1, 2, 3, 4, 5].map((i) => (
+                      <tr key={i} className="border-b">
+                        <td colSpan={5} className="px-2 py-2">
+                          <Skeleton className="h-8 w-full" />
+                        </td>
+                      </tr>
+                    ))
+                  : productsData?.products?.length
+                  ? productsData.products.map((p) => {
+                      const isSelected = selectedProducts.some((sp) => sp.id === p.id);
+                      return (
+                        <tr
+                          key={p.id}
+                          className={`border-b hover:bg-muted/40 transition-colors cursor-pointer ${
+                            isSelected ? "bg-primary/8" : ""
+                          }`}
+                          onClick={() => handleProductToggle(p, !isSelected)}
+                        >
+                          <td className="px-2 py-1.5 text-center">
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={(c) => handleProductToggle(p, !!c)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </td>
+                          <td className="px-1 py-1.5">
+                            {p.imageUrl ? (
+                              <img
+                                src={p.imageUrl}
+                                alt={p.name}
+                                className="w-8 h-8 object-cover rounded border"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded border bg-muted flex items-center justify-center">
+                                <FileVideo className="w-3 h-3 text-muted-foreground" />
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 font-medium leading-tight">
+                            <span className="line-clamp-2" title={p.name}>{p.name}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-muted-foreground whitespace-nowrap">
+                            {p.price || "—"}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <a
+                              href={p.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-primary underline underline-offset-2 hover:opacity-75"
+                              title={p.url}
+                            >
+                              View
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  : (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                        <AlertCircle className="w-6 h-6 mx-auto mb-2 opacity-20" />
+                        <p>No products found</p>
+                        <Button size="sm" variant="outline" onClick={handleScrape} className="mt-2 h-7 text-xs px-3">
+                          <RefreshCw className="w-3 h-3 mr-1.5" /> Retry
+                        </Button>
+                      </td>
+                    </tr>
+                  )}
+              </tbody>
+            </table>
+          </div>
 
           {/* Pagination */}
-          <div className="p-3 border-t bg-card flex items-center justify-between">
+          <div className="p-3 border-t bg-card flex items-center justify-between shrink-0">
             <Button
               variant="ghost"
               size="icon"
@@ -419,31 +445,38 @@ export default function Dashboard() {
                           src={video.embedUrl}
                           className="absolute inset-0 w-full h-full"
                           allowFullScreen
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         />
-                      </div>
-                    ) : video.thumbnailUrl ? (
-                      <div className="aspect-video bg-muted relative border-b">
-                        <img
-                          src={video.thumbnailUrl}
-                          alt={video.title}
-                          className="w-full h-full object-cover"
-                        />
-                        <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                          <Button
-                            variant="secondary"
-                            size="icon"
-                            className="rounded-full w-12 h-12"
-                            onClick={() =>
-                              window.open(video.url, "_blank")
-                            }
-                          >
-                            <Play className="w-5 h-5 ml-1" />
-                          </Button>
-                        </div>
                       </div>
                     ) : (
-                      <div className="aspect-video bg-muted flex items-center justify-center border-b">
-                        <FileVideo className="w-8 h-8 text-muted-foreground/30" />
+                      /* No embed URL (TikTok/Instagram): show thumbnail with overlay.
+                         After download completes the Download button becomes a Play button
+                         that streams the file inline via the /play endpoint. */
+                      <div className="aspect-video bg-muted relative border-b group">
+                        {video.thumbnailUrl ? (
+                          <img
+                            src={video.thumbnailUrl}
+                            alt={video.title}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <FileVideo className="w-8 h-8 text-muted-foreground/30" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Badge variant="secondary" className="text-[10px]">
+                            Download to watch in-app
+                          </Badge>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => window.open(video.url, "_blank")}
+                          >
+                            <Play className="w-3 h-3 mr-1" /> Preview on {video.platform}
+                          </Button>
+                        </div>
                       </div>
                     )}
                     <CardContent className="p-4 flex-1 flex flex-col">

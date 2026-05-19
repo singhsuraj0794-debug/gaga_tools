@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import puppeteer from "puppeteer-core";
 import { logger } from "./logger";
 
 const execFileAsync = promisify(execFile);
@@ -98,15 +99,122 @@ async function gatewayGet(params: Record<string, string | number>): Promise<any[
   return Array.isArray(data?.data) ? data.data : [];
 }
 
+// ─── Puppeteer-based crawl (primary) ─────────────────────────────────────
+
+async function scrapeWithPuppeteer(): Promise<Product[]> {
+  // Resolve chromium from common system paths in the Replit/NixOS environment
+  const executablePath = (() => {
+    const candidates = [
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      "/nix/store/chromium/bin/chromium",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/google-chrome",
+    ].filter(Boolean) as string[];
+    const fs = require("fs") as typeof import("fs");
+    for (const p of candidates) {
+      try { if (fs.existsSync(p)) return p; } catch {}
+    }
+    return null;
+  })();
+
+  if (!executablePath) {
+    throw new Error("No chromium executable found — cannot use Puppeteer scraper");
+  }
+
+  const browser = await puppeteer.launch({
+    executablePath,
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+    ],
+  });
+
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    );
+
+    logger.info("Puppeteer: navigating to gajab.com product list");
+    await page.goto("https://gajab.com/product-list/all", {
+      waitUntil: "networkidle2",
+      timeout: 30000,
+    });
+
+    // Extract product data from the page DOM.
+    // page.evaluate() runs serialized in the browser context; use Function
+    // constructor to avoid TypeScript complaining about missing DOM types in
+    // the Node.js compilation target.
+    type RawProduct = { name: string; price: string | null; imageUrl: string | null; url: string };
+    const products: RawProduct[] = await page.evaluate(
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      new Function(`
+        const items = [];
+        const cards = document.querySelectorAll(
+          "[class*='product-card'], [class*='ProductCard'], [class*='product_card'], .product-item, [data-testid*='product']"
+        );
+        cards.forEach(card => {
+          const name = (card.querySelector("[class*='name'], [class*='title'], h3, h2") || {}).textContent || "";
+          const priceEl = card.querySelector("[class*='price'], [class*='Price']");
+          const price = priceEl ? priceEl.textContent.trim() : null;
+          const img = card.querySelector("img");
+          const imageUrl = img ? (img.src || img.getAttribute("data-src")) : null;
+          const link = card.querySelector("a");
+          const href = link ? link.href : "";
+          const url = href.startsWith("http") ? href : href ? "https://gajab.com" + href : "https://gajab.com/product-list/all";
+          if (name.trim()) items.push({ name: name.trim(), price, imageUrl, url });
+        });
+        return items;
+      `) as () => RawProduct[],
+    );
+
+    if (products.length === 0) {
+      throw new Error("Puppeteer: no product cards found in DOM — page structure may have changed");
+    }
+
+    logger.info({ count: products.length }, "Puppeteer crawl succeeded");
+
+    return products.map((p, i): Product => ({
+      id: `gajab-puppeteer-${i}-${Buffer.from(p.name).toString("base64").slice(0, 8)}`,
+      name: p.name,
+      price: p.price || null,
+      imageUrl: p.imageUrl || null,
+      url: p.url,
+      category: "general",
+    }));
+  } finally {
+    await browser.close();
+  }
+}
+
 async function fetchProducts(): Promise<Product[]> {
+  // Primary: Puppeteer headless crawl of gajab.com
+  try {
+    const products = await scrapeWithPuppeteer();
+    if (products.length > 0) {
+      logger.info({ count: products.length }, "Fetched products via Puppeteer");
+      return products;
+    }
+  } catch (err: any) {
+    logger.warn(
+      { msg: err?.message?.slice(0, 120) },
+      "Puppeteer scrape failed — falling back to gateway API",
+    );
+  }
+
+  // Fallback: internal gateway API via curl (bypasses Node.js TLS fingerprinting)
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const items = await gatewayGet({ page: 1, limit: 50 });
       const products = dedupeByProductId(mapItems(items));
-      logger.info({ count: products.length, attempt }, "Fetched products from gajab.com");
+      logger.info({ count: products.length, attempt }, "Fetched products via gateway API (fallback)");
       return products;
     } catch (err: any) {
-      logger.warn({ attempt, msg: err?.message?.slice(0, 80) }, "Product fetch failed");
+      logger.warn({ attempt, msg: err?.message?.slice(0, 80) }, "Gateway API fetch failed");
       if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
   }
