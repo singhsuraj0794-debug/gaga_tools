@@ -131,6 +131,53 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
   );
 }
 
+// ─── VideoPreview (TikTok / Instagram in-app player) ──────────────────────
+
+function VideoPreview({ video }: { video: any }) {
+  const [playing, setPlaying] = useState(false);
+  const previewUrl = `/api/videos/preview?url=${encodeURIComponent(video.url)}`;
+
+  if (playing) {
+    return (
+      <div className="aspect-video bg-black relative">
+        <video
+          src={previewUrl}
+          className="absolute inset-0 w-full h-full"
+          controls
+          autoPlay
+          onError={() => setPlaying(false)}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="aspect-video bg-muted relative border-b group">
+      {video.thumbnailUrl ? (
+        <img
+          src={video.thumbnailUrl}
+          alt={video.title}
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center">
+          <FileVideo className="w-8 h-8 text-muted-foreground/30" />
+        </div>
+      )}
+      <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+        <Button
+          variant="secondary"
+          size="icon"
+          className="rounded-full w-12 h-12"
+          onClick={() => setPlaying(true)}
+        >
+          <Play className="w-5 h-5 ml-0.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Dashboard ─────────────────────────────────────────────────────────────
 
 const platformColors: Record<string, string> = {
@@ -449,35 +496,9 @@ export default function Dashboard() {
                         />
                       </div>
                     ) : (
-                      /* No embed URL (TikTok/Instagram): show thumbnail with overlay.
-                         After download completes the Download button becomes a Play button
-                         that streams the file inline via the /play endpoint. */
-                      <div className="aspect-video bg-muted relative border-b group">
-                        {video.thumbnailUrl ? (
-                          <img
-                            src={video.thumbnailUrl}
-                            alt={video.title}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <FileVideo className="w-8 h-8 text-muted-foreground/30" />
-                          </div>
-                        )}
-                        <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Badge variant="secondary" className="text-[10px]">
-                            Download to watch in-app
-                          </Badge>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            className="h-7 text-xs"
-                            onClick={() => window.open(video.url, "_blank")}
-                          >
-                            <Play className="w-3 h-3 mr-1" /> Preview on {video.platform}
-                          </Button>
-                        </div>
-                      </div>
+                      /* No embed URL (TikTok/Instagram): stream via server-side
+                         proxy so it plays in-app without CORS issues. */
+                      <VideoPreview video={video} />
                     )}
                     <CardContent className="p-4 flex-1 flex flex-col">
                       <div className="flex items-start justify-between gap-2 mb-2">

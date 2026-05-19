@@ -1,6 +1,9 @@
 import { Router, type IRouter } from "express";
 import path from "path";
 import fs from "fs";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import axios from "axios";
 import {
   SearchVideosBody,
   DownloadVideoBody,
@@ -13,6 +16,11 @@ import {
   listCompletedDownloads,
   isAllowedDownloadUrl,
 } from "../../lib/downloadManager";
+
+const execFileAsync = promisify(execFile);
+const YT_DLP_PATH =
+  process.env.YT_DLP_PATH ||
+  "/home/runner/workspace/.pythonlibs/bin/yt-dlp";
 
 const router: IRouter = Router();
 
@@ -215,6 +223,70 @@ router.get("/videos/file/:jobId", async (req, res): Promise<void> => {
   res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
   res.setHeader("Content-Type", "video/mp4");
   res.sendFile(job.filePath);
+});
+
+/**
+ * GET /videos/preview?url=<encoded-video-url>
+ *
+ * Uses yt-dlp --get-url to resolve the direct CDN stream URL for a video
+ * (TikTok, Instagram, etc.) and proxies the stream through this server so
+ * the browser can play it in a <video> element without CORS issues.
+ *
+ * This avoids downloading the full file to disk — it's a real-time proxy.
+ */
+router.get("/videos/preview", async (req, res): Promise<void> => {
+  const rawUrl = Array.isArray(req.query.url) ? req.query.url[0] : req.query.url;
+  if (!rawUrl || typeof rawUrl !== "string") {
+    res.status(400).json({ error: "url query parameter is required" });
+    return;
+  }
+
+  if (!isAllowedDownloadUrl(rawUrl)) {
+    res.status(400).json({ error: "URL not allowed for preview" });
+    return;
+  }
+
+  try {
+    // Ask yt-dlp to resolve the best direct stream URL (no download)
+    const { stdout } = await execFileAsync(YT_DLP_PATH, [
+      "--no-playlist",
+      "--format",
+      "best[ext=mp4]/best",
+      "--get-url",
+      rawUrl,
+    ], { timeout: 20000 });
+
+    const directUrl = stdout.trim().split("\n")[0];
+    if (!directUrl || !directUrl.startsWith("http")) {
+      res.status(502).json({ error: "Could not resolve direct stream URL" });
+      return;
+    }
+
+    // Proxy the stream through this server
+    const upstream = await axios.get(directUrl, {
+      responseType: "stream",
+      timeout: 10000,
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        ...(req.headers.range ? { Range: req.headers.range } : {}),
+      },
+    });
+
+    res.setHeader("Content-Type", String(upstream.headers["content-type"] || "video/mp4"));
+    res.setHeader("Accept-Ranges", "bytes");
+    if (upstream.headers["content-length"])
+      res.setHeader("Content-Length", String(upstream.headers["content-length"]));
+    if (upstream.headers["content-range"])
+      res.setHeader("Content-Range", String(upstream.headers["content-range"]));
+
+    res.status(upstream.status);
+    upstream.data.pipe(res);
+
+    req.on("close", () => upstream.data.destroy());
+  } catch (err: any) {
+    req.log.warn({ err: err?.message }, "Preview stream failed");
+    res.status(502).json({ error: "Preview unavailable — try downloading instead" });
+  }
 });
 
 export default router;
