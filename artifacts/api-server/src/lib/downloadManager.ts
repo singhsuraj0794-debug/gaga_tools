@@ -42,8 +42,80 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
 }
 
+// Allowed domains for yt-dlp downloads — prevents SSRF / internal network abuse
+const ALLOWED_DOWNLOAD_DOMAINS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "youtu.be",
+  "m.youtube.com",
+  "instagram.com",
+  "www.instagram.com",
+  "facebook.com",
+  "www.facebook.com",
+  "m.facebook.com",
+  "fb.watch",
+]);
+
+export function isAllowedDownloadUrl(rawUrl: string): boolean {
+  try {
+    const { hostname } = new URL(rawUrl);
+    // Allow exact match or subdomain (e.g. reel.facebook.com)
+    for (const allowed of ALLOWED_DOWNLOAD_DOMAINS) {
+      if (hostname === allowed || hostname.endsWith(`.${allowed}`)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function getJob(jobId: string): DownloadJob | undefined {
   return jobs.get(jobId);
+}
+
+/**
+ * Scan the downloads directory and register any files not already in the jobs
+ * map.  Called once at server startup so that files from previous sessions are
+ * immediately playable via /play without requiring a new download.
+ */
+export function loadExistingDownloads(): void {
+  try {
+    const files = fs.readdirSync(DOWNLOADS_DIR);
+    const knownPaths = new Set(
+      Array.from(jobs.values())
+        .filter((j) => j.filePath)
+        .map((j) => j.filePath!),
+    );
+
+    for (const file of files) {
+      const filePath = path.join(DOWNLOADS_DIR, file);
+      if (knownPaths.has(filePath)) continue;
+      try {
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) continue;
+        const jobId = `file-${Buffer.from(file).toString("base64").slice(0, 8)}`;
+        if (!jobs.has(jobId)) {
+          jobs.set(jobId, {
+            jobId,
+            status: "completed",
+            url: "",
+            title: file.replace(/\.[^/.]+$/, "").replace(/_/g, " "),
+            platform: "unknown",
+            filePath,
+            fileName: file,
+            fileSize: stat.size,
+            progress: 100,
+            error: null,
+            createdAt: stat.birthtime.toISOString(),
+          });
+        }
+      } catch {
+        // ignore unreadable files
+      }
+    }
+  } catch {
+    // downloads dir may not exist yet
+  }
 }
 
 export function listCompletedDownloads(): DownloadedFile[] {

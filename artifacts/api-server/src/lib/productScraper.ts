@@ -25,8 +25,15 @@ let lastScrapeTime = 0;
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
 const GATEWAY_BASE = "https://gatewayservice.gajab.com";
-const GATEWAY_KEY = "8097571064818418";
 const IMAGE_CDN = "https://resize.gajab.com";
+
+// Key for gajab.com internal gateway — set GAJAB_API_KEY env var to override
+const GATEWAY_KEY = process.env.GAJAB_API_KEY || "8097571064818418";
+if (!process.env.GAJAB_API_KEY) {
+  // Log once at module load so operators know to set the env var
+  // (using console instead of logger to avoid circular import at module init)
+  console.warn("[productScraper] GAJAB_API_KEY is not set — using default key. Set this env var for production use.");
+}
 
 function buildImageUrl(containerName: string | null, image: string | null): string | null {
   if (!image) return null;

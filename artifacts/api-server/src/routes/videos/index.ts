@@ -11,6 +11,7 @@ import {
   startDownload,
   getJob,
   listCompletedDownloads,
+  isAllowedDownloadUrl,
 } from "../../lib/downloadManager";
 
 const router: IRouter = Router();
@@ -63,6 +64,14 @@ router.post("/videos/download", async (req, res): Promise<void> => {
   }
 
   const { url, platform, title } = parsed.data;
+
+  if (!isAllowedDownloadUrl(url)) {
+    res.status(400).json({
+      error: "URL not allowed. Only YouTube, Instagram, and Facebook URLs are accepted.",
+    });
+    return;
+  }
+
   const job = startDownload(url, title, platform);
   res.json(job);
 });

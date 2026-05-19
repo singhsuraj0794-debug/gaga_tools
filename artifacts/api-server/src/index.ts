@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { warmUp } from "./lib/productScraper";
+import { loadExistingDownloads } from "./lib/downloadManager";
 
 const rawPort = process.env["PORT"];
 
@@ -23,6 +24,9 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Register files from previous sessions so they are immediately playable
+  loadExistingDownloads();
 
   warmUp().catch((e) =>
     logger.warn({ err: e }, "Startup warm-up failed")
