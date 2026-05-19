@@ -7,6 +7,13 @@ import {
   getScrapeProductsQueryKey,
   getListDownloadsQueryKey,
 } from "@workspace/api-client-react";
+import type {
+  Product,
+  VideoResult,
+  DownloadJob,
+  DownloadedFile,
+  VideoSearchResult,
+} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -29,26 +36,38 @@ import { useToast } from "@/hooks/use-toast";
 
 // ─── DownloadItem ──────────────────────────────────────────────────────────
 
+type DownloadEntry = DownloadJob | DownloadedFile;
+
+function isDownloadJob(entry: DownloadEntry): entry is DownloadJob {
+  return "status" in entry;
+}
+
 interface DownloadItemProps {
-  job: any;
+  job: DownloadEntry;
   onComplete?: (jobId: string) => void;
 }
 
 function DownloadItem({ job, onComplete }: DownloadItemProps) {
   const queryClient = useQueryClient();
-  // DownloadedFile objects from the server have no `status` field;
-  // infer "completed" when filePath is present but status is absent.
-  const inferredStatus: string =
-    job.status ?? (job.filePath ? "completed" : "pending");
+
+  // DownloadedFile objects have no `status` — infer "completed" when filePath present
+  const inferredStatus: string = isDownloadJob(job)
+    ? job.status
+    : job.filePath
+    ? "completed"
+    : "pending";
+
+  const initialProgress = isDownloadJob(job) ? (job.progress ?? 0) : 100;
+  const initialFilePath = isDownloadJob(job) ? (job.filePath ?? null) : job.filePath;
+  const initialFileSize = isDownloadJob(job) ? (job.fileSize ?? null) : job.fileSize;
 
   const [liveStatus, setLiveStatus] = useState<string>(inferredStatus);
-  const [progress, setProgress] = useState<number>(job.progress ?? 0);
-  const [filePath, setFilePath] = useState<string | null>(job.filePath ?? null);
-  const [fileSize, setFileSize] = useState<number | null>(job.fileSize ?? null);
+  const [progress, setProgress] = useState<number>(initialProgress);
+  const [filePath, setFilePath] = useState<string | null>(initialFilePath);
+  const [fileSize, setFileSize] = useState<number | null>(initialFileSize);
 
   const isDone = liveStatus === "completed" || liveStatus === "failed";
 
-  // Use SSE for real-time progress while job is active
   useEffect(() => {
     if (isDone) return;
 
@@ -56,13 +75,19 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
 
     es.onmessage = (event: MessageEvent) => {
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(event.data) as {
+          status?: string;
+          progress?: number;
+          filePath?: string;
+          fileSize?: number;
+          error?: string;
+        };
         if (data.error) {
           es.close();
           return;
         }
-        setLiveStatus(data.status);
-        setProgress(data.progress ?? 0);
+        if (data.status) setLiveStatus(data.status);
+        if (data.progress !== undefined) setProgress(data.progress);
         if (data.filePath) setFilePath(data.filePath);
         if (data.fileSize) setFileSize(data.fileSize);
 
@@ -75,24 +100,23 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
     };
 
     es.onerror = () => es.close();
-
     return () => es.close();
   }, [job.jobId, isDone]);
 
   const isCompleted = liveStatus === "completed";
   const isDownloading = liveStatus === "downloading" || liveStatus === "pending";
+  const title = job.title ?? ("fileName" in job ? job.fileName : undefined) ?? "Video";
+  const platform = job.platform ?? "unknown";
+  const errorMsg = isDownloadJob(job) ? job.error : undefined;
 
   return (
     <div className="flex flex-col gap-2 p-3 border rounded-md bg-card shadow-sm text-sm">
       <div className="flex justify-between items-start gap-2">
-        <div
-          className="font-medium truncate"
-          title={job.title || job.fileName || "Video"}
-        >
-          {job.title || job.fileName || "Video"}
+        <div className="font-medium truncate" title={title}>
+          {title}
         </div>
         <Badge variant="outline" className="text-[10px] shrink-0 uppercase">
-          {job.platform || "unknown"}
+          {platform}
         </Badge>
       </div>
 
@@ -125,7 +149,7 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
       )}
 
       {liveStatus === "failed" && (
-        <p className="text-xs text-destructive mt-1">{job.error || "Download failed"}</p>
+        <p className="text-xs text-destructive mt-1">{errorMsg || "Download failed"}</p>
       )}
     </div>
   );
@@ -133,7 +157,7 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
 
 // ─── VideoPreview (TikTok / Instagram in-app player) ──────────────────────
 
-function VideoPreview({ video }: { video: any }) {
+function VideoPreview({ video }: { video: VideoResult }) {
   const [playing, setPlaying] = useState(false);
   const previewUrl = `/api/videos/preview?url=${encodeURIComponent(video.url)}`;
 
@@ -178,6 +202,22 @@ function VideoPreview({ video }: { video: any }) {
   );
 }
 
+// ─── WarningBanner ─────────────────────────────────────────────────────────
+
+function WarningBanner({ warnings }: { warnings: string[] }) {
+  if (!warnings.length) return null;
+  return (
+    <div className="mx-4 mt-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-3 py-2 flex gap-2 items-start">
+      <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+      <div className="text-xs text-amber-800 dark:text-amber-300 space-y-0.5">
+        {warnings.map((w, i) => (
+          <p key={i}>{w}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Dashboard ─────────────────────────────────────────────────────────────
 
 const platformColors: Record<string, string> = {
@@ -193,16 +233,16 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
 
   const [page, setPage] = useState(1);
-  const [selectedProducts, setSelectedProducts] = useState<any[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<Product[]>([]);
   const [forceRefresh, setForceRefresh] = useState(false);
-  const [searchResults, setSearchResults] = useState<any>(null);
+  const [searchResults, setSearchResults] = useState<VideoSearchResult | null>(null);
+  const [searchWarnings, setSearchWarnings] = useState<string[]>([]);
 
   // Active (pending/downloading) jobs — shown immediately after starting
-  const [activeJobs, setActiveJobs] = useState<any[]>([]);
+  const [activeJobs, setActiveJobs] = useState<DownloadJob[]>([]);
 
   // ── Queries & Mutations ────────────────────────────────────────────────
 
-  // Provide queryKey explicitly to satisfy TanStack Query v5 type requirements
   const scrapeParams = { page, refresh: forceRefresh || undefined };
   const { data: productsData, isLoading: isLoadingProducts } = useScrapeProducts(
     scrapeParams,
@@ -214,8 +254,8 @@ export default function Dashboard() {
     }
   );
 
-  const searchVideos = useSearchVideos();
-  const downloadVideo = useDownloadVideo();
+  const searchVideosMutation = useSearchVideos();
+  const downloadVideoMutation = useDownloadVideo();
   const { data: downloadsData } = useListDownloads();
 
   // Reset forceRefresh once data arrives
@@ -232,7 +272,7 @@ export default function Dashboard() {
     setForceRefresh(true);
   };
 
-  const handleProductToggle = (product: any, checked: boolean) => {
+  const handleProductToggle = (product: Product, checked: boolean) => {
     if (checked) {
       if (selectedProducts.length >= 5) {
         toast({ title: "Maximum 5 products selected", variant: "destructive" });
@@ -246,7 +286,8 @@ export default function Dashboard() {
 
   const handleSearch = () => {
     if (selectedProducts.length === 0) return;
-    searchVideos.mutate(
+    setSearchWarnings([]);
+    searchVideosMutation.mutate(
       {
         data: {
           products: selectedProducts.map((p) => ({ id: p.id, name: p.name })),
@@ -254,15 +295,27 @@ export default function Dashboard() {
         },
       },
       {
-        onSuccess: (data) => setSearchResults(data),
+        onSuccess: (data) => {
+          setSearchResults(data);
+          // Surface any warnings the server returned (e.g. missing API keys)
+          const warnings = (data as VideoSearchResult & { warnings?: string[] }).warnings ?? [];
+          setSearchWarnings(warnings);
+          if (warnings.length) {
+            toast({
+              title: "Search completed with warnings",
+              description: warnings[0],
+              variant: "destructive",
+            });
+          }
+        },
         onError: () =>
           toast({ title: "Video search failed", variant: "destructive" }),
       }
     );
   };
 
-  const handleDownload = (video: any) => {
-    downloadVideo.mutate(
+  const handleDownload = (video: VideoResult) => {
+    downloadVideoMutation.mutate(
       {
         data: {
           url: video.url,
@@ -274,7 +327,6 @@ export default function Dashboard() {
       {
         onSuccess: (job) => {
           toast({ title: "Download started" });
-          // Add to active jobs so it appears immediately in the downloads panel
           setActiveJobs((prev) => [...prev, job]);
         },
         onError: () =>
@@ -288,8 +340,8 @@ export default function Dashboard() {
   }, []);
 
   // Completed downloads from the server (excludes active jobs already in activeJobs)
-  const completedDownloads = (downloadsData?.downloads ?? []).filter(
-    (dl: any) => !activeJobs.some((aj) => aj.jobId === dl.jobId)
+  const completedDownloads: DownloadedFile[] = (downloadsData?.downloads ?? []).filter(
+    (dl) => !activeJobs.some((aj) => aj.jobId === dl.jobId)
   );
 
   const hasDownloads = activeJobs.length > 0 || completedDownloads.length > 0;
@@ -462,21 +514,24 @@ export default function Dashboard() {
               size="sm"
               onClick={handleSearch}
               disabled={
-                selectedProducts.length === 0 || searchVideos.isPending
+                selectedProducts.length === 0 || searchVideosMutation.isPending
               }
               className="h-8 px-3 text-xs"
             >
               <Search
                 className={`w-3.5 h-3.5 mr-1.5 ${
-                  searchVideos.isPending ? "animate-spin" : ""
+                  searchVideosMutation.isPending ? "animate-spin" : ""
                 }`}
               />
               Search Videos
             </Button>
           </div>
 
+          {/* Warning banner for missing API keys */}
+          <WarningBanner warnings={searchWarnings} />
+
           <ScrollArea className="flex-1 p-4">
-            {searchVideos.isPending ? (
+            {searchVideosMutation.isPending ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {[1, 2, 3, 4].map((i) => (
                   <Skeleton key={i} className="h-64 w-full" />
@@ -484,7 +539,7 @@ export default function Dashboard() {
               </div>
             ) : searchResults?.results?.length ? (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {searchResults.results.map((video: any) => (
+                {searchResults.results.map((video: VideoResult) => (
                   <Card key={video.id} className="overflow-hidden flex flex-col">
                     {video.embedUrl ? (
                       <div className="aspect-video bg-black relative">
@@ -496,8 +551,6 @@ export default function Dashboard() {
                         />
                       </div>
                     ) : (
-                      /* No embed URL (TikTok/Instagram): stream via server-side
-                         proxy so it plays in-app without CORS issues. */
                       <VideoPreview video={video} />
                     )}
                     <CardContent className="p-4 flex-1 flex flex-col">
@@ -581,7 +634,6 @@ export default function Dashboard() {
 
           <ScrollArea className="flex-1 p-3">
             <div className="space-y-3">
-              {/* Active (in-progress) jobs appear immediately */}
               {activeJobs.map((job) => (
                 <DownloadItem
                   key={job.jobId}
@@ -590,8 +642,7 @@ export default function Dashboard() {
                 />
               ))}
 
-              {/* Completed downloads from server */}
-              {completedDownloads.map((dl: any) => (
+              {completedDownloads.map((dl) => (
                 <DownloadItem key={dl.jobId} job={dl} />
               ))}
 
