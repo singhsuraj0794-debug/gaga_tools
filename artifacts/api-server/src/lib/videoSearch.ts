@@ -288,6 +288,13 @@ export async function searchVideosForProducts(
   const googleKey = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
   const rapidApiKey = process.env.RAPIDAPI_KEY;
 
+  if (!rapidApiKey) {
+    logger.warn("RAPIDAPI_KEY not set — Instagram and Facebook search will be skipped");
+  }
+  if (!googleKey) {
+    logger.warn("GOOGLE_API_KEY not set — YouTube will use HTML scrape fallback");
+  }
+
   const allResults: VideoResult[] = [];
 
   for (const product of products) {
