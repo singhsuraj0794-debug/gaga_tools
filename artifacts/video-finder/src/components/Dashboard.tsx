@@ -31,8 +31,11 @@ import {
   FileVideo,
   ChevronRight,
   ChevronLeft,
+  Database,
+  ArrowLeft,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { Link } from "wouter";
 
 // ─── DownloadItem ──────────────────────────────────────────────────────────
 
@@ -160,24 +163,64 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
 
 function VideoPreview({ video }: { video: VideoResult }) {
   const [playing, setPlaying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isTikTok = video.platform?.toLowerCase() === "tiktok";
   const previewUrl = `/api/videos/preview?url=${encodeURIComponent(video.url)}`;
+  // Use directPlayUrl if available (great for TikTok)
+  const videoSource = video.directPlayUrl || previewUrl;
+
+  const handleOpenExternal = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    window.open(video.url, "_blank", "noopener,noreferrer");
+  };
 
   if (playing) {
     return (
-      <div className="aspect-video bg-black relative">
-        <video
-          src={previewUrl}
-          className="absolute inset-0 w-full h-full"
-          controls
-          autoPlay
-          onError={() => setPlaying(false)}
-        />
+      <div className="aspect-video bg-black relative flex flex-col items-center justify-center">
+        {error ? (
+          <div className="text-white text-center p-4 space-y-3">
+            <p className="mb-2">{error}</p>
+            <div className="flex gap-2 justify-center">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  setPlaying(false);
+                  setError(null);
+                }}
+              >
+                Go Back
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleOpenExternal}
+              >
+                Open in New Tab
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <video
+            src={videoSource}
+            className="absolute inset-0 w-full h-full"
+            controls
+            autoPlay
+            onError={(e) => {
+              console.error("Video preview error:", e);
+              setError("Preview unavailable — try downloading or opening in a new tab");
+            }}
+          />
+        )}
       </div>
     );
   }
 
   return (
-    <div className="aspect-video bg-muted relative border-b group">
+    <div 
+      className="aspect-video bg-muted relative border-b group cursor-pointer"
+      onClick={() => setPlaying(true)}
+    >
       {video.thumbnailUrl ? (
         <img
           src={video.thumbnailUrl}
@@ -189,14 +232,32 @@ function VideoPreview({ video }: { video: VideoResult }) {
           <FileVideo className="w-8 h-8 text-muted-foreground/30" />
         </div>
       )}
-      <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity gap-2">
         <Button
           variant="secondary"
           size="icon"
           className="rounded-full w-12 h-12"
-          onClick={() => setPlaying(true)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setPlaying(true);
+          }}
         >
           <Play className="w-5 h-5 ml-0.5" />
+        </Button>
+        <Button
+          variant="secondary"
+          size="icon"
+          className="rounded-full w-12 h-12"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleOpenExternal(e);
+          }}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
         </Button>
       </div>
     </div>
@@ -229,6 +290,13 @@ const platformColors: Record<string, string> = {
     "bg-slate-800/10 text-slate-800 border-slate-800/20 dark:bg-white/10 dark:text-white dark:border-white/20",
 };
 
+interface ReverseImageSearchResult {
+  title: string;
+  link: string;
+  thumbnailUrl: string;
+  snippet: string;
+}
+
 export default function Dashboard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -238,13 +306,17 @@ export default function Dashboard() {
   const [forceRefresh, setForceRefresh] = useState(false);
   const [searchResults, setSearchResults] = useState<VideoSearchResult | null>(null);
   const [searchWarnings, setSearchWarnings] = useState<string[]>([]);
+  const [productSearchQuery, setProductSearchQuery] = useState("");
+  const [reverseImageSearchResults, setReverseImageSearchResults] = useState<Record<string, ReverseImageSearchResult[]>>({});
+  const [activeReverseProductId, setActiveReverseProductId] = useState<string | null>(null);
+  const [isReverseSearching, setIsReverseSearching] = useState(false);
 
   // Active (pending/downloading) jobs — shown immediately after starting
   const [activeJobs, setActiveJobs] = useState<DownloadJob[]>([]);
 
   // ── Queries & Mutations ────────────────────────────────────────────────
 
-  const scrapeParams = { page, refresh: forceRefresh || undefined };
+  const scrapeParams = { page, refresh: forceRefresh || undefined, search: productSearchQuery || undefined };
   const { data: productsData, isLoading: isLoadingProducts } = useScrapeProducts(
     scrapeParams,
     {
@@ -340,6 +412,30 @@ export default function Dashboard() {
     setActiveJobs((prev) => prev.filter((j) => j.jobId !== jobId));
   }, []);
 
+  const handleReverseImageSearch = async (product: Product) => {
+    if (!product.imageUrl) {
+      toast({ title: "Product has no image", variant: "destructive" });
+      return;
+    }
+    setIsReverseSearching(true);
+    setActiveReverseProductId(product.id);
+    try {
+      const response = await fetch("/api/videos/reverse-image-search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product }),
+      });
+      const data = await response.json();
+      if (data.results) {
+        setReverseImageSearchResults((prev) => ({ ...prev, [product.id]: data.results }));
+      }
+    } catch (err) {
+      toast({ title: "Reverse image search failed", variant: "destructive" });
+    } finally {
+      setIsReverseSearching(false);
+    }
+  };
+
   // Completed downloads from the server (excludes active jobs already in activeJobs)
   const completedDownloads: DownloadedFile[] = (downloadsData?.downloads ?? []).filter(
     (dl) => !activeJobs.some((aj) => aj.jobId === dl.jobId)
@@ -352,38 +448,64 @@ export default function Dashboard() {
   return (
     <div className="h-screen w-full flex flex-col bg-background text-foreground overflow-hidden">
       {/* Header */}
-      <header className="h-14 border-b flex items-center px-4 shrink-0 bg-card">
-        <FileVideo className="w-5 h-5 mr-2 text-primary" />
+      <header className="h-14 border-b flex items-center px-4 shrink-0 bg-card gap-4">
+        <Link href="/">
+          <Button variant="ghost" size="sm">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Home
+          </Button>
+        </Link>
+        <FileVideo className="w-5 h-5 text-primary" />
         <h1 className="font-semibold text-sm tracking-tight">
           Product Video Finder
         </h1>
+        <div className="ml-auto">
+          <Link href="/Scraper">
+            <Button variant="ghost" size="sm">
+              <Database className="w-4 h-4 mr-2" />
+              Product Scraper
+            </Button>
+          </Link>
+        </div>
       </header>
 
       {/* 3-panel layout */}
       <main className="flex-1 flex overflow-hidden">
         {/* ── Left Panel: Products spreadsheet table ── */}
         <section className="w-[480px] border-r flex flex-col bg-card/50 shrink-0">
-          <div className="p-3 border-b flex items-center justify-between bg-card">
-            <h2 className="font-medium text-sm">
-              Products
-              {selectedProducts.length > 0 && (
-                <span className="ml-2 text-muted-foreground font-normal">
-                  ({selectedProducts.length}/5 selected)
-                </span>
-              )}
-            </h2>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleScrape}
-              disabled={isLoadingProducts}
-              className="h-8 px-2 text-xs"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 mr-1.5 ${isLoadingProducts ? "animate-spin" : ""}`}
-              />
-              Refresh
-            </Button>
+          <div className="p-3 border-b bg-card space-y-2">
+            <div className="flex items-center justify-between">
+              <h2 className="font-medium text-sm">
+                Products
+                {selectedProducts.length > 0 && (
+                  <span className="ml-2 text-muted-foreground font-normal">
+                    ({selectedProducts.length}/5 selected)
+                  </span>
+                )}
+              </h2>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleScrape}
+                disabled={isLoadingProducts}
+                className="h-8 px-2 text-xs"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 mr-1.5 ${isLoadingProducts ? "animate-spin" : ""}`}
+                />
+                Refresh
+              </Button>
+            </div>
+            <input
+              type="text"
+              placeholder="Search products by name..."
+              value={productSearchQuery}
+              onChange={(e) => {
+                setProductSearchQuery(e.target.value);
+                setPage(1);
+              }}
+              className="w-full px-3 py-2 text-sm border rounded-md bg-background"
+            />
           </div>
 
           {/* Spreadsheet-style table */}
@@ -500,126 +622,229 @@ export default function Dashboard() {
           </div>
         </section>
 
-        {/* ── Center Panel: Video Search ── */}
+        {/* ── Center Panel: Video Search & Reverse Image Search ── */}
         <section className="flex-1 flex flex-col min-w-0 bg-background">
-          <div className="p-3 border-b flex items-center justify-between bg-card shrink-0">
-            <h2 className="font-medium text-sm flex items-center">
-              Video Search
-              {selectedProducts.length > 0 && (
-                <Badge variant="secondary" className="ml-2 h-5 text-[10px]">
-                  {selectedProducts.length}/5 Selected
-                </Badge>
+          <div className="p-3 border-b bg-card shrink-0">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="font-medium text-sm flex items-center">
+                {activeReverseProductId ? "Visually Similar Images" : "Video Search"}
+                {selectedProducts.length > 0 && !activeReverseProductId && (
+                  <Badge variant="secondary" className="ml-2 h-5 text-[10px]">
+                    {selectedProducts.length}/5 Selected
+                  </Badge>
+                )}
+              </h2>
+            </div>
+            <div className="flex gap-2">
+              {!activeReverseProductId ? (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={handleSearch}
+                    disabled={
+                      selectedProducts.length === 0 || searchVideosMutation.isPending
+                    }
+                    className="h-8 px-3 text-xs"
+                  >
+                    <Search
+                      className={`w-3.5 h-3.5 mr-1.5 ${
+                        searchVideosMutation.isPending ? "animate-spin" : ""
+                      }`}
+                    />
+                    Search Videos
+                  </Button>
+                  {selectedProducts.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleReverseImageSearch(selectedProducts[0])}
+                      disabled={isReverseSearching}
+                      className="h-8 px-3 text-xs"
+                    >
+                      <Search className="w-3.5 h-3.5 mr-1.5" />
+                      Find Visually Similar
+                    </Button>
+                  )}
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setActiveReverseProductId(null)}
+                  disabled={isReverseSearching}
+                  className="h-8 px-3 text-xs"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5 mr-1.5" />
+                  Back to Video Search
+                </Button>
               )}
-            </h2>
-            <Button
-              size="sm"
-              onClick={handleSearch}
-              disabled={
-                selectedProducts.length === 0 || searchVideosMutation.isPending
-              }
-              className="h-8 px-3 text-xs"
-            >
-              <Search
-                className={`w-3.5 h-3.5 mr-1.5 ${
-                  searchVideosMutation.isPending ? "animate-spin" : ""
-                }`}
-              />
-              Search Videos
-            </Button>
+            </div>
           </div>
 
-          {/* Warning banner for missing API keys */}
-          <WarningBanner warnings={searchWarnings} />
+          {!activeReverseProductId && (
+            <>
+              {/* Warning banner for missing API keys */}
+              <WarningBanner warnings={searchWarnings} />
 
-          <ScrollArea className="flex-1 p-4">
-            {searchVideosMutation.isPending ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {[1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} className="h-64 w-full" />
-                ))}
-              </div>
-            ) : searchResults?.results?.length ? (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                {searchResults.results.map((video: VideoResult) => (
-                  <Card key={video.id} className="overflow-hidden flex flex-col">
-                    {video.embedUrl ? (
-                      <div className="aspect-video bg-black relative">
-                        <iframe
-                          src={video.embedUrl}
-                          className="absolute inset-0 w-full h-full"
-                          allowFullScreen
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        />
-                      </div>
-                    ) : (
-                      <VideoPreview video={video} />
-                    )}
-                    <CardContent className="p-4 flex-1 flex flex-col">
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <h3 className="font-medium text-sm line-clamp-2 leading-tight">
-                          {video.title}
-                        </h3>
-                        <Badge
-                          variant="outline"
-                          className={`text-[10px] uppercase shrink-0 ${
-                            platformColors[video.platform?.toLowerCase()] || ""
-                          }`}
-                        >
-                          {video.platform}
-                        </Badge>
-                      </div>
-
-                      <div className="text-xs text-muted-foreground mb-4 space-y-1">
-                        {video.channelName && (
-                          <p className="truncate">
-                            Channel: {video.channelName}
-                          </p>
-                        )}
-                        <div className="flex gap-3">
-                          {video.viewCount && (
-                            <span>
-                              {video.viewCount.toLocaleString()} views
-                            </span>
+              <ScrollArea className="flex-1 p-4">
+                {searchVideosMutation.isPending ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {[1, 2, 3, 4].map((i) => (
+                      <Skeleton key={i} className="h-64 w-full" />
+                    ))}
+                  </div>
+                ) : searchResults?.results?.length ? (
+                  <>
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                      {searchResults.results.map((video: VideoResult) => (
+                        <Card key={video.id} className="overflow-hidden flex flex-col">
+                          {video.embedUrl ? (
+                            <div className="aspect-video bg-black relative">
+                              <iframe
+                                src={video.embedUrl}
+                                className="absolute inset-0 w-full h-full"
+                                allowFullScreen
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              />
+                            </div>
+                          ) : (
+                            <VideoPreview video={video} />
                           )}
-                          {video.duration && <span>{video.duration}</span>}
+                          <CardContent className="p-4 flex-1 flex flex-col">
+                            <div className="flex items-start justify-between gap-2 mb-2">
+                              <h3 className="font-medium text-sm line-clamp-2 leading-tight">
+                                {video.title}
+                              </h3>
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] uppercase shrink-0 ${
+                                  platformColors[video.platform?.toLowerCase()] || ""
+                                }`}
+                              >
+                                {video.platform}
+                              </Badge>
+                            </div>
+
+                            <div className="text-xs text-muted-foreground mb-4 space-y-1">
+                              {video.channelName && (
+                                <p className="truncate">
+                                  Channel: {video.channelName}
+                                </p>
+                              )}
+                              <div className="flex gap-3">
+                                {video.viewCount && (
+                                  <span>
+                                    {video.viewCount.toLocaleString()} views
+                                  </span>
+                                )}
+                                {video.duration && <span>{video.duration}</span>}
+                              </div>
+                            </div>
+
+                            <div className="mt-auto pt-2 flex items-center justify-between border-t border-border/50">
+                              <span
+                                className="text-[10px] text-muted-foreground truncate max-w-[150px]"
+                                title={video.productName}
+                              >
+                                For: {video.productName}
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => handleDownload(video)}
+                                className="h-7 text-xs px-2"
+                              >
+                                <Download className="w-3 h-3 mr-1.5" /> Download
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                    {/* Check if no TikTok videos found */}
+                    {searchWarnings.some(w => w.toLowerCase().includes('tiktok')) && !searchResults.results.some(v => v.platform.toLowerCase() === 'tiktok') && (
+                      <div className="mt-4 mx-0 p-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700">
+                        <div className="flex gap-2 items-start">
+                          <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                          <div className="text-xs text-amber-800 dark:text-amber-300">
+                            {searchWarnings.find(w => w.toLowerCase().includes('tiktok'))}
+                          </div>
                         </div>
                       </div>
+                    )}
+                  </>
+                ) : searchResults ? (
+                  <div className="p-8 text-center text-muted-foreground">
+                    <p className="text-sm">
+                      No videos found for selected products.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50 min-h-[300px]">
+                    <Search className="w-12 h-12 mb-4" />
+                    <p className="text-sm">
+                      Select products and search to find videos.
+                    </p>
+                  </div>
+                )}
+              </ScrollArea>
+            </>
+          )}
 
-                      <div className="mt-auto pt-2 flex items-center justify-between border-t border-border/50">
-                        <span
-                          className="text-[10px] text-muted-foreground truncate max-w-[150px]"
-                          title={video.productName}
-                        >
-                          For: {video.productName}
-                        </span>
+          {activeReverseProductId && (
+            <ScrollArea className="flex-1 p-4">
+              {isReverseSearching ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[1, 2, 3, 4].map((i) => (
+                    <Skeleton key={i} className="h-48 w-full" />
+                  ))}
+                </div>
+              ) : reverseImageSearchResults[activeReverseProductId]?.length ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {reverseImageSearchResults[activeReverseProductId].map((result, idx) => (
+                    <Card key={idx} className="overflow-hidden flex flex-col">
+                      {result.thumbnailUrl && (
+                        <div className="aspect-square bg-muted relative">
+                          <img
+                            src={result.thumbnailUrl}
+                            alt={result.title}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      )}
+                      <CardContent className="p-3">
+                        <h3 className="font-medium text-xs line-clamp-2 mb-2">{result.title}</h3>
+                        {result.snippet && (
+                          <p className="text-[10px] text-muted-foreground mb-3 line-clamp-3">{result.snippet}</p>
+                        )}
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={() => handleDownload(video)}
-                          className="h-7 text-xs px-2"
+                          className="w-full text-xs h-7"
+                          asChild
                         >
-                          <Download className="w-3 h-3 mr-1.5" /> Download
+                          <a
+                            href={result.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            View
+                          </a>
                         </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            ) : searchResults ? (
-              <div className="p-8 text-center text-muted-foreground">
-                <p className="text-sm">
-                  No videos found for selected products.
-                </p>
-              </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50 min-h-[300px]">
-                <Search className="w-12 h-12 mb-4" />
-                <p className="text-sm">
-                  Select products and search to find videos.
-                </p>
-              </div>
-            )}
-          </ScrollArea>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50 min-h-[300px]">
+                  <Search className="w-12 h-12 mb-4" />
+                  <p className="text-sm">
+                    No visually similar images found.
+                  </p>
+                </div>
+              )}
+            </ScrollArea>
+          )}
         </section>
 
         {/* ── Right Panel: Downloads ── */}

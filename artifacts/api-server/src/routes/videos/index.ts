@@ -9,7 +9,10 @@ import {
   DownloadVideoBody,
   GetDownloadStatusParams,
 } from "@workspace/api-zod";
-import { searchVideosForProducts } from "../../lib/videoSearch";
+import {
+  searchVideosForProducts,
+  reverseImageSearchForProduct,
+} from "../../lib/videoSearch";
 import {
   startDownload,
   getJob,
@@ -20,7 +23,7 @@ import {
 const execFileAsync = promisify(execFile);
 const YT_DLP_PATH =
   process.env.YT_DLP_PATH ||
-  "/home/runner/workspace/.pythonlibs/bin/yt-dlp";
+  "/Users/gajabmarketing/Library/Python/3.9/bin/yt-dlp";
 
 const router: IRouter = Router();
 
@@ -37,37 +40,57 @@ router.post("/videos/search", async (req, res): Promise<void> => {
   const googleKey = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
   const rapidApiKey = process.env.RAPIDAPI_KEY;
 
-  const warnings: string[] = [];
+  const initialWarnings: string[] = [];
   if (platforms.includes("youtube") && !googleKey) {
-    warnings.push("GOOGLE_API_KEY not set — YouTube will use scrape fallback");
+    initialWarnings.push("GOOGLE_API_KEY not set — YouTube will use scrape fallback");
   }
   if (
-    (platforms.includes("instagram") ||
-      platforms.includes("tiktok") ||
+    (platforms.includes("tiktok") ||
       platforms.includes("facebook")) &&
     !rapidApiKey
   ) {
-    warnings.push(
-      "RAPIDAPI_KEY not set — Instagram, TikTok, and Facebook search skipped",
+    initialWarnings.push(
+      "RAPIDAPI_KEY not set — TikTok and Facebook search skipped",
     );
   }
-  if (warnings.length > 0) {
-    req.log.warn({ warnings }, "Missing API keys for video search");
+  if (initialWarnings.length > 0) {
+    req.log.warn({ warnings: initialWarnings }, "Missing API keys for video search");
   }
 
   try {
-    const results = await searchVideosForProducts(
+    const { results, warnings: searchWarnings } = await searchVideosForProducts(
       products,
-      platforms ?? ["youtube", "instagram", "tiktok"],
+      platforms ?? ["youtube", "tiktok"],
     );
+    const allWarnings = [...new Set([...initialWarnings, ...searchWarnings])];
     res.json({
       results,
       searchedProducts: products.map((p) => p.name),
-      ...(warnings.length > 0 ? { warnings } : {}),
+      ...(allWarnings.length > 0 ? { warnings: allWarnings } : {}),
     });
   } catch (err: any) {
     req.log.error({ err }, "Video search failed");
     res.status(500).json({ error: "Video search failed. Please try again." });
+  }
+});
+
+router.post("/videos/reverse-image-search", async (req, res): Promise<void> => {
+  const { product } = req.body;
+  
+  if (!product?.id || !product?.name || !product?.imageUrl) {
+    res.status(400).json({ error: "Product with id, name, and imageUrl is required" });
+    return;
+  }
+
+  try {
+    const results = await reverseImageSearchForProduct(product);
+    res.json({
+      results,
+      productId: product.id,
+    });
+  } catch (err: any) {
+    req.log.error({ err }, "Reverse image search failed");
+    res.status(500).json({ error: "Reverse image search failed. Please try again." });
   }
 });
 
@@ -228,11 +251,9 @@ router.get("/videos/file/:jobId", async (req, res): Promise<void> => {
 /**
  * GET /videos/preview?url=<encoded-video-url>
  *
- * Uses yt-dlp --get-url to resolve the direct CDN stream URL for a video
- * (TikTok, Instagram, etc.) and proxies the stream through this server so
- * the browser can play it in a <video> element without CORS issues.
- *
- * This avoids downloading the full file to disk — it's a real-time proxy.
+ * For TikTok: first tries tiktok-download-video1 RapidAPI, falls back to yt-dlp.
+ * For YouTube/others: uses yt-dlp --get-url.
+ * Proxies the stream through this server to avoid CORS issues.
  */
 router.get("/videos/preview", async (req, res): Promise<void> => {
   const rawUrl = Array.isArray(req.query.url) ? req.query.url[0] : req.query.url;
@@ -247,17 +268,85 @@ router.get("/videos/preview", async (req, res): Promise<void> => {
   }
 
   try {
-    // Ask yt-dlp to resolve the best direct stream URL (no download)
-    const { stdout } = await execFileAsync(YT_DLP_PATH, [
-      "--no-playlist",
-      "--format",
-      "best[ext=mp4]/best",
-      "--get-url",
-      rawUrl,
-    ], { timeout: 20000 });
+    let directUrl: string | undefined;
 
-    const directUrl = stdout.trim().split("\n")[0];
-    if (!directUrl || !directUrl.startsWith("http")) {
+    const isTikTok = rawUrl.includes("tiktok.com");
+
+    if (isTikTok) {
+      // First try RapidAPI for TikTok
+      const rapidApiKey = process.env.RAPIDAPI_KEY;
+      let rapidApiFailed = false;
+
+      if (rapidApiKey) {
+        try {
+          const apiRes = await axios.get(
+            `https://tiktok-download-video1.p.rapidapi.com/getVideo?url=${encodeURIComponent(rawUrl)}&hd=1`,
+            {
+              headers: {
+                "x-rapidapi-host": "tiktok-download-video1.p.rapidapi.com",
+                "x-rapidapi-key": rapidApiKey,
+                "Content-Type": "application/json",
+              },
+              timeout: 15000,
+            }
+          );
+          const data = apiRes.data;
+          if (data.code === 0) {
+            directUrl = data.data?.hdplay || data.data?.play || data.data?.wmplay;
+            if (directUrl) {
+              req.log.info("TikTok preview: got direct URL from RapidAPI");
+            } else {
+              rapidApiFailed = true;
+            }
+          } else {
+            rapidApiFailed = true;
+          }
+        } catch (err) {
+          req.log.warn({ err: (err as any)?.message }, "TikTok preview RapidAPI failed, falling back to yt-dlp");
+          rapidApiFailed = true;
+        }
+      } else {
+        rapidApiFailed = true;
+      }
+
+      if (rapidApiFailed) {
+        // Fallback to yt-dlp for TikTok with better options
+        req.log.info("TikTok preview: using yt-dlp fallback");
+        const { stdout } = await execFileAsync(YT_DLP_PATH, [
+          "--no-playlist",
+          "--ignore-errors",
+          "--format", "best[ext=mp4]/best",
+          "--get-url",
+          "--no-check-certificates",
+          "--socket-timeout", "30",
+          rawUrl,
+        ], { timeout: 30000 });
+        directUrl = stdout.trim().split("\n")[0];
+        if (!directUrl || !directUrl.startsWith("http")) {
+          throw new Error("Could not resolve TikTok stream URL via yt-dlp");
+        }
+      }
+      
+      // Ensure directUrl is defined
+      if (!directUrl) {
+        throw new Error("Could not get direct URL for TikTok");
+      }
+    } else {
+      // Use yt-dlp for YouTube and other platforms
+      const { stdout } = await execFileAsync(YT_DLP_PATH, [
+        "--no-playlist",
+        "--format", "best[ext=mp4]/best",
+        "--get-url",
+        rawUrl,
+      ], { timeout: 20000 });
+      directUrl = stdout.trim().split("\n")[0];
+      if (!directUrl || !directUrl.startsWith("http")) {
+        res.status(502).json({ error: "Could not resolve direct stream URL" });
+        return;
+      }
+    }
+
+    if (!directUrl) {
       res.status(502).json({ error: "Could not resolve direct stream URL" });
       return;
     }
@@ -267,7 +356,7 @@ router.get("/videos/preview", async (req, res): Promise<void> => {
       responseType: "stream",
       timeout: 10000,
       headers: {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         ...(req.headers.range ? { Range: req.headers.range } : {}),
       },
     });
@@ -281,7 +370,6 @@ router.get("/videos/preview", async (req, res): Promise<void> => {
 
     res.status(upstream.status);
     upstream.data.pipe(res);
-
     req.on("close", () => upstream.data.destroy());
   } catch (err: any) {
     req.log.warn({ err: err?.message }, "Preview stream failed");

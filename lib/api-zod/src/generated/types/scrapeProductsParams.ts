@@ -9,4 +9,5 @@
 export type ScrapeProductsParams = {
 page?: number;
 refresh?: boolean;
+search?: string;
 };

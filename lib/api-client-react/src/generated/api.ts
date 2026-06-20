@@ -22,6 +22,9 @@ import type {
 import type {
   DownloadJob,
   DownloadList,
+  EcommerceExportInput,
+  EcommerceProductList,
+  EcommerceSearchInput,
   HealthStatus,
   ProductList,
   ScrapeProductsParams,
@@ -119,6 +122,148 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
 
 
 
+
+export const getSearchEcommerceProductsUrl = () => {
+
+
+
+
+  return `/api/scraper/search`
+}
+
+/**
+ * @summary Search products on Flipkart/Amazon/Meesho using RapidAPI
+ */
+export const searchEcommerceProducts = async (ecommerceSearchInput: EcommerceSearchInput, options?: RequestInit): Promise<EcommerceProductList> => {
+
+  return customFetch<EcommerceProductList>(getSearchEcommerceProductsUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      ecommerceSearchInput,)
+  }
+);}
+
+
+
+
+export const getSearchEcommerceProductsMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchEcommerceProducts>>, TError,{data: BodyType<EcommerceSearchInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof searchEcommerceProducts>>, TError,{data: BodyType<EcommerceSearchInput>}, TContext> => {
+
+const mutationKey = ['searchEcommerceProducts'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof searchEcommerceProducts>>, {data: BodyType<EcommerceSearchInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  searchEcommerceProducts(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type SearchEcommerceProductsMutationResult = NonNullable<Awaited<ReturnType<typeof searchEcommerceProducts>>>
+    export type SearchEcommerceProductsMutationBody = BodyType<EcommerceSearchInput>
+    export type SearchEcommerceProductsMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Search products on Flipkart/Amazon/Meesho using RapidAPI
+ */
+export const useSearchEcommerceProducts = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof searchEcommerceProducts>>, TError,{data: BodyType<EcommerceSearchInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof searchEcommerceProducts>>,
+        TError,
+        {data: BodyType<EcommerceSearchInput>},
+        TContext
+      > => {
+      return useMutation(getSearchEcommerceProductsMutationOptions(options));
+    }
+
+export const getExportProductsToExcelUrl = () => {
+
+
+
+
+  return `/api/scraper/export`
+}
+
+/**
+ * @summary Export scraped products to Excel file
+ */
+export const exportProductsToExcel = async (ecommerceExportInput: EcommerceExportInput, options?: RequestInit): Promise<Blob> => {
+
+  return customFetch<Blob>(getExportProductsToExcelUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(
+      ecommerceExportInput,)
+  }
+);}
+
+
+
+
+export const getExportProductsToExcelMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportProductsToExcel>>, TError,{data: BodyType<EcommerceExportInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof exportProductsToExcel>>, TError,{data: BodyType<EcommerceExportInput>}, TContext> => {
+
+const mutationKey = ['exportProductsToExcel'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof exportProductsToExcel>>, {data: BodyType<EcommerceExportInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  exportProductsToExcel(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ExportProductsToExcelMutationResult = NonNullable<Awaited<ReturnType<typeof exportProductsToExcel>>>
+    export type ExportProductsToExcelMutationBody = BodyType<EcommerceExportInput>
+    export type ExportProductsToExcelMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Export scraped products to Excel file
+ */
+export const useExportProductsToExcel = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof exportProductsToExcel>>, TError,{data: BodyType<EcommerceExportInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof exportProductsToExcel>>,
+        TError,
+        {data: BodyType<EcommerceExportInput>},
+        TContext
+      > => {
+      return useMutation(getExportProductsToExcelMutationOptions(options));
+    }
 
 export const getScrapeProductsUrl = (params?: ScrapeProductsParams,) => {
   const normalizedParams = new URLSearchParams();

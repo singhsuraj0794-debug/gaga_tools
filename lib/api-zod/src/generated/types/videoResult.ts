@@ -23,4 +23,6 @@ export interface VideoResult {
   viewCount?: number | null;
   productId: string;
   productName?: string;
+  /** @nullable */
+  directPlayUrl?: string | null;
 }

@@ -187,10 +187,6 @@ export function startDownload(
   platform: string | null,
 ): DownloadJob {
   const jobId = uuidv4();
-  const safeTitle = sanitizeFilename(title || "video");
-  const fileName = `${safeTitle}-${jobId.slice(0, 8)}.%(ext)s`;
-  const outputTemplate = path.join(DOWNLOADS_DIR, fileName);
-
   const job: DownloadJob = {
     jobId,
     status: "pending",
@@ -204,33 +200,136 @@ export function startDownload(
     error: null,
     createdAt: new Date().toISOString(),
   };
-
   jobs.set(jobId, job);
+
+  // Route TikTok through RapidAPI (yt-dlp can't handle TikTok bot detection)
+  if (platform === "tiktok" || url.includes("tiktok.com") || url.includes("vm.tiktok.com")) {
+    startTikTokDownload(job, url, title);
+  } else {
+    startYtDlpDownload(job, url, title);
+  }
+
+  return job;
+}
+
+// ─── TikTok download via tiktok-download-video1 RapidAPI or yt-dlp ───────
+
+async function startTikTokDownload(job: DownloadJob, url: string, title: string): Promise<void> {
+  const rapidApiKey = process.env.RAPIDAPI_KEY;
+  let rapidApiFailed = false;
+
+  if (rapidApiKey) {
+    job.status = "downloading";
+    job.progress = 10;
+
+    try {
+      const apiUrl = `https://tiktok-download-video1.p.rapidapi.com/getVideo?url=${encodeURIComponent(url)}&hd=1`;
+      const res = await fetch(apiUrl, {
+        headers: {
+          "x-rapidapi-host": "tiktok-download-video1.p.rapidapi.com",
+          "x-rapidapi-key": rapidApiKey,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+
+      const text = await res.text();
+      if (!text) throw new Error("Empty response from TikTok download API");
+      const data = JSON.parse(text);
+
+      if (data.code !== 0) throw new Error(data.msg || "TikTok API error");
+
+      // Prefer HD no-watermark, fall back to regular play URL
+      const videoUrl: string = data.data?.hdplay || data.data?.play || data.data?.wmplay;
+      if (!videoUrl) throw new Error("No video URL in response");
+
+      job.progress = 40;
+      logger.info({ jobId: job.jobId, videoUrl: videoUrl.slice(0, 80) }, "Got TikTok CDN URL, downloading...");
+
+      // Stream the video to disk
+      const safeTitle = sanitizeFilename(title || "tiktok");
+      const fileName = `${safeTitle}-${job.jobId.slice(0, 8)}.mp4`;
+      const filePath = path.join(DOWNLOADS_DIR, fileName);
+
+      const videoRes = await fetch(videoUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+        signal: AbortSignal.timeout(60000),
+      });
+
+      if (!videoRes.ok) throw new Error(`CDN fetch failed: ${videoRes.status}`);
+
+      const total = parseInt(videoRes.headers.get("content-length") || "0", 10);
+      const fileStream = fs.createWriteStream(filePath);
+      let received = 0;
+
+      const reader = videoRes.body!.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fileStream.write(value);
+        received += value.length;
+        if (total) job.progress = Math.min(99, 40 + Math.floor((received / total) * 59));
+      }
+
+      await new Promise<void>((resolve, reject) => {
+        fileStream.end();
+        fileStream.on("finish", resolve);
+        fileStream.on("error", reject);
+      });
+
+      const stat = fs.statSync(filePath);
+      job.filePath = filePath;
+      job.fileName = fileName;
+      job.fileSize = stat.size;
+      job.progress = 100;
+      job.status = "completed";
+      logger.info({ jobId: job.jobId, filePath }, "TikTok download completed via RapidAPI");
+      return;
+    } catch (err: any) {
+      logger.warn({ jobId: job.jobId, err: err.message }, "TikTok RapidAPI download failed, falling back to yt-dlp");
+      rapidApiFailed = true;
+    }
+  } else {
+    rapidApiFailed = true;
+  }
+
+  if (rapidApiFailed) {
+    // Fallback to yt-dlp for TikTok download
+    logger.info({ jobId: job.jobId }, "TikTok download: using yt-dlp fallback");
+    startYtDlpDownload(job, url, title);
+  }
+}
+
+// ─── YouTube/generic download via yt-dlp ─────────────────────────────────
+
+function startYtDlpDownload(job: DownloadJob, url: string, title: string): void {
+  const safeTitle = sanitizeFilename(title || "video");
+  const fileName = `${safeTitle}-${job.jobId.slice(0, 8)}.%(ext)s`;
+  const outputTemplate = path.join(DOWNLOADS_DIR, fileName);
 
   // Find yt-dlp
   const ytDlpPath =
     process.env.YT_DLP_PATH ||
-    "/home/runner/workspace/.pythonlibs/bin/yt-dlp";
+    "/Users/gajabmarketing/bin/yt-dlp";
 
   const args = [
     "--no-playlist",
+    // Pick best pre-muxed mp4 (no ffmpeg needed), fall back to any pre-muxed
     "--format",
-    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-    "--merge-output-format",
-    "mp4",
+    "best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best[vcodec!=none][acodec!=none]/best",
     "--output",
     outputTemplate,
     "--newline",
     "--progress",
+    "--cookies-from-browser", "chrome",
     url,
   ];
 
-  logger.info({ jobId, url }, "Starting yt-dlp download");
+  logger.info({ jobId: job.jobId, url }, "Starting yt-dlp download");
   job.status = "downloading";
 
   const child = spawn(ytDlpPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 
-  // Track all destination files mentioned by yt-dlp (last one wins = merged file)
   let lastDestination: string | null = null;
   const startTime = Date.now();
   let stdoutBuf = "";
@@ -243,62 +342,29 @@ export function startDownload(
     for (const line of lines) {
       const progressMatch = line.match(/(\d+\.?\d*)%/);
       if (progressMatch) {
-        const pct = Math.floor(parseFloat(progressMatch[1]));
-        // Only go to 99 until close fires, so UI doesn't show 100 before file is ready
-        job.progress = Math.min(pct, 99);
+        job.progress = Math.min(Math.floor(parseFloat(progressMatch[1])), 99);
       }
-
       const destMatch = line.match(/\[download\] Destination: (.+)/);
       if (destMatch) lastDestination = destMatch[1].trim();
-
-      // Merger output: final merged mp4 path
       const mergeMatch = line.match(/\[Merger\] Merging formats into "(.+)"/);
       if (mergeMatch) lastDestination = mergeMatch[1].trim();
-
-      // ffmpeg output line also contains the final file
-      const moveMatch = line.match(/\[download\] (.+\.mp4) has already been downloaded/);
-      if (moveMatch) lastDestination = moveMatch[1].trim();
     }
   });
 
   child.stderr.on("data", (chunk: Buffer) => {
     const text = chunk.toString().trim();
-    // Only log real errors, not INFO/WARNING lines
-    if (text && !text.startsWith("WARNING:") && !text.startsWith("[debug]")) {
-      logger.warn({ jobId, stderr: text }, "yt-dlp stderr");
-    }
+    if (text) logger.warn({ jobId: job.jobId, stderr: text }, "yt-dlp stderr");
   });
 
   child.on("close", (code) => {
     if (code === 0) {
-      // Priority 1: use the last destination yt-dlp reported
       let finalPath = lastDestination;
 
-      // Priority 2: scan downloads dir for the newest file created after job started
       if (!finalPath || !fs.existsSync(finalPath)) {
         try {
-          const files = fs
-            .readdirSync(DOWNLOADS_DIR)
-            .map((f) => {
-              const p = path.join(DOWNLOADS_DIR, f);
-              const stat = fs.statSync(p);
-              return { p, mtime: stat.mtimeMs };
-            })
+          const files = fs.readdirSync(DOWNLOADS_DIR)
+            .map((f) => { const p = path.join(DOWNLOADS_DIR, f); return { p, mtime: fs.statSync(p).mtimeMs }; })
             .filter((f) => f.mtime >= startTime)
-            .sort((a, b) => b.mtime - a.mtime);
-          if (files.length > 0) finalPath = files[0].p;
-        } catch {}
-      }
-
-      // Priority 3: newest file in downloads dir regardless of time
-      if (!finalPath || !fs.existsSync(finalPath)) {
-        try {
-          const files = fs
-            .readdirSync(DOWNLOADS_DIR)
-            .map((f) => {
-              const p = path.join(DOWNLOADS_DIR, f);
-              return { p, mtime: fs.statSync(p).mtimeMs };
-            })
             .sort((a, b) => b.mtime - a.mtime);
           if (files.length > 0) finalPath = files[0].p;
         } catch {}
@@ -311,24 +377,22 @@ export function startDownload(
         job.fileSize = stat.size;
         job.progress = 100;
         job.status = "completed";
-        logger.info({ jobId, filePath: finalPath }, "Download completed");
+        logger.info({ jobId: job.jobId, filePath: finalPath }, "Download completed");
       } else {
         job.status = "failed";
         job.error = "File not found after download";
-        logger.warn({ jobId }, "Download completed but file not found");
+        logger.warn({ jobId: job.jobId }, "Download completed but file not found");
       }
     } else {
       job.status = "failed";
       job.error = `yt-dlp exited with code ${code}`;
-      logger.error({ jobId, code }, "Download failed");
+      logger.error({ jobId: job.jobId, code }, "Download failed");
     }
   });
 
   child.on("error", (err) => {
     job.status = "failed";
     job.error = err.message;
-    logger.error({ jobId, err }, "Failed to spawn yt-dlp");
+    logger.error({ jobId: job.jobId, err }, "Failed to spawn yt-dlp");
   });
-
-  return job;
 }

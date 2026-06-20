@@ -1,7 +1,16 @@
-import app from "./app";
-import { logger } from "./lib/logger";
-import { warmUp } from "./lib/productScraper";
-import { loadExistingDownloads } from "./lib/downloadManager";
+import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(__dirname, "..", ".env") });
+
+const { default: app } = await import("./app");
+const { logger } = await import("./lib/logger");
+const { warmUp } = await import("./lib/productScraper");
+const { loadExistingDownloads } = await import("./lib/downloadManager");
 
 const rawPort = process.env["PORT"];
 

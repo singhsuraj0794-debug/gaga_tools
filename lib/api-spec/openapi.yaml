@@ -14,6 +14,8 @@ tags:
     description: Product scraping operations
   - name: videos
     description: Video search and download operations
+  - name: scraper
+    description: E-commerce product scraper (Flipkart/Amazon/Meesho)
 
 paths:
   /healthz:
@@ -29,6 +31,45 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+                
+  /scraper/search:
+    post:
+      operationId: searchEcommerceProducts
+      tags: [scraper]
+      summary: Search products on Flipkart/Amazon/Meesho using RapidAPI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EcommerceSearchInput"
+      responses:
+        "200":
+          description: List of scraped e-commerce products
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EcommerceProductList"
+                
+  /scraper/export:
+    post:
+      operationId: exportProductsToExcel
+      tags: [scraper]
+      summary: Export scraped products to Excel file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EcommerceExportInput"
+      responses:
+        "200":
+          description: Excel file download
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
 
   /products:
     get:
@@ -46,6 +87,10 @@ paths:
           schema:
             type: boolean
             default: false
+        - name: search
+          in: query
+          schema:
+            type: string
       responses:
         "200":
           description: List of scraped products
@@ -216,6 +261,8 @@ components:
           type: string
         productName:
           type: string
+        directPlayUrl:
+          type: ["string", "null"]
 
     VideoSearchResult:
       type: object
@@ -289,6 +336,70 @@ components:
           type: integer
         createdAt:
           type: string
+
+    EcommerceSearchInput:
+      type: object
+      required: [query, platform]
+      properties:
+        query:
+          type: string
+          description: Search query
+        platform:
+          type: string
+          enum: [flipkart, amazon, meesho]
+          description: E-commerce platform to search
+
+    EcommerceProduct:
+      type: object
+      required: [title]
+      properties:
+        id:
+          type: string
+          description: Product ID
+        title:
+          type: string
+          description: Product title
+        imageUrl:
+          type: ["string", "null"]
+          description: Product image URL
+        description:
+          type: ["string", "null"]
+          description: Product description
+        price:
+          type: ["string", "null"]
+          description: Product price
+        url:
+          type: ["string", "null"]
+          description: Product page URL
+        platform:
+          type: string
+          description: Platform this product is from
+
+    EcommerceProductList:
+      type: object
+      required: [products]
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/EcommerceProduct"
+        warnings:
+          type: array
+          items:
+            type: string
+
+    EcommerceExportInput:
+      type: object
+      required: [products]
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/EcommerceProduct"
+        filename:
+          type: string
+          description: Filename for the exported Excel file
+          default: "scraped-products.xlsx"
 
     DownloadList:
       type: object

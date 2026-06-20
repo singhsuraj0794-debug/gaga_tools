@@ -13,6 +13,49 @@ export interface VideoResult {
   viewCount: number | null;
   productId: string;
   productName: string;
+  relevanceScore?: number;
+  directPlayUrl?: string | null;
+}
+
+export interface ImageSearchResult {
+  title: string;
+  link: string;
+  thumbnailUrl: string;
+  snippet: string;
+}
+
+async function reverseImageSearch(
+  imageUrl: string,
+  productId: string,
+  productName: string,
+  googleKey: string,
+  cseId: string,
+): Promise<ImageSearchResult[]> {
+  try {
+    const searchResp = await axios.get("https://www.googleapis.com/customsearch/v1", {
+      params: {
+        key: googleKey,
+        cx: cseId,
+        q: "",
+        searchType: "image",
+        imgUrl: imageUrl,
+        num: 10,
+      },
+      timeout: 10000,
+    });
+    
+    const items = searchResp.data.items || [];
+    
+    return items.map((item: any): ImageSearchResult => ({
+      title: item.title || productName,
+      link: item.link || "",
+      thumbnailUrl: item.image?.thumbnailLink || "",
+      snippet: item.snippet || "",
+    }));
+  } catch (err: any) {
+    logger.warn({ err: err?.message, imageUrl }, "Reverse image search failed");
+    return [];
+  }
 }
 
 function buildYouTubeEmbedUrl(videoId: string): string {
@@ -28,12 +71,63 @@ function formatDuration(iso: string): string {
   return `${h}${m}:${s}`;
 }
 
+function normalizeText(text: string): string {
+  return text.toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function calculateRelevanceScore(video: VideoResult, productName: string): number {
+  let score = 0;
+  const normalizedTitle = normalizeText(video.title);
+  const normalizedProductName = normalizeText(productName);
+  
+  // Exact match bonus
+  if (normalizedTitle.includes(normalizedProductName)) {
+    score += 50;
+  }
+  
+  // Partial match bonus (check each word)
+  const productWords = normalizedProductName.split(" ");
+  let matchedWords = 0;
+  for (const word of productWords) {
+    if (word.length > 2 && normalizedTitle.includes(word)) {
+      matchedWords++;
+    }
+  }
+  score += (matchedWords / productWords.length) * 30;
+  
+  // View count bonus (logarithmic to avoid huge numbers dominating)
+  if (video.viewCount) {
+    score += Math.min(Math.log10(video.viewCount) * 5, 20);
+  }
+  
+  return score;
+}
+
+function deduplicateVideos(videos: VideoResult[]): VideoResult[] {
+  const seen = new Set<string>();
+  return videos.filter(video => {
+    if (seen.has(video.id)) {
+      return false;
+    }
+    seen.add(video.id);
+    return true;
+  });
+}
+
 // ─── YouTube via Data API v3 ───────────────────────────────────────────────
 
-function buildSearchQuery(productName: string): string {
-  // Use exact product name as primary query — no generic suffixes
-  // Strip size/color variants in parentheses to keep the core name
-  return productName.replace(/\s*\([^)]+\)\s*/g, " ").trim();
+function buildSearchQuery(productName: string, includeKeywords: boolean = true): string {
+  let query = productName;
+  
+  // Strip size/color variants in parentheses
+  query = query.replace(/\s*\([^)]+\)\s*/g, " ");
+  
+  // Add relevant keywords to improve search if requested
+  if (includeKeywords) {
+    query = `${query} product review unboxing`;
+  }
+  
+  return query.trim();
 }
 
 async function searchYouTubeWithApi(
@@ -41,13 +135,39 @@ async function searchYouTubeWithApi(
   productId: string,
   apiKey: string,
 ): Promise<VideoResult[]> {
-  const query = buildSearchQuery(productName);
-  const searchResp = await axios.get("https://www.googleapis.com/youtube/v3/search", {
-    params: { key: apiKey, q: query, part: "snippet", type: "video", maxResults: 5 },
+  // Try exact product name first
+  let query = buildSearchQuery(productName, false);
+  let searchResp = await axios.get("https://www.googleapis.com/youtube/v3/search", {
+    params: { 
+      key: apiKey, 
+      q: query, 
+      part: "snippet", 
+      type: "video", 
+      maxResults: 10,
+      videoDuration: "short"
+    },
     timeout: 10000,
   });
 
-  const items = searchResp.data.items || [];
+  let items = searchResp.data.items || [];
+  
+  // If no results, try with keywords
+  if (items.length === 0) {
+    query = buildSearchQuery(productName, true);
+    searchResp = await axios.get("https://www.googleapis.com/youtube/v3/search", {
+      params: { 
+        key: apiKey, 
+        q: query, 
+        part: "snippet", 
+        type: "video", 
+        maxResults: 10,
+        videoDuration: "short"
+      },
+      timeout: 10000,
+    });
+    items = searchResp.data.items || [];
+  }
+  
   if (items.length === 0) return [];
 
   const videoIds = items.map((i: any) => i.id.videoId).join(",");
@@ -65,7 +185,7 @@ async function searchYouTubeWithApi(
   return items.map((item: any): VideoResult => {
     const videoId = item.id.videoId;
     const detail = detailMap[videoId];
-    return {
+    const video: VideoResult = {
       id: `yt-${videoId}`,
       platform: "youtube",
       title: item.snippet.title,
@@ -81,6 +201,8 @@ async function searchYouTubeWithApi(
       productId,
       productName,
     };
+    video.relevanceScore = calculateRelevanceScore(video, productName);
+    return video;
   });
 }
 
@@ -90,8 +212,9 @@ async function searchYouTubeScrape(
   productName: string,
   productId: string,
 ): Promise<VideoResult[]> {
-  const query = encodeURIComponent(buildSearchQuery(productName));
-  const resp = await axios.get(`https://www.youtube.com/results?search_query=${query}`, {
+  // Try exact product name first
+  let query = encodeURIComponent(buildSearchQuery(productName, false));
+  let resp = await axios.get(`https://www.youtube.com/results?search_query=${query}`, {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -100,49 +223,111 @@ async function searchYouTubeScrape(
     timeout: 15000,
   });
 
-  const html: string = resp.data;
-  const match = html.match(/var ytInitialData = ({.*?});<\/script>/s);
-  if (!match) return [];
+  let html: string = resp.data;
+  let match = html.match(/var ytInitialData = ({.*?});<\/script>/s);
+  let videos: VideoResult[] = [];
 
-  const data = JSON.parse(match[1]);
-  const contents =
-    data?.contents?.twoColumnSearchResultsRenderer?.primaryContents
-      ?.sectionListRenderer?.contents || [];
+  if (match) {
+    const data = JSON.parse(match[1]);
+    const contents =
+      data?.contents?.twoColumnSearchResultsRenderer?.primaryContents
+        ?.sectionListRenderer?.contents || [];
 
-  const videos: VideoResult[] = [];
-  for (const section of contents) {
-    const items = section?.itemSectionRenderer?.contents || [];
-    for (const item of items) {
-      const vr = item?.videoRenderer;
-      if (!vr?.videoId) continue;
-      const videoId: string = vr.videoId;
-      const title: string = vr.title?.runs?.[0]?.text || productName;
-      const channelName: string =
-        vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || null;
-      const viewText: string = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.[0]?.text || "";
-      const viewMatch = viewText.match(/([\d,]+)/);
-      const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
-      const duration: string = vr.lengthText?.simpleText || null;
-      const thumbnail =
-        vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
-        `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+    for (const section of contents) {
+      const items = section?.itemSectionRenderer?.contents || [];
+      for (const item of items) {
+        const vr = item?.videoRenderer;
+        if (!vr?.videoId) continue;
+        const videoId: string = vr.videoId;
+        const title: string = vr.title?.runs?.[0]?.text || productName;
+        const channelName: string =
+          vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || null;
+        const viewText: string = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.[0]?.text || "";
+        const viewMatch = viewText.match(/([\d,]+)/);
+        const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
+        const duration: string = vr.lengthText?.simpleText || null;
+        const thumbnail =
+          vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+          `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
 
-      videos.push({
-        id: `yt-${videoId}`,
-        platform: "youtube",
-        title,
-        url: `https://www.youtube.com/watch?v=${videoId}`,
-        embedUrl: buildYouTubeEmbedUrl(videoId),
-        thumbnailUrl: thumbnail,
-        channelName,
-        duration,
-        viewCount,
-        productId,
-        productName,
-      });
-      if (videos.length >= 5) break;
+        const video: VideoResult = {
+          id: `yt-${videoId}`,
+          platform: "youtube",
+          title,
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          embedUrl: buildYouTubeEmbedUrl(videoId),
+          thumbnailUrl: thumbnail,
+          channelName,
+          duration,
+          viewCount,
+          productId,
+          productName,
+        };
+        video.relevanceScore = calculateRelevanceScore(video, productName);
+        videos.push(video);
+        if (videos.length >= 10) break;
+      }
+      if (videos.length >= 10) break;
     }
-    if (videos.length >= 5) break;
+  }
+
+  // If no results, try with keywords
+  if (videos.length === 0) {
+    query = encodeURIComponent(buildSearchQuery(productName, true));
+    resp = await axios.get(`https://www.youtube.com/results?search_query=${query}`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.5",
+      },
+      timeout: 15000,
+    });
+
+    html = resp.data;
+    match = html.match(/var ytInitialData = ({.*?});<\/script>/s);
+    if (match) {
+      const data = JSON.parse(match[1]);
+      const contents =
+        data?.contents?.twoColumnSearchResultsRenderer?.primaryContents
+          ?.sectionListRenderer?.contents || [];
+
+      for (const section of contents) {
+        const items = section?.itemSectionRenderer?.contents || [];
+        for (const item of items) {
+          const vr = item?.videoRenderer;
+          if (!vr?.videoId) continue;
+          const videoId: string = vr.videoId;
+          const title: string = vr.title?.runs?.[0]?.text || productName;
+          const channelName: string =
+            vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || null;
+          const viewText: string = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.[0]?.text || "";
+          const viewMatch = viewText.match(/([\d,]+)/);
+          const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
+          const duration: string = vr.lengthText?.simpleText || null;
+          const thumbnail =
+            vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+            `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+
+          const video: VideoResult = {
+            id: `yt-${videoId}`,
+            platform: "youtube",
+            title,
+            url: `https://www.youtube.com/watch?v=${videoId}`,
+            embedUrl: buildYouTubeEmbedUrl(videoId),
+            thumbnailUrl: thumbnail,
+            channelName,
+            duration,
+            viewCount,
+            productId,
+            productName,
+          };
+          video.relevanceScore = calculateRelevanceScore(video, productName);
+          videos.push(video);
+          if (videos.length >= 10) break;
+        }
+        if (videos.length >= 10) break;
+      }
+    }
   }
   return videos;
 }
@@ -165,67 +350,7 @@ async function searchYouTube(
   }
 }
 
-// ─── Instagram via instagram120 (RapidAPI) ───────────────────────────────
-
-async function searchInstagram(
-  productName: string,
-  productId: string,
-  rapidApiKey: string,
-): Promise<VideoResult[]> {
-  try {
-    // Build a clean hashtag from the product name (alphanumeric only, max 30 chars)
-    const hashtag = productName
-      .replace(/[^a-zA-Z0-9\s]/g, "")
-      .split(/\s+/)
-      .slice(0, 3)
-      .join("")
-      .toLowerCase()
-      .slice(0, 30);
-
-    const resp = await axios.post(
-      "https://instagram120.p.rapidapi.com/api/instagram/hashtag",
-      { hashtag },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "x-rapidapi-host": "instagram120.p.rapidapi.com",
-          "x-rapidapi-key": rapidApiKey,
-        },
-        timeout: 12000,
-      },
-    );
-
-    const items: any[] = resp.data?.items || resp.data?.data?.items || [];
-    const videoItems = items.filter(
-      (i: any) => i.media_type === 2 || i.is_video === true || i.video_url,
-    );
-
-    return videoItems.slice(0, 5).map((item: any): VideoResult => {
-      const shortcode = item.code || item.shortcode || item.id || "";
-      const caption = item.caption?.text || item.caption || "";
-      return {
-        id: `ig-${item.id || shortcode}`,
-        platform: "instagram",
-        title: (typeof caption === "string" ? caption.slice(0, 100) : productName) || productName,
-        url: `https://www.instagram.com/p/${shortcode}/`,
-        embedUrl: `https://www.instagram.com/p/${shortcode}/embed/`,
-        thumbnailUrl:
-          item.thumbnail_url ||
-          item.image_versions2?.candidates?.[0]?.url ||
-          item.display_url ||
-          null,
-        channelName: item.user?.username || item.owner?.username || null,
-        duration: null,
-        viewCount: item.play_count || item.view_count || item.video_view_count || null,
-        productId,
-        productName,
-      };
-    });
-  } catch (err: any) {
-    logger.warn({ err: err?.message, productName }, "Instagram search failed");
-    return [];
-  }
-}
+// ─── TikTok via tiktok-api23 (RapidAPI) ──────────────────────────────────
 
 // ─── Facebook via facebook-scraper3 (RapidAPI) ───────────────────────────
 
@@ -235,9 +360,10 @@ async function searchFacebook(
   rapidApiKey: string,
 ): Promise<VideoResult[]> {
   try {
-    const query = buildSearchQuery(productName);
-    const resp = await axios.get("https://facebook-scraper3.p.rapidapi.com/search/videos", {
-      params: { query, limit: 5 },
+    // Try exact product name first
+    let query = buildSearchQuery(productName, false);
+    let resp = await axios.get("https://facebook-scraper3.p.rapidapi.com/search/videos", {
+      params: { query, limit: 10 },
       headers: {
         "x-rapidapi-host": "facebook-scraper3.p.rapidapi.com",
         "x-rapidapi-key": rapidApiKey,
@@ -245,9 +371,23 @@ async function searchFacebook(
       timeout: 12000,
     });
 
-    const items: any[] = resp.data?.results || [];
+    let items: any[] = resp.data?.results || [];
+    
+    // If no results, try with keywords
+    if (items.length === 0) {
+      query = buildSearchQuery(productName, true);
+      resp = await axios.get("https://facebook-scraper3.p.rapidapi.com/search/videos", {
+        params: { query, limit: 10 },
+        headers: {
+          "x-rapidapi-host": "facebook-scraper3.p.rapidapi.com",
+          "x-rapidapi-key": rapidApiKey,
+        },
+        timeout: 12000,
+      });
+      items = resp.data?.results || [];
+    }
 
-    return items.slice(0, 5).map((item: any): VideoResult => {
+    return items.slice(0, 10).map((item: any): VideoResult => {
       const videoId = String(item.video_id || "");
       const authorName = item.author?.name || null;
       // Parse view count from raw string like "2 hours ago · 11 views"
@@ -256,7 +396,7 @@ async function searchFacebook(
       const viewMatch = rawViews.match(/([\d,]+)\s+views?/i);
       if (viewMatch) viewCount = parseInt(viewMatch[1].replace(/,/g, ""), 10);
 
-      return {
+      const video: VideoResult = {
         id: `fb-${videoId}`,
         platform: "facebook",
         title: item.title || item.description?.slice(0, 100) || productName,
@@ -271,6 +411,8 @@ async function searchFacebook(
         productId,
         productName,
       };
+      video.relevanceScore = calculateRelevanceScore(video, productName);
+      return video;
     });
   } catch (err: any) {
     logger.warn({ err: err?.message, productName }, "Facebook search failed");
@@ -278,7 +420,7 @@ async function searchFacebook(
   }
 }
 
-// ─── TikTok via tiktok-scraper7 (RapidAPI) ────────────────────────────────
+// ─── TikTok via tiktok-api23 (RapidAPI) ──────────────────────────────────
 
 async function searchTikTok(
   productName: string,
@@ -286,50 +428,74 @@ async function searchTikTok(
   rapidApiKey: string,
 ): Promise<VideoResult[]> {
   try {
-    const query = buildSearchQuery(productName);
-    const resp = await axios.get(
-      "https://tiktok-scraper7.p.rapidapi.com/feed/search",
+    // Try exact product name first
+    let query = buildSearchQuery(productName, false);
+    let resp = await axios.get(
+      "https://tiktok-api23.p.rapidapi.com/api/search/video",
       {
-        params: { keywords: query, count: 5, cursor: 0, publish_time: 0 },
+        params: { keyword: query, count: 10, cursor: 0 },
         headers: {
-          "x-rapidapi-host": "tiktok-scraper7.p.rapidapi.com",
+          "x-rapidapi-host": "tiktok-api23.p.rapidapi.com",
           "x-rapidapi-key": rapidApiKey,
         },
         timeout: 12000,
       },
     );
 
-    const items: any[] =
-      resp.data?.data?.videos || resp.data?.videos || [];
+    let items: any[] = resp.data?.item_list || resp.data?.data?.videos || [];
+    
+    // If no results, try with keywords
+    if (items.length === 0) {
+      query = buildSearchQuery(productName, true);
+      resp = await axios.get(
+        "https://tiktok-api23.p.rapidapi.com/api/search/video",
+        {
+          params: { keyword: query, count: 10, cursor: 0 },
+          headers: {
+            "x-rapidapi-host": "tiktok-api23.p.rapidapi.com",
+            "x-rapidapi-key": rapidApiKey,
+          },
+          timeout: 12000,
+        },
+      );
+      items = resp.data?.item_list || resp.data?.data?.videos || [];
+    }
 
-    return items.slice(0, 5).map((item: any): VideoResult => {
-      const videoId = String(item.video_id || item.aweme_id || item.id || "");
-      const authorId = item.author?.unique_id || item.author?.nickname || "";
-      return {
+    return items.slice(0, 10).map((item: any): VideoResult => {
+      const videoId = String(item.id || item.video_id || item.aweme_id || "");
+      const author = item.author || {};
+      const authorId = author.unique_id || author.sec_uid || "";
+      const stats = item.stats || item.statistics || {};
+      // Use a valid TikTok URL with a fallback username if needed
+      const safeAuthorId = authorId || "video";
+      const url = `https://www.tiktok.com/@${safeAuthorId}/video/${videoId}`;
+      const video: VideoResult = {
         id: `tt-${videoId}`,
         platform: "tiktok",
-        title: item.title || item.desc || productName,
-        url: item.video_url || `https://www.tiktok.com/@${authorId}/video/${videoId}`,
+        title: item.desc || item.title || productName,
+        url,
         embedUrl: null,
-        thumbnailUrl: item.cover || item.thumbnail || null,
-        channelName: item.author?.nickname || item.author?.unique_id || null,
+        thumbnailUrl:
+          item.video?.cover ||
+          item.video?.dynamic_cover ||
+          item.thumbnail ||
+          null,
+        channelName: author.nickname || author.unique_id || null,
         duration: item.video?.duration
           ? `${Math.round(item.video.duration)}s`
           : null,
-        viewCount:
-          item.statistics?.play_count ?? item.play_count ?? null,
+        viewCount: stats.playCount ?? stats.play_count ?? item.play_count ?? null,
         productId,
         productName,
+        directPlayUrl: item.video?.playAddr || item.video?.downloadAddr || null,
       };
+      video.relevanceScore = calculateRelevanceScore(video, productName);
+      return video;
     });
   } catch (err: any) {
-    // Gracefully skip if subscription is not active for this endpoint
     const status = err?.response?.status;
     if (status === 403 || status === 402 || status === 401) {
-      logger.info(
-        { productName },
-        "TikTok search skipped — RapidAPI plan does not cover tiktok-scraper7",
-      );
+      logger.info({ productName }, "TikTok search skipped — RapidAPI plan does not cover tiktok-api23");
     } else {
       logger.warn({ err: err?.message, productName }, "TikTok search failed");
     }
@@ -339,20 +505,41 @@ async function searchTikTok(
 
 // ─── Main export ──────────────────────────────────────────────────────────
 
+export async function reverseImageSearchForProduct(
+  product: { id: string; name: string; imageUrl: string },
+): Promise<ImageSearchResult[]> {
+  const googleKey = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
+  const cseId = process.env.GOOGLE_CSE_ID;
+  
+  if (!googleKey || !cseId) {
+    logger.warn("GOOGLE_API_KEY or GOOGLE_CSE_ID not set — reverse image search skipped");
+    return [];
+  }
+  
+  return await reverseImageSearch(
+    product.imageUrl,
+    product.id,
+    product.name,
+    googleKey,
+    cseId,
+  );
+}
+
 export async function searchVideosForProducts(
   products: Array<{ id: string; name: string }>,
-  platforms: string[] = ["youtube", "instagram", "tiktok"],
-): Promise<VideoResult[]> {
+  platforms: string[] = ["youtube", "tiktok"],
+): Promise<{ results: VideoResult[]; warnings: string[] }> {
   // Support both GOOGLE_API_KEY and YOUTUBE_API_KEY env var names
   const googleKey = process.env.GOOGLE_API_KEY || process.env.YOUTUBE_API_KEY;
   const rapidApiKey = process.env.RAPIDAPI_KEY;
 
+  const warnings: string[] = [];
   if (!rapidApiKey) {
-    logger.warn(
-      "RAPIDAPI_KEY not set — Instagram, TikTok, and Facebook search will be skipped",
-    );
+    warnings.push("RAPIDAPI_KEY not set — TikTok and Facebook search will be skipped");
+    logger.warn("RAPIDAPI_KEY not set — TikTok and Facebook search will be skipped");
   }
   if (!googleKey) {
+    warnings.push("GOOGLE_API_KEY not set — YouTube will use HTML scrape fallback");
     logger.warn("GOOGLE_API_KEY not set — YouTube will use HTML scrape fallback");
   }
 
@@ -364,11 +551,24 @@ export async function searchVideosForProducts(
     if (platforms.includes("youtube")) {
       tasks.push(searchYouTube(product.name, product.id, googleKey));
     }
-    if (platforms.includes("instagram") && rapidApiKey) {
-      tasks.push(searchInstagram(product.name, product.id, rapidApiKey));
-    }
     if (platforms.includes("tiktok") && rapidApiKey) {
-      tasks.push(searchTikTok(product.name, product.id, rapidApiKey));
+      tasks.push((async () => {
+        try {
+          return await searchTikTok(product.name, product.id, rapidApiKey);
+        } catch (err: any) {
+          const status = err?.response?.status;
+          if (status === 429) {
+            const warning = "TikTok search rate limited — try again later or use YouTube only";
+            if (!warnings.includes(warning)) warnings.push(warning);
+            logger.warn({ productName: product.name, err: err.message }, "TikTok search rate limited");
+          } else {
+            const warning = "TikTok search failed — check API key or try again later";
+            if (!warnings.includes(warning)) warnings.push(warning);
+            logger.warn({ productName: product.name, err: err.message }, "TikTok search failed");
+          }
+          return [];
+        }
+      })());
     }
     if (platforms.includes("facebook") && rapidApiKey) {
       tasks.push(searchFacebook(product.name, product.id, rapidApiKey));
@@ -380,5 +580,12 @@ export async function searchVideosForProducts(
     }
   }
 
-  return allResults;
+  // Deduplicate videos
+  const deduplicated = deduplicateVideos(allResults);
+  
+  // Sort by relevance score (descending)
+  deduplicated.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+  
+  // Return top 20 results and warnings
+  return { results: deduplicated.slice(0, 20), warnings };
 }

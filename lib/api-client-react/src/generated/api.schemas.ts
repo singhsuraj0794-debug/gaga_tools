@@ -59,6 +59,8 @@ export interface VideoResult {
   viewCount?: number | null;
   productId: string;
   productName?: string;
+  /** @nullable */
+  directPlayUrl?: string | null;
 }
 
 export interface VideoSearchResult {
@@ -114,6 +116,65 @@ export interface DownloadedFile {
   createdAt: string;
 }
 
+/**
+ * E-commerce platform to search
+ */
+export type EcommerceSearchInputPlatform = typeof EcommerceSearchInputPlatform[keyof typeof EcommerceSearchInputPlatform];
+
+
+export const EcommerceSearchInputPlatform = {
+  flipkart: 'flipkart',
+  amazon: 'amazon',
+  meesho: 'meesho',
+} as const;
+
+export interface EcommerceSearchInput {
+  /** Search query */
+  query: string;
+  /** E-commerce platform to search */
+  platform: EcommerceSearchInputPlatform;
+}
+
+export interface EcommerceProduct {
+  /** Product ID */
+  id?: string;
+  /** Product title */
+  title: string;
+  /**
+     * Product image URL
+     * @nullable
+     */
+  imageUrl?: string | null;
+  /**
+     * Product description
+     * @nullable
+     */
+  description?: string | null;
+  /**
+     * Product price
+     * @nullable
+     */
+  price?: string | null;
+  /**
+     * Product page URL
+     * @nullable
+     */
+  url?: string | null;
+  /** Platform this product is from */
+  platform?: string;
+}
+
+export interface EcommerceProductList {
+  products: EcommerceProduct[];
+  warnings?: string[];
+}
+
+export interface EcommerceExportInput {
+  products: EcommerceProduct[];
+  /** Filename for the exported Excel file */
+  filename?: string;
+}
+
 export interface DownloadList {
   downloads: DownloadedFile[];
 }
@@ -121,5 +182,6 @@ export interface DownloadList {
 export type ScrapeProductsParams = {
 page?: number;
 refresh?: boolean;
+search?: string;
 };
 

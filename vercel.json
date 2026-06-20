@@ -1,0 +1,25 @@
+{
+  "rootDirectory": "artifacts/video-finder",
+  "buildCommand": "pnpm run build",
+  "outputDirectory": "dist",
+  "devCommand": "pnpm run dev",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/"
+    }
+  ],
+  "framework": "vite",
+  "functions": {
+    "api/**/*.{js,ts}": {
+      "runtime": "@vercel/node@3",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "installCommand": "cd ../.. && pnpm install"
+}

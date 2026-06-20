@@ -18,6 +18,47 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
+ * @summary Search products on Flipkart/Amazon/Meesho using RapidAPI
+ */
+export const SearchEcommerceProductsBody = zod.object({
+  "query": zod.string().describe('Search query'),
+  "platform": zod.enum(['flipkart', 'amazon', 'meesho']).describe('E-commerce platform to search')
+})
+
+export const SearchEcommerceProductsResponse = zod.object({
+  "products": zod.array(zod.object({
+  "id": zod.string().optional().describe('Product ID'),
+  "title": zod.string().describe('Product title'),
+  "imageUrl": zod.string().nullish().describe('Product image URL'),
+  "description": zod.string().nullish().describe('Product description'),
+  "price": zod.string().nullish().describe('Product price'),
+  "url": zod.string().nullish().describe('Product page URL'),
+  "platform": zod.string().optional().describe('Platform this product is from')
+})),
+  "warnings": zod.array(zod.string()).optional()
+})
+
+
+/**
+ * @summary Export scraped products to Excel file
+ */
+export const exportProductsToExcelBodyFilenameDefault = `scraped-products.xlsx`;
+
+export const ExportProductsToExcelBody = zod.object({
+  "products": zod.array(zod.object({
+  "id": zod.string().optional().describe('Product ID'),
+  "title": zod.string().describe('Product title'),
+  "imageUrl": zod.string().nullish().describe('Product image URL'),
+  "description": zod.string().nullish().describe('Product description'),
+  "price": zod.string().nullish().describe('Product price'),
+  "url": zod.string().nullish().describe('Product page URL'),
+  "platform": zod.string().optional().describe('Platform this product is from')
+})),
+  "filename": zod.string().default(exportProductsToExcelBodyFilenameDefault).describe('Filename for the exported Excel file')
+})
+
+
+/**
  * @summary Scrape products from gajab.com
  */
 export const scrapeProductsQueryPageDefault = 1;
@@ -25,7 +66,8 @@ export const scrapeProductsQueryRefreshDefault = false;
 
 export const ScrapeProductsQueryParams = zod.object({
   "page": zod.coerce.number().default(scrapeProductsQueryPageDefault),
-  "refresh": zod.coerce.boolean().default(scrapeProductsQueryRefreshDefault)
+  "refresh": zod.coerce.boolean().default(scrapeProductsQueryRefreshDefault),
+  "search": zod.coerce.string().optional()
 })
 
 export const ScrapeProductsResponse = zod.object({
@@ -70,7 +112,8 @@ export const SearchVideosResponse = zod.object({
   "duration": zod.string().nullish(),
   "viewCount": zod.number().nullish(),
   "productId": zod.string(),
-  "productName": zod.string().optional()
+  "productName": zod.string().optional(),
+  "directPlayUrl": zod.string().nullish()
 })),
   "searchedProducts": zod.array(zod.string())
 })
