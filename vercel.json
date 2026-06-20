@@ -1,6 +1,5 @@
 {
-  "installCommand": "npm install -g pnpm && pnpm install --ignore-scripts",
-  "buildCommand": "pnpm run build:vercel",
+  "buildCommand": "corepack enable && corepack prepare pnpm@latest --activate && pnpm install --ignore-scripts && pnpm run build:vercel",
   "outputDirectory": "dist",
   "rewrites": [
     {
@@ -11,5 +10,11 @@
       "source": "/(.*)",
       "destination": "/"
     }
-  ]
+  ],
+  "functions": {
+    "api/**/*.ts": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
 }
