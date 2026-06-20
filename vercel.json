@@ -1,9 +1,7 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install -g pnpm && pnpm install --ignore-scripts",
   "buildCommand": "pnpm run build:vercel",
   "outputDirectory": "dist",
-  "framework": null,
   "rewrites": [
     {
       "source": "/api/:path*",
@@ -13,14 +11,5 @@
       "source": "/(.*)",
       "destination": "/"
     }
-  ],
-  "functions": {
-    "api/**/*.{js,ts}": {
-      "memory": 1024,
-      "maxDuration": 30
-    }
-  },
-  "env": {
-    "NODE_ENV": "production"
-  }
+  ]
 }

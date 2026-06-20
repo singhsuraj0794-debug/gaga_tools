@@ -1,6 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import app from "./index";
 
+export const config = {
+  maxDuration: 30,
+};
+
 const server = createServer(app);
 
 export default async function handler(
