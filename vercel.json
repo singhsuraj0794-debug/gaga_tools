@@ -1,7 +1,7 @@
 {
-  "buildCommand": "pnpm run build:frontend",
-  "outputDirectory": "artifacts/video-finder/dist",
-  "devCommand": "cd artifacts/video-finder && pnpm run dev",
+  "installCommand": "npm install -g pnpm && pnpm install --ignore-scripts",
+  "buildCommand": "pnpm run build:frontend && rm -rf dist && cp -R artifacts/video-finder/dist dist",
+  "outputDirectory": "dist",
   "rewrites": [
     {
       "source": "/api/:path*",
@@ -12,12 +12,14 @@
       "destination": "/"
     }
   ],
-  "framework": "vite",
   "functions": {
     "api/**/*.{js,ts}": {
       "runtime": "@vercel/node@3",
       "memory": 1024,
       "maxDuration": 30
     }
+  },
+  "env": {
+    "NODE_ENV": "production"
   }
 }

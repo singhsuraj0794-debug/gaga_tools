@@ -338,10 +338,10 @@ router.post("/flipkart/upload", upload.single("file"), async (req: Request, res:
       );
       
       if (urlKeys.length > 0) {
-        urls = data.map((row: any) => row[urlKeys[0]]).filter(Boolean);
+        urls = data.map((row: any) => String(row[urlKeys[0]])).filter(Boolean);
       } else {
         // If no URL column, assume first column is URLs
-        urls = data.map((row: any) => Object.values(row)[0]).filter(Boolean);
+        urls = data.map((row: any) => String(Object.values(row)[0])).filter(Boolean);
       }
     }
 

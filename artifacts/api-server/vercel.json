@@ -1,0 +1,25 @@
+{
+  "installCommand": "cd ../.. && npm install -g pnpm && pnpm install --ignore-scripts",
+  "buildCommand": "mkdir -p dist && printf '%s\\n' '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Gaga Tools API</title></head><body><p>API server running. Use <code>/api/...</code> routes.</p></body></html>' > dist/index.html",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/api"
+    }
+  ],
+  "functions": {
+    "api/**/*.{js,ts}": {
+      "runtime": "@vercel/node@3",
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
