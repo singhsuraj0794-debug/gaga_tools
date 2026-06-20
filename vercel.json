@@ -1,7 +1,9 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install -g pnpm && pnpm install --ignore-scripts",
-  "buildCommand": "pnpm run build:frontend && rm -rf dist && cp -R artifacts/video-finder/dist dist",
+  "buildCommand": "pnpm run build:vercel",
   "outputDirectory": "dist",
+  "framework": null,
   "rewrites": [
     {
       "source": "/api/:path*",

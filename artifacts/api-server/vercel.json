@@ -1,7 +1,9 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "cd ../.. && npm install -g pnpm && pnpm install --ignore-scripts",
-  "buildCommand": "mkdir -p dist && printf '%s\\n' '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Gaga Tools API</title></head><body><p>API server running. Use <code>/api/...</code> routes.</p></body></html>' > dist/index.html",
+  "buildCommand": "pnpm run build:vercel",
   "outputDirectory": "dist",
+  "framework": null,
   "rewrites": [
     {
       "source": "/api/:path*",
