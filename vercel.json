@@ -1,8 +1,7 @@
 {
-  "rootDirectory": "artifacts/video-finder",
-  "buildCommand": "pnpm run build",
-  "outputDirectory": "dist",
-  "devCommand": "pnpm run dev",
+  "buildCommand": "pnpm run build:frontend",
+  "outputDirectory": "artifacts/video-finder/dist",
+  "devCommand": "cd artifacts/video-finder && pnpm run dev",
   "rewrites": [
     {
       "source": "/api/:path*",
@@ -20,6 +19,5 @@
       "memory": 1024,
       "maxDuration": 30
     }
-  },
-  "installCommand": "cd ../.. && pnpm install"
+  }
 }
