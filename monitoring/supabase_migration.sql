@@ -19,3 +19,15 @@ CREATE INDEX IF NOT EXISTS idx_monitoring_runs_page ON monitoring_runs (page);
 
 -- Index for filtering by status
 CREATE INDEX IF NOT EXISTS idx_monitoring_runs_status ON monitoring_runs (status);
+
+-- RLS: allow anon key to read and insert (for frontend dashboard + monitoring script)
+ALTER TABLE monitoring_runs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "anon_can_select" ON monitoring_runs
+  FOR SELECT USING (true);
+
+CREATE POLICY "anon_can_insert" ON monitoring_runs
+  FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "service_can_all" ON monitoring_runs
+  FOR ALL USING (true);

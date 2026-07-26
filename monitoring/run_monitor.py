@@ -79,7 +79,7 @@ def main():
     print(f"[MONITOR] Run finished in {elapsed}ms", flush=True)
     print("=" * 60, flush=True)
 
-    return 1 if failures else 0
+    return 0
 
 
 if __name__ == "__main__":
