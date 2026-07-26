@@ -45,7 +45,7 @@ RUN sed -i \
     artifacts/api-server/package.json
 
 # ── Install & build ──────────────────────────────────────────────
-RUN pnpm install --ignore-scripts && \
+RUN pnpm install && \
     pnpm --filter @workspace/api-server run build
 
 # ── Fix yt-dlp: remove --cookies-from-browser (won't work server-side) ─
