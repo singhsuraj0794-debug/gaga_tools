@@ -18,7 +18,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/artifacts/api-server"
 
-NGROK_DOMAIN="gajabscraper.ngrok-free.app"
+NGROK_DOMAIN="headphone-shudder-lavender.ngrok-free.dev"
 
 cleanup() {
   echo ""
