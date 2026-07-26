@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 
