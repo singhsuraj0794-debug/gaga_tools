@@ -1,79 +1,61 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Activity, ArrowLeft, BarChart3, Loader2, AlertTriangle,
-  CheckCircle, MinusCircle, Clock, Camera, Info, ExternalLink,
-  ChevronDown, ChevronRight, ListChecks, Globe, Smartphone,
-  Bug, Search, Image, ShoppingCart, DollarSign,
+  CheckCircle, MinusCircle, Clock, Camera, Info, Globe,
+  Bug, Search, Image, DollarSign, Server, Cpu, LayoutGrid,
 } from "lucide-react";
 
 const _SUPABASE_URL = "https://okxyskmjsmtykblrtmyi.supabase.co";
 const _SUPABASE_KEY = "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp";
+const REFRESH_INTERVAL = 30000;
 
-interface MonitoringRun {
+interface Run {
   id: string; run_at: string; page: string; metric: string;
   value: number | null; status: "pass" | "fail" | "degraded";
   step_failed: string | null; duration_ms: number | null;
-  details: {
+  details?: {
     screenshot_base64?: string; failure_reason?: string;
     console_errors?: {type:string;text:string}[];
     sub_steps?: {check:string;status:string;detail:string}[];
     detail?: string; url?: string; product_count?: number;
-    screenshot_path?: string;
-  } | null;
+  };
 }
 
 const METRIC_INFO: Record<string, string> = {
-  performance_score: "Lighthouse Performance score (0-100). Higher is better. Measures how fast the page loads and responds.",
-  lcp_ms: "Largest Contentful Paint in milliseconds. Measures perceived load speed. Target: <2500ms.",
-  cls: "Cumulative Layout Shift score. Measures visual stability. Target: <0.1.",
-  tbt_ms: "Total Blocking Time in milliseconds. Measures interactivity. Target: <300ms.",
-  si_ms: "Speed Index in milliseconds. How quickly content is visually displayed. Target: <4000ms.",
-  inp_ms: "Interaction to Next Paint in milliseconds. Measures responsiveness. Target: <200ms.",
-  response_time_ms: "Time taken for the server to respond to a request.",
-  status_code: "HTTP status code returned by the server. 200 = OK, 4xx/5xx = error.",
-  step_home_load: "Time to load the gajab.com home page and verify the title contains 'Gajab'.",
-  step_category_load: "Time to load the product listing page and verify product cards appear.",
-  step_product_detail_load: "Time to load a product detail page and verify the price section exists.",
-  step_bargain_flow: "Time to complete the full bargain flow: Start Bargaining, set offer, submit, accept.",
+  performance_score: "Lighthouse Performance score (0-100). Measures page load speed.",
+  lcp_ms: "Largest Contentful Paint (ms). Perceived load speed. Target: <2500ms.",
+  cls: "Cumulative Layout Shift. Visual stability. Target: <0.1.",
+  tbt_ms: "Total Blocking Time (ms). Interactivity. Target: <300ms.",
+  si_ms: "Speed Index (ms). How fast content displays. Target: <4000ms.",
+  inp_ms: "Interaction to Next Paint (ms). Responsiveness. Target: <200ms.",
+  response_time_ms: "Server response time (ms).",
+  step_home_load: "Home page load time + title verification.",
+  step_category_load: "Category page load time + product count check.",
+  step_product_detail_load: "Product detail load time + price section check.",
+  step_bargain_flow: "Bargain flow: click Start, set offer, submit, accept.",
 };
 
-const STEP_ICONS: Record<string, React.ReactNode> = {
-  home_load: <Globe className="h-4 w-4" />,
-  category_load: <Search className="h-4 w-4" />,
-  product_detail_load: <Image className="h-4 w-4" />,
-  bargain_flow: <DollarSign className="h-4 w-4" />,
-};
-
-function InfoTooltip({ text }: { text: string }) {
+function InfoTip({ text }: { text: string }) {
   const [show, setShow] = useState(false);
   return (
-    <span className="relative inline-flex ml-1">
-      <button
-        className="text-slate-400 hover:text-slate-600 cursor-help transition-colors"
+    <span className="relative inline-flex ml-1 align-middle">
+      <span className="text-slate-300 hover:text-slate-500 cursor-help transition-colors"
         onMouseEnter={() => setShow(true)}
-        onMouseLeave={() => setShow(false)}
-        onClick={() => setShow(!show)}
-      >
-        <Info className="h-3.5 w-3.5" />
-      </button>
-      {show && (
-        <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg shadow-lg w-64 pointer-events-none">
-          {text}
-          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800" />
-        </div>
-      )}
+        onMouseLeave={() => setShow(false)}>
+        <Info className="h-3 w-3 inline" />
+      </span>
+      {show && <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 bg-slate-800 text-white text-xs rounded-lg shadow-lg w-56 pointer-events-none leading-relaxed">{text}</div>}
     </span>
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function Badge({ status }: { status: string }) {
   const colors: Record<string, string> = {
-    pass: "bg-green-100 text-green-800 border-green-200",
-    fail: "bg-red-100 text-red-800 border-red-200",
-    degraded: "bg-yellow-100 text-yellow-800 border-yellow-200",
+    pass: "bg-green-100 text-green-700 border-green-200",
+    fail: "bg-red-100 text-red-700 border-red-200",
+    degraded: "bg-yellow-100 text-yellow-700 border-yellow-200",
   };
   const icons: Record<string, React.ReactNode> = {
     pass: <CheckCircle className="h-3 w-3" />,
@@ -81,316 +63,326 @@ function StatusBadge({ status }: { status: string }) {
     degraded: <MinusCircle className="h-3 w-3" />,
   };
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${colors[status] || "bg-gray-100 text-gray-800"}`}>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium border ${colors[status] || ""}`}>
       {icons[status]} {status}
     </span>
   );
 }
 
-function MetricValue({ metric, value }: { metric: string; value: number | null }) {
-  if (value === null) return <span className="text-gray-400">—</span>;
-  const formatted = metric.includes("ms")
-    ? `${value.toFixed(0)} ms`
-    : metric === "cls"
-    ? value.toFixed(3)
-    : metric.includes("score")
-    ? `${value.toFixed(1)}`
-    : value.toLocaleString();
-  return <span className="font-mono font-medium">{formatted}</span>;
+function Val({ metric, value }: { metric: string; value: number | null }) {
+  if (value === null) return <span className="text-gray-300">—</span>;
+  const fmt = metric.includes("ms") ? `${value.toFixed(0)}ms`
+    : metric === "cls" ? value.toFixed(3)
+    : metric.includes("score") ? `${value.toFixed(0)}`
+    : String(value);
+  return <span className="font-mono text-sm font-medium">{fmt}</span>;
 }
 
-function ScreenshotViewer({ base64, label }: { base64?: string; label: string }) {
+function Screenshot({ base64, label }: { base64?: string; label: string }) {
   const [open, setOpen] = useState(false);
   if (!base64) return null;
   return (
-    <div className="mt-2">
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-1.5 text-xs text-indigo-600 hover:text-indigo-800">
-        <Camera className="h-3 w-3" />
-        {open ? "Hide screenshot" : "Show screenshot"}
+    <div className="mt-1.5">
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700">
+        <Camera className="h-3 w-3" /> {open ? "Hide" : "View"} screenshot
       </button>
-      {open && (
-        <img src={base64} alt={label} className="mt-2 rounded-lg border border-slate-200 max-w-full max-h-64 object-contain" />
-      )}
+      {open && <img src={base64} alt={label} className="mt-1.5 rounded border max-w-full max-h-48 object-contain bg-white" />}
     </div>
   );
 }
 
-function RunTimeline({ runs }: { runs: MonitoringRun[] }) {
-  const runGroups = useMemo(() => {
-    const groups = new Map<string, MonitoringRun[]>();
-    for (const r of runs) {
-      const key = r.run_at;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(r);
-    }
-    return Array.from(groups.entries()).slice(0, 24);
-  }, [runs]);
+function MetricRow({ metric, value, status, detail, tip }: {
+  metric: string; value: number | null; status: string;
+  detail?: React.ReactNode; tip?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-b-0 text-sm">
+      <span className="text-slate-600 flex items-center gap-0.5">
+        {metric.replace(/_/g, " ")}
+        {tip && <InfoTip text={tip} />}
+      </span>
+      <div className="flex items-center gap-2">
+        <Val metric={metric} value={value} />
+        <Badge status={status} />
+      </div>
+    </div>
+  );
+}
+
+function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: React.ReactNode }) {
+  return (
+    <Card className={`border-l-4 ${run.status === "fail" ? "border-l-red-500" : run.status === "degraded" ? "border-l-yellow-500" : "border-l-green-500"}`}>
+      <CardContent className="p-3 sm:p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 text-slate-400">{icon}</div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-medium text-sm text-slate-800">{stepName}</span>
+              <Badge status={run.status} />
+              <span className="text-xs text-slate-400 ml-auto">{run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "—"}</span>
+            </div>
+            {run.details?.detail && <p className="text-xs text-slate-500 mt-0.5">{run.details.detail}</p>}
+            {run.details?.failure_reason && (
+              <div className="flex items-start gap-1.5 mt-1.5 p-1.5 bg-red-50 rounded text-xs text-red-700">
+                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" /> {run.details.failure_reason}
+              </div>
+            )}
+            {run.details?.sub_steps && run.details.sub_steps.length > 0 && (
+              <div className="mt-1.5 space-y-0.5">
+                {run.details.sub_steps.map((s, i) => (
+                  <div key={i} className="flex items-center gap-1.5 text-xs text-slate-500">
+                    {s.status === "pass" ? <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                      : s.status === "degraded" ? <MinusCircle className="h-3 w-3 text-yellow-500 shrink-0" />
+                      : <AlertTriangle className="h-3 w-3 text-red-500 shrink-0" />}
+                    <span>{s.check}</span>
+                    {s.detail && <span className="text-slate-400">— {s.detail}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {run.details?.console_errors && run.details.console_errors.length > 0 && (
+              <div className="mt-1.5 text-xs text-orange-600">
+                <span className="flex items-center gap-1"><Bug className="h-3 w-3" /> {run.details.console_errors.length} console error(s)</span>
+              </div>
+            )}
+            <Screenshot base64={run.details?.screenshot_base64} label={stepName} />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SectionCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <Card className="mb-4 sm:mb-6">
+      <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-4 pt-3 sm:pt-4">
+        <CardTitle className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+          {icon} {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-3 sm:px-4 pb-3 sm:pb-4 pt-0">
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
+
+function GroupMetrics({ runs, title, icon }: { runs: Run[]; title: string; icon: React.ReactNode }) {
+  const latestRun = runs[0]?.run_at;
+  const latest = runs.filter(r => r.run_at === latestRun);
+  const pageStatus = latest.some(r => r.status === "fail") ? "fail" : latest.some(r => r.status === "degraded") ? "degraded" : "pass";
+
+  const seen = new Set<string>();
+  const unique: Run[] = [];
+  for (const r of latest) {
+    if (!seen.has(r.metric)) { seen.add(r.metric); unique.push(r); }
+  }
 
   return (
-    <div className="space-y-3">
-      {runGroups.map(([timestamp, groupRuns]) => {
-        const time = new Date(timestamp);
-        const happySteps = groupRuns.filter(r => r.page === "happy_flow" && !r.metric.includes("monitor"));
-        const overall = happySteps.some(r => r.status === "fail") ? "fail"
-          : happySteps.some(r => r.status === "degraded") ? "degraded" : "pass";
-        const allMetrics = groupRuns.filter(r => r.page.startsWith("lighthouse/") || r.page === "happy_flow");
-
-        return (
-          <details key={timestamp} className="group">
-            <summary className="flex items-center gap-3 p-3 rounded-lg border bg-white cursor-pointer hover:bg-slate-50 transition-colors">
-              <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                overall === "pass" ? "bg-green-500" : overall === "degraded" ? "bg-yellow-500" : "bg-red-500"
-              }`} />
-              <Clock className="h-4 w-4 text-slate-400 shrink-0" />
-              <span className="font-medium text-sm text-slate-700 min-w-[160px]">
-                {time.toLocaleDateString()} {time.toLocaleTimeString()}
-              </span>
-              <StatusBadge status={overall} />
-              <span className="text-xs text-slate-400">{groupRuns.length} metrics</span>
-              <div className="ml-auto flex gap-1">
-                {happySteps.map(s => {
-                  const stepName = s.metric.replace("step_", "");
-                  return (
-                    <span key={s.metric} className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-slate-100">
-                      {STEP_ICONS[stepName] || <ListChecks className="h-3 w-3" />}
-                      <span className={s.status === "fail" ? "text-red-600" : s.status === "degraded" ? "text-yellow-600" : "text-green-600"}>
-                        {s.duration_ms ? `${(s.duration_ms / 1000).toFixed(1)}s` : "—"}
-                      </span>
-                    </span>
-                  );
-                })}
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400 group-open:rotate-90 transition-transform" />
-            </summary>
-            <div className="mt-2 pl-6 space-y-2">
-              {allMetrics.map(r => {
-                const stepName = r.metric.replace("step_", "");
-                const isHappyStep = r.page === "happy_flow" && r.metric.startsWith("step_");
-                const failure_reason = r.details?.failure_reason || r.step_failed;
-                const screenshot = r.details?.screenshot_base64;
-                const console_errors = r.details?.console_errors || [];
-                const sub_steps = r.details?.sub_steps || [];
-
-                return (
-                  <Card key={r.id} className={`border-l-4 ${
-                    r.status === "fail" ? "border-l-red-500" : r.status === "degraded" ? "border-l-yellow-500" : "border-l-green-500"
-                  }`}>
-                    <CardContent className="py-3 px-4">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {isHappyStep && (STEP_ICONS[stepName] || <ListChecks className="h-4 w-4 text-slate-500" />)}
-                            <span className="font-medium text-sm text-slate-800">
-                              {isHappyStep ? stepName.replace(/_/g, " ") : r.metric}
-                            </span>
-                            <InfoTooltip text={METRIC_INFO[r.metric] || METRIC_INFO[stepName] || "Metric tracked during monitoring run."} />
-                            <StatusBadge status={r.status} />
-                          </div>
-
-                          {r.details?.detail && (
-                            <p className="text-xs text-slate-500 mt-1">{r.details.detail}</p>
-                          )}
-
-                          {failure_reason && (
-                            <div className="flex items-start gap-1.5 mt-2 p-2 bg-red-50 rounded border border-red-100">
-                              <AlertTriangle className="h-3.5 w-3.5 text-red-500 mt-0.5 shrink-0" />
-                              <span className="text-xs text-red-700">{failure_reason}</span>
-                            </div>
-                          )}
-
-                          {r.value !== null && (
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="text-xs text-slate-400">Value:</span>
-                              <MetricValue metric={r.metric} value={r.value} />
-                              {r.duration_ms && (
-                                <>
-                                  <span className="text-xs text-slate-300">·</span>
-                                  <span className="text-xs text-slate-400">{r.duration_ms}ms total</span>
-                                </>
-                              )}
-                            </div>
-                          )}
-
-                          {console_errors.length > 0 && (
-                            <div className="mt-2">
-                              <span className="text-xs font-medium text-orange-600 flex items-center gap-1">
-                                <Bug className="h-3 w-3" /> Console errors: {console_errors.length}
-                              </span>
-                              {console_errors.slice(0, 3).map((ce: {text:string}, i: number) => (
-                                <p key={i} className="text-xs text-orange-700 truncate ml-4" title={ce.text}>{ce.text}</p>
-                              ))}
-                            </div>
-                          )}
-
-                          {sub_steps.length > 0 && (
-                            <div className="mt-2 space-y-0.5">
-                              <span className="text-xs font-medium text-slate-500 flex items-center gap-1">
-                                <ListChecks className="h-3 w-3" /> Sub-steps
-                              </span>
-                              {sub_steps.map((ss: {check:string;status:string;detail:string}, i: number) => (
-                                <div key={i} className="flex items-center gap-2 text-xs ml-2">
-                                  {ss.status === "pass" ? (
-                                    <CheckCircle className="h-3 w-3 text-green-500" />
-                                  ) : ss.status === "degraded" ? (
-                                    <MinusCircle className="h-3 w-3 text-yellow-500" />
-                                  ) : (
-                                    <AlertTriangle className="h-3 w-3 text-red-500" />
-                                  )}
-                                  <span className="text-slate-600">{ss.check}</span>
-                                  {ss.detail && <span className="text-slate-400">— {ss.detail}</span>}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {r.details?.screenshot_path && (
-                            <p className="text-xs text-slate-400 mt-1">
-                              📁 {r.details.screenshot_path}
-                            </p>
-                          )}
-                        </div>
-                        <div className="shrink-0">
-                          {screenshot && <ScreenshotViewer base64={screenshot} label={stepName} />}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          </details>
-        );
-      })}
-    </div>
+    <SectionCard title={title} icon={icon}>
+      <div className="flex items-center gap-2 mb-2">
+        <Badge status={pageStatus} />
+        <span className="text-xs text-slate-400">{unique.length} metrics</span>
+      </div>
+      {unique.map(r => (
+        <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} tip={METRIC_INFO[r.metric]} />
+      ))}
+    </SectionCard>
   );
 }
 
 export default function MonitoringDashboard() {
-  const [runs, setRuns] = useState<MonitoringRun[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>("all");
 
   async function fetchRuns() {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || _SUPABASE_URL;
-    const supabaseKey = import.meta.env.VITE_SUPABASE_KEY || _SUPABASE_KEY;
-    if (!supabaseUrl || !supabaseKey) return;
+    const url = import.meta.env.VITE_SUPABASE_URL || _SUPABASE_URL;
+    const key = import.meta.env.VITE_SUPABASE_KEY || _SUPABASE_KEY;
+    if (!url || !key) return;
     try {
-      const url = new URL(`${supabaseUrl}/rest/v1/monitoring_runs`);
-      url.searchParams.set("select", "*");
-      url.searchParams.set("order", "run_at.desc");
-      url.searchParams.set("limit", "500");
-      const resp = await fetch(url.toString(), {
-        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` },
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      setRuns(await resp.json());
-    } catch (e: any) {
-      console.error("Supabase fetch error:", e);
-    } finally {
-      setLoading(false);
-    }
+      const u = new URL(`${url}/rest/v1/monitoring_runs`);
+      u.searchParams.set("select", "id,run_at,page,metric,value,status,step_failed,duration_ms,details");
+      u.searchParams.set("order", "run_at.desc");
+      u.searchParams.set("limit", "600");
+      const r = await fetch(u.toString(), { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setRuns(await r.json());
+    } catch (e: any) { console.error(e); }
+    finally { setLoading(false); }
   }
 
-  useEffect(() => {
-    fetchRuns();
-    const interval = setInterval(fetchRuns, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  useEffect(() => { fetchRuns(); const i = setInterval(fetchRuns, REFRESH_INTERVAL); return () => clearInterval(i); }, []);
 
-  const latestRun = runs.length > 0 ? runs[0].run_at : null;
-  const latest = runs.filter(r => r.run_at === latestRun);
-  const passCount = latest.filter(r => r.status === "pass").length;
-  const failCount = latest.filter(r => r.status === "fail").length;
-  const degCount = latest.filter(r => r.status === "degraded").length;
+  const grouped = useMemo(() => {
+    const happy = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_"));
+    const lh = runs.filter(r => r.page.startsWith("lighthouse/") || ["home", "category", "product_detail"].includes(r.page));
+    const server = runs.filter(r => r.page.startsWith("server/"));
+    const api = runs.filter(r => r.page.startsWith("api/"));
+    const feature = runs.filter(r => r.page.startsWith("feature/"));
+    return { happy, lh, server, api, feature };
+  }, [runs]);
 
-  const uniqueRunCount = new Set(runs.map(r => r.run_at)).size;
-  const totalHappySteps = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_")).length;
-  const failedHappySteps = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_") && r.status === "fail").length;
-  const lastRunTime = runs[0] ? new Date(runs[0].run_at) : null;
+  const latestRun = runs[0]?.run_at;
+  const latestAll = runs.filter(r => r.run_at === latestRun);
+  const pCount = latestAll.filter(r => r.status === "pass").length;
+  const fCount = latestAll.filter(r => r.status === "fail").length;
+  const dCount = latestAll.filter(r => r.status === "degraded").length;
+  const totalRuns = new Set(runs.map(r => r.run_at)).size;
 
-  const happyFlowRuns = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_"));
-  const filteredRuns = filter === "all" ? runs : filter === "happy" ? happyFlowRuns : runs;
+  const lastTime = runs[0] ? new Date(runs[0].run_at) : null;
+
+  function groupLatestHappy() {
+    if (!latestRun) return [];
+    const stepRuns = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_") && r.run_at === latestRun);
+    const map = new Map<string, Run>();
+    for (const r of stepRuns) map.set(r.metric, r);
+    return map;
+  }
+  const latestHappy = groupLatestHappy();
+
+  const STEP_ICONS: Record<string, React.ReactNode> = {
+    step_home_load: <Globe className="h-4 w-4" />,
+    step_category_load: <Search className="h-4 w-4" />,
+    step_product_detail_load: <Image className="h-4 w-4" />,
+    step_bargain_flow: <DollarSign className="h-4 w-4" />,
+  };
+  const STEP_LABELS: Record<string, string> = {
+    step_home_load: "Home Page Load",
+    step_category_load: "Category Page Load",
+    step_product_detail_load: "Product Detail Load",
+    step_bargain_flow: "Bargain Flow",
+  };
+
+  function pagePage(page: string) {
+    if (page === "home" || page === "lighthouse/home") return "home";
+    if (page === "category" || page === "lighthouse/category") return "category";
+    if (page === "product_detail" || page === "lighthouse/product_detail") return "product_detail";
+    return page;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+        <div className="flex items-center justify-between mb-4 sm:mb-6">
           <div>
-            <Link href="/" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-1">
-              <ArrowLeft className="h-3.5 w-3.5" /> Back
+            <Link href="/" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 mb-0.5">
+              <ArrowLeft className="h-3 w-3" /> Home
             </Link>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 flex items-center gap-3">
-              <Activity className="h-6 w-6 sm:h-7 sm:w-7 text-indigo-600" />
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 flex items-center gap-2">
+              <Activity className="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600" />
               Synthetic Monitor
+              <span className="text-xs font-normal text-slate-400 ml-1">gajab.com</span>
             </h1>
-            <p className="text-sm text-slate-500">
-              gajab.com — hourly checks via Playwright + Lighthouse
-              {lastRunTime && <span className="ml-2">· Last run: {lastRunTime.toLocaleTimeString()}</span>}
-            </p>
+            {lastTime && <p className="text-xs text-slate-400 mt-0.5">Latest run: {lastTime.toLocaleDateString()} {lastTime.toLocaleTimeString()} · Auto-refreshes every 30s</p>}
           </div>
           <div className="flex items-center gap-2">
-            <select
-              className="text-xs border border-slate-200 rounded-md px-2 py-1.5 bg-white text-slate-600"
-              value={filter} onChange={e => setFilter(e.target.value)}
-            >
-              <option value="all">All metrics</option>
-              <option value="happy">Happy flow only</option>
-            </select>
-            <button onClick={fetchRuns} className="text-xs px-3 py-1.5 bg-white border border-slate-200 rounded-md text-slate-600 hover:bg-slate-50">
+            <button onClick={fetchRuns} className="text-xs px-2.5 py-1.5 bg-white border border-slate-200 rounded text-slate-500 hover:bg-slate-50 whitespace-nowrap">
               Refresh
             </button>
           </div>
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-24">
-            <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
-          </div>
+          <div className="flex justify-center py-24"><Loader2 className="h-8 w-8 animate-spin text-slate-300" /></div>
         ) : runs.length === 0 ? (
-          <Card className="border-dashed border-2">
-            <CardContent className="py-12 text-center text-slate-400">
-              <Activity className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <p className="font-medium">No monitoring runs yet</p>
-              <p className="text-sm mt-1">The hourly GitHub Action will produce the first results within 60 minutes.</p>
-            </CardContent>
-          </Card>
+          <Card className="border-dashed border-2"><CardContent className="py-12 text-center text-slate-400">
+            <Activity className="h-10 w-10 mx-auto mb-2 opacity-50" />
+            <p className="font-medium">No monitoring data yet</p>
+            <p className="text-xs mt-1">First results appear after the hourly GitHub Action runs.</p>
+          </CardContent></Card>
         ) : (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-              <StatCard value={uniqueRunCount} label="Total Runs" />
-              <StatCard value={passCount} label="Passing (latest)" color="green" />
-              <StatCard value={failCount} label="Failing (latest)" color="red" />
-              <StatCard value={degCount} label="Degraded (latest)" color="yellow" />
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4 sm:mb-6">
+              <Card><CardContent className="py-3 text-center"><div className="text-xl sm:text-2xl font-bold text-slate-800">{totalRuns}</div><div className="text-xs text-slate-400 uppercase tracking-wider mt-0.5">Total Runs</div></CardContent></Card>
+              <Card><CardContent className="py-3 text-center"><div className={`text-xl sm:text-2xl font-bold ${pCount > 0 ? "text-green-600" : "text-slate-300"}`}>{pCount}</div><div className="text-xs text-slate-400 uppercase tracking-wider mt-0.5">Passing</div></CardContent></Card>
+              <Card><CardContent className="py-3 text-center"><div className={`text-xl sm:text-2xl font-bold ${fCount > 0 ? "text-red-600" : "text-slate-300"}`}>{fCount}</div><div className="text-xs text-slate-400 uppercase tracking-wider mt-0.5">Failing</div></CardContent></Card>
+              <Card><CardContent className="py-3 text-center"><div className={`text-xl sm:text-2xl font-bold ${dCount > 0 ? "text-yellow-600" : "text-slate-300"}`}>{dCount}</div><div className="text-xs text-slate-400 uppercase tracking-wider mt-0.5">Degraded</div></CardContent></Card>
             </div>
 
-            {failCount > 0 && (
-              <div className="flex items-center gap-2 p-3 mb-4 bg-red-50 border border-red-200 rounded-lg">
-                <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
-                <span className="text-sm text-red-700">
-                  {failCount} check{failCount !== 1 ? "s" : ""} failing in the latest run
-                  {failedHappySteps > 0 && ` (${failedHappySteps}/${totalHappySteps} happy flow steps)`}
-                </span>
+            {fCount > 0 && (
+              <div className="flex items-center gap-2 p-2.5 mb-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                {fCount} check{fCount > 1 ? "s" : ""} failing in the latest run
               </div>
             )}
 
-            <RunTimeline runs={filteredRuns} />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+              <div>
+                <SectionCard title="Happy Flow" icon={<Activity className="h-3.5 w-3.5" />}>
+                  {["step_home_load", "step_category_load", "step_product_detail_load", "step_bargain_flow"].map(key => {
+                    const run = latestHappy.get(key);
+                    if (!run) return <div key={key} className="text-xs text-slate-400 py-2">No data for {key.replace("step_", "")}</div>;
+                    return <StepCard key={key} run={run} stepName={STEP_LABELS[key] || key.replace("step_", "").replace(/_/g, " ")} icon={STEP_ICONS[key] || <Activity className="h-4 w-4" />} />;
+                  })}
+                </SectionCard>
+              </div>
+
+              <div>
+                <SectionCard title="Lighthouse Performance" icon={<BarChart3 className="h-3.5 w-3.5" />}>
+                  {["home", "category", "product_detail"].map(p => {
+                    const pageRuns = runs.filter(r => (r.page === p || r.page === `lighthouse/${p}`) && r.run_at === latestRun);
+                    const seen = new Set<string>();
+                    const unique: Run[] = [];
+                    for (const r of pageRuns) { if (!seen.has(r.metric)) { seen.add(r.metric); unique.push(r); } }
+                    const st = unique.some(r => r.status === "fail") ? "fail" : unique.some(r => r.status === "degraded") ? "degraded" : "pass";
+                    return (
+                      <div key={p} className="mb-3 last:mb-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm font-medium text-slate-700 capitalize">{p.replace(/_/g, " ")}</span>
+                          <Badge status={st} />
+                        </div>
+                        {unique.map(r => <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} tip={METRIC_INFO[r.metric]} />)}
+                      </div>
+                    );
+                  })}
+                </SectionCard>
+
+                {grouped.server.length > 0 && (
+                  <GroupMetrics runs={grouped.server} title="Server Health" icon={<Server className="h-3.5 w-3.5" />} />
+                )}
+                {grouped.api.length > 0 && (
+                  <GroupMetrics runs={grouped.api} title="API Endpoints" icon={<Cpu className="h-3.5 w-3.5" />} />
+                )}
+              </div>
+            </div>
+
+            <Card className="mt-4 sm:mt-6">
+              <CardHeader className="pb-2 px-3 sm:px-4 pt-3 sm:pt-4">
+                <CardTitle className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5" /> Recent Runs
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-3 sm:px-4 pb-3 sm:pb-4 pt-0">
+                <div className="overflow-x-auto -mx-3 sm:mx-0">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-400 uppercase tracking-wider">
+                        <th className="text-left px-3 py-2 font-medium">Time</th>
+                        <th className="text-left px-3 py-2 font-medium">Page</th>
+                        <th className="text-left px-3 py-2 font-medium">Metric</th>
+                        <th className="text-right px-3 py-2 font-medium">Value</th>
+                        <th className="text-center px-3 py-2 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.slice(0, 50).map(r => (
+                        <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
+                          <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{new Date(r.run_at).toLocaleTimeString()}</td>
+                          <td className="px-3 py-2 text-slate-700 font-medium">{r.page.replace("lighthouse/", "").replace("server/", "").replace("api/", "").replace("feature/", "")}</td>
+                          <td className="px-3 py-2 text-slate-500 max-w-[120px] truncate">{r.metric}</td>
+                          <td className="px-3 py-2 text-right font-mono"><Val metric={r.metric} value={r.value} /></td>
+                          <td className="px-3 py-2 text-center"><Badge status={r.status} /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
           </>
         )}
       </div>
     </div>
-  );
-}
-
-function StatCard({ value, label, color }: { value: number | string; label: string; color?: string }) {
-  const colors: Record<string, string> = {
-    green: "text-green-600", red: "text-red-600", yellow: "text-yellow-600",
-  };
-  return (
-    <Card>
-      <CardContent className="py-3 text-center">
-        <div className={`text-2xl font-bold ${color ? colors[color] : "text-slate-800"}`}>{value}</div>
-        <div className="text-xs text-slate-500 uppercase tracking-wider mt-0.5">{label}</div>
-      </CardContent>
-    </Card>
   );
 }
