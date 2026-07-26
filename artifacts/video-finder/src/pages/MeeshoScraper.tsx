@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { Link } from "wouter";
+import { API_BASE } from "@/lib/api";
 
 interface MeeshoDetailedProduct {
   id: string;
@@ -71,7 +72,7 @@ export default function MeeshoScraper() {
     if (!extractJobId) return;
     extractPollRef.current = setInterval(async () => {
       try {
-        const pollRes = await fetch(`/api/scraper/meesho/extract/${extractJobId}`);
+        const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/extract/${extractJobId}`);
         const job = await pollRes.json();
         if (job.status === "completed") {
           setProducts(job.products || []);
@@ -100,7 +101,7 @@ export default function MeeshoScraper() {
     if (jobId && isScraping) {
       pollRef.current = setInterval(async () => {
         try {
-          const pollRes = await fetch(`/api/scraper/meesho/scrape/${jobId}`);
+          const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/scrape/${jobId}`);
           const job = await pollRes.json();
           if (job.products) {
             setScrapedProducts(prev => {
@@ -144,7 +145,7 @@ export default function MeeshoScraper() {
     setSearchQuery("");
 
     try {
-      const response = await fetch("/api/scraper/meesho/extract", {
+      const response = await fetch(`${API_BASE}/api/scraper/meesho/extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: storeUrl.trim() }),
@@ -227,7 +228,7 @@ export default function MeeshoScraper() {
 
     setIsScraping(true);
     try {
-      const response = await fetch("/api/scraper/meesho/scrape", {
+      const response = await fetch(`${API_BASE}/api/scraper/meesho/scrape`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ urls: urlsToScrape, products }),
@@ -246,7 +247,7 @@ export default function MeeshoScraper() {
       // Poll for results
       pollRef.current = setInterval(async () => {
         try {
-          const pollRes = await fetch(`/api/scraper/meesho/scrape/${jobId}`);
+          const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/scrape/${jobId}`);
           const job = await pollRes.json();
           if (job.products) {
             setScrapedProducts(prev => {
@@ -282,7 +283,7 @@ export default function MeeshoScraper() {
 
     setIsExporting(true);
     try {
-      const response = await fetch("/api/scraper/meesho/export", {
+      const response = await fetch(`${API_BASE}/api/scraper/meesho/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ products: scrapedProducts }),
@@ -312,7 +313,7 @@ export default function MeeshoScraper() {
   const handleCancelScrape = async () => {
     if (scrapeJobId) {
       try {
-        await fetch(`/api/scraper/meesho/cancel/${scrapeJobId}`, { method: "POST" });
+        await fetch(`${API_BASE}/api/scraper/meesho/cancel/${scrapeJobId}`, { method: "POST" });
       } catch {}
     }
     if (pollRef.current) clearInterval(pollRef.current);
@@ -356,7 +357,7 @@ export default function MeeshoScraper() {
 
   const handleClearCache = async () => {
     try {
-      const res = await fetch("/api/scraper/meesho/clear-cache", { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/scraper/meesho/clear-cache`, { method: "POST" });
       const data = await res.json();
       alert(data.message || "Cache cleared");
     } catch {

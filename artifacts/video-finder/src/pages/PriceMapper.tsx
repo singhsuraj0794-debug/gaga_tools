@@ -21,6 +21,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { Link } from "wouter";
+import { API_BASE } from "@/lib/api";
 
 interface GajabProduct {
   id: string;
@@ -136,7 +137,7 @@ export default function PriceMapper() {
 
   async function fetchProducts() {
     try {
-      const res = await fetch("/api/price-mapper/products");
+      const res = await fetch(`${API_BASE}/api/price-mapper/products`);
       const data = await res.json();
       const prods = data.products || [];
       setProducts(prods);
@@ -150,7 +151,7 @@ export default function PriceMapper() {
 
   async function fetchMappings() {
     try {
-      const res = await fetch("/api/price-mapper/mappings");
+      const res = await fetch(`${API_BASE}/api/price-mapper/mappings`);
       const data = await res.json();
       const m = data.mappings || [];
       setMappings(m);
@@ -170,7 +171,7 @@ export default function PriceMapper() {
 
   async function fetchDuplicates() {
     try {
-      const res = await fetch("/api/price-mapper/duplicates");
+      const res = await fetch(`${API_BASE}/api/price-mapper/duplicates`);
       const data = await res.json();
       setDuplicates(data.duplicates || []);
     } catch {
@@ -182,7 +183,7 @@ export default function PriceMapper() {
     setSearchingId(product.id);
     setError("");
     try {
-      const res = await fetch("/api/price-mapper/compare", {
+      const res = await fetch(`${API_BASE}/api/price-mapper/compare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product }),
@@ -299,7 +300,7 @@ export default function PriceMapper() {
 
       const filename = mappingFilter === "duplicates" ? "duplicate-products.csv" : "price-mappings.csv";
 
-      const exportRes = await fetch("/api/price-mapper/export", {
+      const exportRes = await fetch(`${API_BASE}/api/price-mapper/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mappings: exportData, filename }),
@@ -366,7 +367,7 @@ export default function PriceMapper() {
     const entry = manualUrls[productId]?.[platform as keyof typeof manualUrls[string]];
     if (!entry?.url || !entry?.price) return;
 
-    fetch("/api/price-mapper/save", {
+    fetch(`${API_BASE}/api/price-mapper/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ productId, platform, url: entry.url, price: entry.price }),

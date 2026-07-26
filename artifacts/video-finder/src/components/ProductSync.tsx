@@ -15,6 +15,7 @@ import {
   Brain,
   Image,
 } from "lucide-react";
+import { API_BASE } from "@/lib/api";
 
 interface SyncResult {
   gajab_active: number;
@@ -89,7 +90,7 @@ export default function ProductSync() {
 
   async function fetchStatus() {
     try {
-      const res = await fetch("/api/products/status");
+      const res = await fetch(`${API_BASE}/api/products/status`);
       if (res.ok) {
         const data = await res.json();
         setSupabaseCount(data.supabase_total);
@@ -105,7 +106,7 @@ export default function ProductSync() {
     setResult(null);
     setError(null);
     try {
-      const res = await fetch("/api/products/sync-and-clean", {
+      const res = await fetch(`${API_BASE}/api/products/sync-and-clean`, {
         method: "POST",
         signal: AbortSignal.timeout(300000),
       });
@@ -130,7 +131,7 @@ export default function ProductSync() {
     setVerifyResult(null);
     setDeleteDone(false);
     try {
-      const res = await fetch("/api/products/duplicates", {
+      const res = await fetch(`${API_BASE}/api/products/duplicates`, {
         signal: AbortSignal.timeout(120000),
       });
       if (!res.ok) throw new Error((await res.text()).slice(0, 200));
@@ -149,7 +150,7 @@ export default function ProductSync() {
     setVerifyResult(null);
     setDupError(null);
     try {
-      const res = await fetch("/api/products/verify-duplicates", {
+      const res = await fetch(`${API_BASE}/api/products/verify-duplicates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(dupResult.groups),
@@ -170,7 +171,7 @@ export default function ProductSync() {
     setDeleting(true);
     setDupError(null);
     try {
-      const res = await fetch("/api/products/delete-duplicates", {
+      const res = await fetch(`${API_BASE}/api/products/delete-duplicates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: verifyResult.to_delete_ids }),
@@ -203,7 +204,7 @@ export default function ProductSync() {
     setImgDupError(null);
     setImgDeleteDone(false);
     try {
-      const res = await fetch("/api/products/image-duplicates", {
+      const res = await fetch(`${API_BASE}/api/products/image-duplicates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
@@ -228,7 +229,7 @@ export default function ProductSync() {
         g.products.slice(1).map((p) => p.id)
       );
       if (allIds.length === 0) return;
-      const res = await fetch("/api/products/delete-duplicates", {
+      const res = await fetch(`${API_BASE}/api/products/delete-duplicates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids: allIds }),

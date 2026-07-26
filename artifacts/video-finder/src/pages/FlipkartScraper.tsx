@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { Link } from "wouter";
+import { API_BASE } from "@/lib/api";
 
 interface FlipkartDetailedProduct {
   id: string;
@@ -151,7 +152,7 @@ export default function FlipkartScraper() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch("/api/scraper/flipkart/upload", {
+      const response = await fetch(`${API_BASE}/api/scraper/flipkart/upload`, {
         method: "POST",
         body: formData,
       });
@@ -237,7 +238,7 @@ export default function FlipkartScraper() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 300000);
-        const response = await fetch("/api/scraper/flipkart/scrape", {
+        const response = await fetch(`${API_BASE}/api/scraper/flipkart/scrape`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ urls: batchUrls }),
@@ -275,7 +276,7 @@ export default function FlipkartScraper() {
     if (products.length === 0) return;
     setIsExporting(true);
     try {
-      const response = await fetch("/api/scraper/flipkart/export", {
+      const response = await fetch(`${API_BASE}/api/scraper/flipkart/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ products }),

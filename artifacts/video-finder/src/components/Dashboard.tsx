@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
+import { API_BASE } from "@/lib/api";
 
 // ─── DownloadItem ──────────────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ function DownloadItem({ job, onComplete }: DownloadItemProps) {
   useEffect(() => {
     if (isDone) return;
 
-    const es = new EventSource(`/api/videos/downloads/${job.jobId}/progress`);
+    const es = new EventSource(`${API_BASE}/api/videos/downloads/${job.jobId}/progress`);
 
     es.onmessage = (event: MessageEvent) => {
       try {
@@ -358,7 +359,7 @@ export default function Dashboard() {
   const handleSyncProducts = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/products/sync-and-clean", { method: "POST", signal: AbortSignal.timeout(300000) });
+      const res = await fetch(`${API_BASE}/api/products/sync-and-clean`, { method: "POST", signal: AbortSignal.timeout(300000) });
       const text = await res.text();
       let data: any;
       try {
@@ -451,7 +452,7 @@ export default function Dashboard() {
     setIsReverseSearching(true);
     setActiveReverseProductId(product.id);
     try {
-      const response = await fetch("/api/videos/reverse-image-search", {
+      const response = await fetch(`${API_BASE}/api/videos/reverse-image-search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ product }),
@@ -477,7 +478,7 @@ export default function Dashboard() {
     setBargainProgress(0);
     setBargainStatus("Starting recording...");
     try {
-      const response = await fetch("/api/videos/bargain", {
+      const response = await fetch(`${API_BASE}/api/videos/bargain`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productUrl: product.url, productName: product.name }),
@@ -490,7 +491,7 @@ export default function Dashboard() {
       setBargainJobId(jobId);
 
       // Connect to SSE progress stream
-      const es = new EventSource(`/api/videos/bargain/${jobId}/progress`);
+      const es = new EventSource(`${API_BASE}/api/videos/bargain/${jobId}/progress`);
       es.onmessage = (event: MessageEvent) => {
         try {
           const progress = JSON.parse(event.data);

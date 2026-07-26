@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Search, Download, ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
+import { API_BASE } from "@/lib/api";
 import { searchEcommerceProducts } from "@workspace/api-client-react";
 import type { EcommerceProduct } from "@workspace/api-zod";
 
@@ -33,7 +34,7 @@ export default function Scraper({ initialPlatform = "flipkart" }: { initialPlatf
 
   const handleExport = async () => {
     try {
-      const response = await fetch("/api/scraper/export", {
+      const response = await fetch(`${API_BASE}/api/scraper/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ products, filename: `${platform}-products.xlsx` }),

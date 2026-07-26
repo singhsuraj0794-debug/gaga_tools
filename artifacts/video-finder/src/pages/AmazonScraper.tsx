@@ -19,6 +19,7 @@ import {
   Store,
 } from "lucide-react";
 import { Link } from "wouter";
+import { API_BASE } from "@/lib/api";
 
 interface AmazonDetailedProduct {
   id: string;
@@ -171,7 +172,7 @@ export default function AmazonScraper() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch("/api/scraper/amazon/upload", {
+      const response = await fetch(`${API_BASE}/api/scraper/amazon/upload`, {
         method: "POST",
         body: formData,
       });
@@ -206,7 +207,7 @@ export default function AmazonScraper() {
     setSearchQuery("");
 
     try {
-      const response = await fetch("/api/scraper/amazon/extract", {
+      const response = await fetch(`${API_BASE}/api/scraper/amazon/extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: storeUrl.trim() }),
@@ -335,7 +336,7 @@ export default function AmazonScraper() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 300000);
-        const response = await fetch("/api/scraper/amazon/scrape", {
+        const response = await fetch(`${API_BASE}/api/scraper/amazon/scrape`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ urls: batchUrls }),
@@ -373,7 +374,7 @@ export default function AmazonScraper() {
     if (products.length === 0) return;
     setIsExporting(true);
     try {
-      const response = await fetch("/api/scraper/amazon/export", {
+      const response = await fetch(`${API_BASE}/api/scraper/amazon/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ products }),
