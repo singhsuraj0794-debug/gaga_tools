@@ -18,7 +18,7 @@ import requests
 from PIL import Image
 from imagehash import phash
 
-RELIABLE_THRESHOLD = 35
+RELIABLE_THRESHOLD = 20
 
 # Lazy-loaded AI models
 _dinov2_processor = None
