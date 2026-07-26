@@ -43,7 +43,7 @@ router.get("/products", async (req, res): Promise<void> => {
     res.json({ products, total, page, totalPages });
   } catch (err: any) {
     req.log.error({ err }, "Failed to scrape products");
-    res.status(500).json({ error: "Failed to scrape products. Please try again." });
+    res.status(500).json({ error: "Failed to scrape products: " + (err?.message || String(err)) });
   }
 });
 
