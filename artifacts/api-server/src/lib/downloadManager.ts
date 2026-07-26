@@ -212,7 +212,60 @@ export function startDownload(
   return job;
 }
 
-// ─── TikTok download via tiktok-download-video1 RapidAPI or yt-dlp ───────
+// ─── Shared helper: tiktok-scraper2 fallback ─────────────────────────────
+
+const TIKTOK_SCRAPER2_HOST = "tiktok-scraper2.p.rapidapi.com";
+
+export async function fetchTikTokVideoFromScraper2(
+  videoUrl: string,
+  apiKey: string,
+): Promise<string | null> {
+  try {
+    const encodedUrl = encodeURIComponent(videoUrl);
+    const url = `https://${TIKTOK_SCRAPER2_HOST}/video/info_v2?video_url=${encodedUrl}`;
+    const res = await fetch(url, {
+      headers: {
+        "x-rapidapi-host": TIKTOK_SCRAPER2_HOST,
+        "x-rapidapi-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (res.status === 204 || !res.ok) return null;
+
+    const text = await res.text();
+    if (!text) return null;
+
+    const data = JSON.parse(text);
+
+    // Common response shapes across TikTok scrapers
+    const videoData =
+      data?.data?.video_info ||
+      data?.data?.video_data ||
+      data?.video ||
+      data?.itemInfo?.itemStruct?.video ||
+      data?.item_list?.[0]?.video ||
+      data?.data;
+
+    if (!videoData) return null;
+
+    return (
+      videoData?.play_addr?.url_list?.[0] ||
+      videoData?.playAddr ||
+      videoData?.download_addr?.url_list?.[0] ||
+      videoData?.downloadAddr ||
+      videoData?.play ||
+      videoData?.wmplay ||
+      videoData?.hdplay ||
+      null
+    );
+  } catch {
+    return null;
+  }
+}
+
+// ─── TikTok download via tiktok-download-video1, tiktok-scraper2, or yt-dlp ──
 
 async function startTikTokDownload(job: DownloadJob, url: string, title: string): Promise<void> {
   const rapidApiKey = process.env.RAPIDAPI_KEY;
@@ -240,7 +293,7 @@ async function startTikTokDownload(job: DownloadJob, url: string, title: string)
       if (data.code !== 0) throw new Error(data.msg || "TikTok API error");
 
       // Prefer HD no-watermark, fall back to regular play URL
-      const videoUrl: string = data.data?.hdplay || data.data?.play || data.data?.wmplay;
+      let videoUrl: string | null = data.data?.hdplay || data.data?.play || data.data?.wmplay;
       if (!videoUrl) throw new Error("No video URL in response");
 
       job.progress = 40;
@@ -283,21 +336,67 @@ async function startTikTokDownload(job: DownloadJob, url: string, title: string)
       job.fileSize = stat.size;
       job.progress = 100;
       job.status = "completed";
-      logger.info({ jobId: job.jobId, filePath }, "TikTok download completed via RapidAPI");
+      logger.info({ jobId: job.jobId, filePath }, "TikTok download completed via RapidAPI (tiktok-download-video1)");
       return;
     } catch (err: any) {
-      logger.warn({ jobId: job.jobId, err: err.message }, "TikTok RapidAPI download failed, falling back to yt-dlp");
+      logger.warn({ jobId: job.jobId, err: err.message }, "tiktok-download-video1 failed, trying tiktok-scraper2");
       rapidApiFailed = true;
     }
-  } else {
-    rapidApiFailed = true;
+
+    // Fallback: try tiktok-scraper2
+    if (rapidApiFailed) {
+      try {
+        const videoUrl = await fetchTikTokVideoFromScraper2(url, rapidApiKey);
+        if (videoUrl) {
+          job.progress = 40;
+          logger.info({ jobId: job.jobId, videoUrl: videoUrl.slice(0, 80) }, "Got TikTok CDN URL from tiktok-scraper2, downloading...");
+
+          const safeTitle = sanitizeFilename(title || "tiktok");
+          const fileName = `${safeTitle}-${job.jobId.slice(0, 8)}.mp4`;
+          const filePath = path.join(DOWNLOADS_DIR, fileName);
+
+          const videoRes = await fetch(videoUrl, {
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+            signal: AbortSignal.timeout(60000),
+          });
+
+          if (videoRes.ok) {
+            const total = parseInt(videoRes.headers.get("content-length") || "0", 10);
+            const fileStream = fs.createWriteStream(filePath);
+            let received = 0;
+            const reader = videoRes.body!.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              fileStream.write(value);
+              received += value.length;
+              if (total) job.progress = Math.min(99, 40 + Math.floor((received / total) * 59));
+            }
+            await new Promise<void>((resolve, reject) => {
+              fileStream.end();
+              fileStream.on("finish", resolve);
+              fileStream.on("error", reject);
+            });
+
+            const stat = fs.statSync(filePath);
+            job.filePath = filePath;
+            job.fileName = fileName;
+            job.fileSize = stat.size;
+            job.progress = 100;
+            job.status = "completed";
+            logger.info({ jobId: job.jobId, filePath }, "TikTok download completed via tiktok-scraper2");
+            return;
+          }
+        }
+      } catch (err: any) {
+        logger.warn({ jobId: job.jobId, err: err.message }, "tiktok-scraper2 also failed");
+      }
+    }
   }
 
-  if (rapidApiFailed) {
-    // Fallback to yt-dlp for TikTok download
-    logger.info({ jobId: job.jobId }, "TikTok download: using yt-dlp fallback");
-    startYtDlpDownload(job, url, title);
-  }
+  // Final fallback to yt-dlp
+  logger.info({ jobId: job.jobId }, "TikTok download: using yt-dlp fallback");
+  startYtDlpDownload(job, url, title);
 }
 
 // ─── YouTube/generic download via yt-dlp ─────────────────────────────────

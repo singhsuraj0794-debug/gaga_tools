@@ -1,0 +1,9 @@
+curl-cffi>=0.9,<1.0
+cloudscraper>=1.2,<2.0
+playwright>=1.48,<2.0
+gspread>=6.1,<7.0
+google-auth>=2.35,<3.0
+openpyxl>=3.1,<4.0
+pandas>=2.2,<3.0
+python-dotenv>=1.0,<2.0
+requests>=2.31,<3.0

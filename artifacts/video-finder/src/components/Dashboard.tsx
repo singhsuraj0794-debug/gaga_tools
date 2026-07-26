@@ -33,6 +33,7 @@ import {
   ChevronLeft,
   Database,
   ArrowLeft,
+  DollarSign,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "wouter";
@@ -311,13 +312,20 @@ export default function Dashboard() {
   const [activeReverseProductId, setActiveReverseProductId] = useState<string | null>(null);
   const [isReverseSearching, setIsReverseSearching] = useState(false);
 
+  // Bargain recording state
+  const [bargainJobId, setBargainJobId] = useState<string | null>(null);
+  const [isBargaining, setIsBargaining] = useState(false);
+  const [bargainProgress, setBargainProgress] = useState(0);
+  const [bargainStatus, setBargainStatus] = useState<string>("");
+  const [bargainError, setBargainError] = useState<string | null>(null);
+
   // Active (pending/downloading) jobs — shown immediately after starting
   const [activeJobs, setActiveJobs] = useState<DownloadJob[]>([]);
 
   // ── Queries & Mutations ────────────────────────────────────────────────
 
   const scrapeParams = { page, refresh: forceRefresh || undefined, search: productSearchQuery || undefined };
-  const { data: productsData, isLoading: isLoadingProducts } = useScrapeProducts(
+  const { data: productsData, isLoading: isLoadingProducts, isError: isProductsError, error: productsError } = useScrapeProducts(
     scrapeParams,
     {
       query: {
@@ -338,11 +346,34 @@ export default function Dashboard() {
     }
   }, [productsData, forceRefresh]);
 
+  const [isSyncing, setIsSyncing] = useState(false);
+
   // ── Handlers ──────────────────────────────────────────────────────────
 
   const handleScrape = () => {
     setPage(1);
     setForceRefresh(true);
+  };
+
+  const handleSyncProducts = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch("/api/products/sync-and-clean", { method: "POST", signal: AbortSignal.timeout(300000) });
+      const text = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Server returned non-JSON (status ${res.status}) — backend may be down`);
+      }
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      toast({ title: `Synced: ${data.imported ?? data.synced ?? 0} products from gajab.com` });
+      queryClient.invalidateQueries({ queryKey: getScrapeProductsQueryKey() });
+    } catch (err: any) {
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const handleProductToggle = (product: Product, checked: boolean) => {
@@ -436,6 +467,62 @@ export default function Dashboard() {
     }
   };
 
+  const handleBargain = async (product: Product) => {
+    if (!product.url) {
+      toast({ title: "Product has no URL", variant: "destructive" });
+      return;
+    }
+    setIsBargaining(true);
+    setBargainError(null);
+    setBargainProgress(0);
+    setBargainStatus("Starting recording...");
+    try {
+      const response = await fetch("/api/videos/bargain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productUrl: product.url, productName: product.name }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start bargain recording");
+      }
+      const jobId = data.jobId;
+      setBargainJobId(jobId);
+
+      // Connect to SSE progress stream
+      const es = new EventSource(`/api/videos/bargain/${jobId}/progress`);
+      es.onmessage = (event: MessageEvent) => {
+        try {
+          const progress = JSON.parse(event.data);
+          setBargainProgress(progress.progress ?? 0);
+          setBargainStatus(progress.status ?? "");
+          if (progress.status === "completed") {
+            es.close();
+            setIsBargaining(false);
+            setBargainProgress(100);
+            setBargainStatus("completed");
+            toast({ title: "Bargain recording ready!" });
+            queryClient.invalidateQueries({ queryKey: getListDownloadsQueryKey() });
+          } else if (progress.status === "failed") {
+            es.close();
+            setIsBargaining(false);
+            setBargainError(progress.error || "Recording failed");
+            toast({ title: "Bargain recording failed", description: progress.error, variant: "destructive" });
+          }
+        } catch {}
+      };
+      es.onerror = () => {
+        es.close();
+        setIsBargaining(false);
+        setBargainError("Lost connection to server");
+      };
+    } catch (err: any) {
+      setIsBargaining(false);
+      setBargainError(err.message || "Failed to start bargain recording");
+      toast({ title: "Bargain recording failed", description: err.message, variant: "destructive" });
+    }
+  };
+
   // Completed downloads from the server (excludes active jobs already in activeJobs)
   const completedDownloads: DownloadedFile[] = (downloadsData?.downloads ?? []).filter(
     (dl) => !activeJobs.some((aj) => aj.jobId === dl.jobId)
@@ -483,6 +570,18 @@ export default function Dashboard() {
                   </span>
                 )}
               </h2>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleSyncProducts}
+                disabled={isSyncing}
+                className="h-8 px-2 text-xs"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 mr-1.5 ${isSyncing ? "animate-spin" : ""}`}
+                />
+                {isSyncing ? "Syncing..." : "Sync"}
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -581,11 +680,23 @@ export default function Dashboard() {
                         </tr>
                       );
                     })
-                  : (
+                  : isProductsError ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                        <AlertCircle className="w-6 h-6 mx-auto mb-2 text-destructive" />
+                        <p className="mb-1">Backend API down</p>
+                        <p className="text-[11px]">Start the API server on port 8080</p>
+                        <Button size="sm" variant="outline" onClick={handleScrape} className="mt-2 h-7 text-xs px-3">
+                          <RefreshCw className="w-3 h-3 mr-1.5" /> Retry
+                        </Button>
+                      </td>
+                    </tr>
+                  ) : (
                     <tr>
                       <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
                         <AlertCircle className="w-6 h-6 mx-auto mb-2 opacity-20" />
                         <p>No products found</p>
+                        <p className="text-[11px] mt-1">Click Sync to import from gajab.com</p>
                         <Button size="sm" variant="outline" onClick={handleScrape} className="mt-2 h-7 text-xs px-3">
                           <RefreshCw className="w-3 h-3 mr-1.5" /> Retry
                         </Button>
@@ -665,6 +776,18 @@ export default function Dashboard() {
                       Find Visually Similar
                     </Button>
                   )}
+                  {selectedProducts.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleBargain(selectedProducts[0])}
+                      disabled={isBargaining || !selectedProducts[0].url}
+                      className="h-8 px-3 text-xs"
+                    >
+                      <DollarSign className={`w-3.5 h-3.5 mr-1.5 ${isBargaining ? "animate-pulse" : ""}`} />
+                      Bargain
+                    </Button>
+                  )}
                 </>
               ) : (
                 <Button
@@ -680,6 +803,53 @@ export default function Dashboard() {
               )}
             </div>
           </div>
+
+          {/* Bargain recording status banner */}
+          {(isBargaining || bargainStatus === "completed") && bargainJobId && (
+            <div className="px-3 py-2 border-b bg-card shrink-0">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-medium flex items-center gap-1.5">
+                  <DollarSign className="w-3 h-3" />
+                  {bargainStatus === "completed" ? "Bargain Recording Ready" : `Recording: ${bargainStatus}`}
+                </span>
+                {bargainStatus === "completed" && (
+                  <div className="flex gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="h-6 text-[10px] px-2"
+                      asChild
+                    >
+                      <a
+                        href={`/api/videos/bargain/${bargainJobId}/play`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <Play className="w-3 h-3 mr-1" /> Play
+                      </a>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 text-[10px] px-2"
+                      asChild
+                    >
+                      <a
+                        href={`/api/videos/bargain/${bargainJobId}/file`}
+                        download
+                      >
+                        <Download className="w-3 h-3 mr-1" /> MP4
+                      </a>
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {isBargaining && <Progress value={bargainProgress} className="h-1.5" />}
+              {bargainError && (
+                <p className="text-[10px] text-destructive mt-1">{bargainError}</p>
+              )}
+            </div>
+          )}
 
           {!activeReverseProductId && (
             <>

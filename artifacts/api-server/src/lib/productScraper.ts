@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { getSupabase } from "./supabase";
 import { logger } from "./logger";
 
 export interface Product {
@@ -8,6 +8,8 @@ export interface Product {
   imageUrl: string | null;
   url: string;
   category: string | null;
+  brand: string | null;
+  mrpPrice: string | null;
 }
 
 interface ScrapedPage {
@@ -26,6 +28,8 @@ function mapRow(row: any): Product {
     imageUrl: row.image_url ?? null,
     url: row.url,
     category: row.category ?? null,
+    brand: row.brand ?? null,
+    mrpPrice: row.mrp_price ?? null,
   };
 }
 
@@ -36,21 +40,31 @@ function normalizeText(text: string): string {
 function searchProducts(allProducts: Product[], searchQuery: string): Product[] {
   const normalizedQuery = normalizeText(searchQuery);
   if (!normalizedQuery) return allProducts;
-  
+
   return allProducts.filter(product => {
-    const normalizedName = normalizeText(product.name);
-    return normalizedName.includes(normalizedQuery);
+    if (normalizeText(product.name).includes(normalizedQuery)) return true;
+    if (normalizeText(product.id).includes(normalizedQuery)) return true;
+    if (product.url && normalizeText(product.url).includes(normalizedQuery)) return true;
+    return false;
   });
 }
 
+let cachedProducts: Product[] | null = null;
+
 export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
-  // Supabase REST caps at 1000 rows per request — paginate to get all
+  if (cachedProducts && !forceRefresh) return cachedProducts;
+
+  const client = getSupabase();
+  if (!client) {
+    throw new Error("Supabase not configured");
+  }
+
   const allRows: any[] = [];
   const PAGE = 1000;
   let from = 0;
 
   while (true) {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from("products")
       .select("*")
       .order("created_at", { ascending: false })
@@ -64,12 +78,13 @@ export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
     const rows = data ?? [];
     allRows.push(...rows);
 
-    if (rows.length < PAGE) break; // last page
+    if (rows.length < PAGE) break;
     from += PAGE;
   }
 
   const products = allRows.map(mapRow);
   logger.info({ count: products.length }, "Fetched products from Supabase");
+  cachedProducts = products;
   return products;
 }
 
@@ -79,11 +94,11 @@ export function getPaginatedProducts(
   searchQuery?: string,
 ): ScrapedPage {
   let filteredProducts = allProducts;
-  
+
   if (searchQuery) {
     filteredProducts = searchProducts(allProducts, searchQuery);
   }
-  
+
   const total = filteredProducts.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -95,7 +110,6 @@ export function getPaginatedProducts(
   };
 }
 
-// No-op warmUp kept so index.ts import doesn't break
 export async function warmUp(): Promise<void> {
   try {
     const products = await scrapeProducts();

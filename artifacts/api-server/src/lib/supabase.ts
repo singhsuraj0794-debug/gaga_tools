@@ -1,12 +1,12 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+let client: SupabaseClient | null = null;
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error(
-    "SUPABASE_URL and SUPABASE_KEY env vars must be set.",
-  );
+export function getSupabase(): SupabaseClient | null {
+  if (client) return client;
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_KEY;
+  if (!url || !key) return null;
+  client = createClient(url, key);
+  return client;
 }
-
-export const supabase = createClient(supabaseUrl, supabaseKey);

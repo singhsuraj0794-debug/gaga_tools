@@ -1,0 +1,21 @@
+# ── Core scraping deps ──────────────────────────
+curl-cffi>=0.9,<1.0
+cloudscraper>=1.2,<2.0
+playwright>=1.48,<2.0
+requests>=2.31,<3.0
+
+# ── Spreadsheet / data ──────────────────────────
+gspread>=6.1,<7.0
+google-auth>=2.35,<3.0
+openpyxl>=3.1,<4.0
+pandas>=2.2,<3.0
+python-dotenv>=1.0,<2.0
+
+# ── Image processing ────────────────────────────
+Pillow>=10.0,<12.0
+imagehash>=4.3,<5.0
+
+# ── ML / AI duplicate detection (DINOv2 + CLIP) ──
+# CPU-only torch to keep image size reasonable
+torch>=2.0,<3.0 --index-url https://download.pytorch.org/whl/cpu
+transformers>=4.40,<5.0

@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+downloads
+bargain_recordings
+*.md
+.env
+.env.*
+!.env.example

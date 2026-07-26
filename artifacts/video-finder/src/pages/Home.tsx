@@ -6,7 +6,9 @@ import {
   ShoppingBag,
   ShoppingCart,
   Package,
+  BadgePercent,
 } from "lucide-react";
+import ProductSync from "@/components/ProductSync";
 
 export default function Home() {
   const sections = [
@@ -23,6 +25,13 @@ export default function Home() {
       icon: <TrendingUp className="h-10 w-10 text-purple-600" />,
       path: "/trend-finder",
       color: "bg-purple-50 hover:bg-purple-100 border-purple-200",
+    },
+    {
+      title: "Price Mapper",
+      description: "Compare Gajab.com product prices across platforms",
+      icon: <BadgePercent className="h-10 w-10 text-indigo-600" />,
+      path: "/price-mapper",
+      color: "bg-indigo-50 hover:bg-indigo-100 border-indigo-200",
     },
     {
       title: "Meesho Scraper",
@@ -55,6 +64,10 @@ export default function Home() {
           <p className="text-lg text-slate-600 max-w-2xl mx-auto">
             Choose a tool below to get started with scraping products or finding videos
           </p>
+        </div>
+
+        <div className="mb-8">
+          <ProductSync />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">

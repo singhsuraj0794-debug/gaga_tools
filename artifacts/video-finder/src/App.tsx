@@ -5,8 +5,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
 import Dashboard from "@/components/Dashboard";
-import Scraper from "@/pages/Scraper";
 import FlipkartScraper from "@/pages/FlipkartScraper";
+import MeeshoScraper from "@/pages/MeeshoScraper";
+import AmazonScraper from "@/pages/AmazonScraper";
+import PriceMapper from "@/pages/PriceMapper";
 
 const queryClient = new QueryClient();
 
@@ -23,13 +25,10 @@ function Router() {
           </div>
         </div>
       </Route>
-      <Route path="/meesho-scraper">
-        <Scraper initialPlatform="meesho" />
-      </Route>
+      <Route path="/meesho-scraper" component={MeeshoScraper} />
+      <Route path="/price-mapper" component={PriceMapper} />
       <Route path="/flipkart-scraper" component={FlipkartScraper} />
-      <Route path="/amazon-scraper">
-        <Scraper initialPlatform="amazon" />
-      </Route>
+      <Route path="/amazon-scraper" component={AmazonScraper} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -39,7 +38,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+        <WouterRouter>
           <Router />
         </WouterRouter>
         <Toaster />

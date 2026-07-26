@@ -15,6 +15,7 @@
     "node": "20.x"
   },
   "devDependencies": {
+    "esbuild": "^0.25.12",
     "prettier": "^3.8.3",
     "tsx": "catalog:",
     "typescript": "~5.9.3"

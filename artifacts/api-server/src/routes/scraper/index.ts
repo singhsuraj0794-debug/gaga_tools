@@ -4,17 +4,47 @@ import axios from "axios";
 import ExcelJS from "exceljs";
 import * as xlsx from "xlsx";
 import multer from "multer";
-import { chromium, type Browser, type Page } from "playwright";
-import { load } from "cheerio";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   SearchEcommerceProductsBody,
-  SearchEcommerceProductsResponse,
   ExportProductsToExcelBody,
 } from "@workspace/api-zod";
 import type { EcommerceProduct } from "@workspace/api-zod";
 
+const execFileAsync = promisify(execFile);
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SCRAPER_SCRIPT = path.resolve(__dirname, "_scraper.py");
+
 const router = Router();
-const RAPID_API_KEY = "e4f0168123msh21c83ca8fa786cap141b25jsn6b69c0e25be1";
+const RAPID_API_KEY = process.env.RAPIDAPI_KEY || "e4f0168123msh21c83ca8fa786cap141b25jsn6b69c0e25be1";
+
+/** Find the column index that contains the most URL-like values. */
+function _findUrlColumn(rows: any[][]): number {
+  let bestIdx = -1;
+  let bestScore = 0;
+  const nonEmpty = rows.filter(r => r.length > 0);
+  if (nonEmpty.length === 0) return -1;
+  const minCols = Math.min(...nonEmpty.map(r => r.length));
+  if (minCols <= 0) return -1;
+  for (let col = 0; col < minCols; col++) {
+    let score = 0;
+    for (const row of rows) {
+      const val = String(row[col] ?? "");
+      if (val.includes("http") || val.includes("flipkart.com") || val.includes("meesho.com") || val.includes("amazon.")) {
+        score++;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = col;
+    }
+  }
+  return bestIdx;
+}
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
@@ -23,117 +53,123 @@ interface FlipkartDetailedProduct {
   id: string;
   title: string;
   description: string | null;
+  meta_description: string | null;
   imageUrl: string | null;
+  images: string[];
   hsn: string | null;
   gst: string | null;
   dimensions: string | null;
   weight: string | null;
+  specifications: Record<string, string> | null;
   variants: string | null;
   price: string | null;
   url: string;
-}
-
-let browser: Browser | null = null;
-
-async function getBrowser(): Promise<Browser> {
-  if (!browser) {
-    browser = await chromium.launch({
-      headless: true });
-  }
-  return browser;
+  status: string;
+  error: string | null;
 }
 
 async function scrapeFlipkartProduct(url: string): Promise<FlipkartDetailedProduct> {
+  const pid =
+    url.match(/pid=([^&]+)/)?.[1] || url.split("/").pop()?.split("?")[0] || url;
+
   try {
-    logger.info({ url }, "Starting to scrape Flipkart product");
-    
-    const browser = await getBrowser();
-    const page = await browser.newPage({
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    logger.info({ url }, "Scraping Flipkart via Python subprocess");
+
+    const env: Record<string, string> = { ...process.env as Record<string, string> };
+    if (process.env.SCRAPER_PROXY) env.SCRAPER_PROXY = process.env.SCRAPER_PROXY;
+    if (process.env.SCRAPING_SERVICE_URL) env.SCRAPING_SERVICE_URL = process.env.SCRAPING_SERVICE_URL;
+
+    const { stdout } = await execFileAsync("python3", [SCRAPER_SCRIPT, url], {
+      env,
+      timeout: 180000,
+      maxBuffer: 10 * 1024 * 1024,
     });
 
-    // Navigate to the product page
-    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
-    await page.waitForTimeout(2000); // Wait a bit for content to load
+    const result = JSON.parse(stdout);
 
-    const content = await page.content();
-    const $ = load(content);
-
-    // Extract product ID
-    let productId = "";
-    const pidMatch = url.match(/pid=([^&]+)/);
-    if (pidMatch) {
-      productId = pidMatch[1];
-    } else {
-      const parts = url.split("/");
-      productId = parts[parts.length - 1].split("?")[0];
+    if (result.status === "blocked") {
+      logger.warn({ url }, "Flipkart blocked — " + (result.error || "unknown"));
+      return {
+        id: pid,
+        title: "Blocked by Flipkart",
+        description: null,
+        meta_description: null,
+        imageUrl: null,
+        images: [],
+        hsn: null,
+        gst: null,
+        dimensions: null,
+        weight: null,
+        specifications: null,
+        variants: null,
+        price: null,
+        url,
+        status: "blocked",
+        error: result.error || "Request blocked by Flipkart's CDN",
+      };
     }
 
-    // Extract title
-    const title = $("h1 span.B_NuCI").first().text().trim() || "Untitled Product";
+    if (result.status === "failed") {
+      logger.error({ url }, "Scraper failed — " + (result.error || "unknown"));
+      return {
+        id: pid,
+        title: "Failed to scrape",
+        description: null,
+        meta_description: null,
+        imageUrl: null,
+        images: [],
+        hsn: null,
+        gst: null,
+        dimensions: null,
+        weight: null,
+        specifications: null,
+        variants: null,
+        price: null,
+        url,
+        status: "failed",
+        error: result.error || "Scraping failed",
+      };
+    }
 
-    // Extract price
-    const price = $("div._30jeq3._16Jk6d").first().text().trim() || null;
-
-    // Extract image URL
-    const imageUrl = $("img._396cs4._2amPTt._3qGpsk").first().attr("src") || $("div._2c7aJz img").first().attr("src") || null;
-
-    // Extract description
-    const description = $("div._1mXcCf").text().trim() || $("div._3mX-Xb").text().trim() || null;
-
-    // Extract specifications
-    let hsn: string | null = null;
-    let gst: string | null = null;
-    let dimensions: string | null = null;
-    let weight: string | null = null;
-    let variants: string | null = null;
-
-    // Try to find specifications from product details table
-    $("tr").each((_, row) => {
-      const cells = $(row).find("td");
-      if (cells.length >= 2) {
-        const key = $(cells[0]).text().trim().toLowerCase();
-        const value = $(cells[1]).text().trim();
-        
-        if (key.includes("hsn")) hsn = value;
-        if (key.includes("gst")) gst = value;
-        if (key.includes("dimension") || key.includes("size")) dimensions = value;
-        if (key.includes("weight")) weight = value;
-      }
-    });
-
-    await page.close();
-
-    logger.info({ productId, title }, "Successfully scraped product");
+    logger.info({ url, title: result.title }, "Scraped successfully");
 
     return {
-      id: productId,
-      title,
-      description,
-      imageUrl,
-      hsn,
-      gst,
-      dimensions,
-      weight,
-      variants,
-      price,
+      id: pid,
+      title: result.title || "Untitled Product",
+      description: result.description || null,
+      meta_description: result.meta_description || null,
+      imageUrl: (result.images || [])[0] || null,
+      images: result.images || [],
+      hsn: result.hsn || null,
+      gst: result.gst || null,
+      dimensions: result.dimensions || null,
+      weight: result.weight || null,
+      specifications: result.specifications || null,
+      variants: null,
+      price: result.price || null,
       url,
+      status: "success",
+      error: null,
     };
   } catch (err: any) {
-    logger.error({ err: err.message, url }, "Failed to scrape Flipkart product");
-    // Return minimal product with error info
+    logger.error({ err: err.message, url }, "Python scraper subprocess failed");
     return {
-      id: url,
-      title: "Failed to scrape product",
-      description: err.message,
+      id: pid,
+      title: "Scraper error",
+      description: null,
+      meta_description: null,
       imageUrl: null,
+      images: [],
       hsn: null,
       gst: null,
       dimensions: null,
       weight: null,
+      specifications: null,
       variants: null,
       price: null,
-      url: url,
+      url,
+      status: "failed",
+      error: `Scraper error: ${err.message}`,
     };
   }
 }
@@ -200,22 +236,6 @@ async function searchAmazon(query: string): Promise<EcommerceProduct[]> {
   return products;
 }
 
-async function searchMeesho(query: string): Promise<EcommerceProduct[]> {
-  const products: EcommerceProduct[] = [];
-  const warnings: string[] = [];
-
-  try {
-    // TODO: Add Meesho RapidAPI integration here once you have the endpoint
-    logger.warn("Meesho integration not fully implemented yet");
-    warnings.push("Meesho integration coming soon");
-  } catch (err: any) {
-    logger.error({ err: err.message }, "Meesho search failed");
-    warnings.push(`Meesho search failed: ${err.message}`);
-  }
-
-  return products;
-}
-
 router.post("/search", async (req: Request, res: Response): Promise<void> => {
   try {
     const parseResult = SearchEcommerceProductsBody.safeParse(req.body);
@@ -237,9 +257,6 @@ router.post("/search", async (req: Request, res: Response): Promise<void> => {
         break;
       case "amazon":
         products = await searchAmazon(query);
-        break;
-      case "meesho":
-        products = await searchMeesho(query);
         break;
       default:
         res.status(400).json({ error: "Unsupported platform" });
@@ -326,29 +343,45 @@ router.post("/flipkart/upload", upload.single("file"), async (req: Request, res:
     const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-    const data = xlsx.utils.sheet_to_json(worksheet);
 
-    // Extract URLs - assume first column contains URLs or look for "url" column
-    let urls: string[] = [];
-    if (data.length > 0) {
-      const firstRow = data[0] as any;
-      // Check if there's a column with "url" or "link" in name
-      const urlKeys = Object.keys(firstRow).filter(key => 
-        key.toLowerCase().includes("url") || key.toLowerCase().includes("link")
-      );
-      
-      if (urlKeys.length > 0) {
-        urls = data.map((row: any) => String(row[urlKeys[0]])).filter(Boolean);
-      } else {
-        // If no URL column, assume first column is URLs
-        urls = data.map((row: any) => String(Object.values(row)[0])).filter(Boolean);
+    // Parse as array of arrays to handle any column structure
+    const rows: any[][] = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+
+    // Collect all cell values that look like URLs
+    const allCells: string[] = [];
+    for (const row of rows) {
+      if (!Array.isArray(row)) continue;
+      for (const cell of row) {
+        if (cell != null && typeof cell === "string" && cell.trim()) {
+          allCells.push(cell.trim());
+        }
       }
     }
 
-    // Validate URLs
-    const validUrls = urls.filter(url => 
-      typeof url === "string" && (url.includes("flipkart.com") || url.includes("http"))
-    );
+    // Find column index that contains the most URL-like values
+    const columnIndex = _findUrlColumn(rows);
+    let urls: string[];
+    if (columnIndex >= 0) {
+      // Use the detected URL column (skip header row if it contains "url"/"link")
+      const startRow = typeof rows[0]?.[columnIndex] === "string" &&
+        (rows[0][columnIndex].toLowerCase().includes("url") ||
+         rows[0][columnIndex].toLowerCase().includes("link")) ? 1 : 0;
+      urls = rows.slice(startRow).map(r => String(r[columnIndex] ?? "")).filter(Boolean);
+    } else {
+      // Fallback: use all cells that look like URLs
+      urls = allCells;
+    }
+
+    // Validate and normalize URLs
+    const validUrls = urls
+      .filter(url => typeof url === "string" && (url.includes("flipkart.com") || url.includes("http")))
+      .map(url => {
+        if (!url.startsWith("http")) {
+          const cleaned = url.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/^flipkart\.com\//, "");
+          return `https://www.flipkart.com/${cleaned}`;
+        }
+        return url;
+      });
 
     res.json({
       totalUrls: urls.length,
@@ -372,16 +405,24 @@ router.post("/flipkart/scrape", async (req: Request, res: Response): Promise<voi
     const products: FlipkartDetailedProduct[] = [];
     const errors: string[] = [];
 
-    // Scrape each URL with concurrency limit (to avoid hitting rate limits)
-    const concurrency = 3;
+    // Scrape with concurrency limit of 2 (be gentle on Flipkart)
+    const concurrency = 2;
+    const BATCH_DELAY_MS = 2000; // 2s delay between batches to avoid Flipkart blocking
     for (let i = 0; i < urls.length; i += concurrency) {
       const batch = urls.slice(i, i + concurrency);
       const batchPromises = batch.map(url => scrapeFlipkartProduct(url));
       const batchResults = await Promise.all(batchPromises);
       products.push(...batchResults);
+      if (i + concurrency < urls.length) {
+        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+      }
     }
 
-    res.json({ products, errors });
+    res.json({
+      products,
+      errors,
+      total: urls.length,
+    });
   } catch (err: any) {
     logger.error({ err }, "Failed to scrape products");
     res.status(500).json({ error: "Failed to scrape products: " + err.message });
@@ -403,26 +444,35 @@ router.post("/flipkart/export", async (req: Request, res: Response): Promise<voi
       { header: "Product ID", key: "id", width: 30 },
       { header: "Title", key: "title", width: 50 },
       { header: "Description", key: "description", width: 80 },
+      { header: "Meta Description", key: "meta_description", width: 80 },
       { header: "Image URL", key: "imageUrl", width: 50 },
+      { header: "All Images", key: "allImages", width: 80 },
       { header: "HSN", key: "hsn", width: 20 },
       { header: "GST", key: "gst", width: 15 },
       { header: "Dimensions", key: "dimensions", width: 30 },
       { header: "Weight", key: "weight", width: 20 },
+      { header: "Specifications", key: "specifications", width: 100 },
       { header: "Variants", key: "variants", width: 100 },
       { header: "Price", key: "price", width: 20 },
       { header: "Product URL", key: "url", width: 80 },
     ];
 
     products.forEach((product: FlipkartDetailedProduct) => {
+      const specsStr = product.specifications
+        ? Object.entries(product.specifications).map(([k, v]) => `${k}: ${v}`).join("\n")
+        : "";
       worksheet.addRow({
         id: product.id,
         title: product.title,
         description: product.description,
+        meta_description: product.meta_description,
         imageUrl: product.imageUrl,
+        allImages: product.images?.join("\n") || "",
         hsn: product.hsn,
         gst: product.gst,
         dimensions: product.dimensions,
         weight: product.weight,
+        specifications: specsStr,
         variants: product.variants,
         price: product.price,
         url: product.url,
