@@ -157,15 +157,15 @@ EXTRACT_JS = r"""() => {
 def scrape(url: str, attempt: int = 1, max_attempts: int = 3) -> dict:
     ua = USER_AGENTS[(attempt - 1) % len(USER_AGENTS)]
 
-    result = _try_playwright(url, ua)
-    if result and result.get("status") == "success":
-        return result
-
     html = _try_direct(url, ua)
     if html:
         parsed = _parse_html(html, url)
         if parsed.get("status") == "success":
             return parsed
+
+    result = _try_playwright(url, ua)
+    if result and result.get("status") == "success":
+        return result
 
     if SCRAPING_SERVICE_URL:
         service_result = _via_scraping_service(url)

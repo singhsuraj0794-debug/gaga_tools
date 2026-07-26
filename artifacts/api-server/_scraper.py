@@ -31,10 +31,10 @@ USER_AGENTS = [
 def scrape(url: str, attempt: int = 1, max_attempts: int = 3) -> dict:
     ua = USER_AGENTS[(attempt - 1) % len(USER_AGENTS)]
 
-    html = _try_playwright(url, ua)
+    html = _try_direct(url, ua)
     if html:
         return _parse_html(html, url)
-    html = _try_direct(url, ua)
+    html = _try_playwright(url, ua)
     if html:
         return _parse_html(html, url)
     if SCRAPING_SERVICE_URL:
