@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Playwright browser runtime deps
     fonts-liberation libnss3 libnspr4 libatk-bridge2.0-0 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
-    libgbm1 libpango-1.0-0 libcairo2 libasound2t64 \
+    libgbm1 libpango-1.0-0 libcairo2 libasound2 \
     libx11-xcb1 libxcb-dri3-0 libxss1 libxtst6 libcups2 \
     && rm -rf /var/lib/apt/lists/*
 
