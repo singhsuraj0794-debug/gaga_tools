@@ -1,4 +1,4 @@
-import { getSupabase } from "./supabase";
+import axios from "axios";
 import { logger } from "./logger";
 
 export interface Product {
@@ -51,11 +51,22 @@ function searchProducts(allProducts: Product[], searchQuery: string): Product[] 
 
 let cachedProducts: Product[] | null = null;
 
+function getSupabaseHeaders(): Record<string, string> | null {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_KEY;
+  if (!url || !key) return null;
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+  };
+}
+
 export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
   if (cachedProducts && !forceRefresh) return cachedProducts;
 
-  const client = getSupabase();
-  if (!client) {
+  const supaUrl = process.env.SUPABASE_URL;
+  const headers = getSupabaseHeaders();
+  if (!supaUrl || !headers) {
     throw new Error("Supabase not configured");
   }
 
@@ -64,16 +75,10 @@ export async function scrapeProducts(forceRefresh = false): Promise<Product[]> {
   let from = 0;
 
   while (true) {
-    const { data, error } = await client
-      .from("products")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .range(from, from + PAGE - 1);
-
-    if (error) {
-      logger.error({ err: error.message }, "Failed to fetch products from Supabase");
-      throw new Error(error.message);
-    }
+    const { data } = await axios.get(
+      `${supaUrl}/rest/v1/products?select=*&order=created_at.desc&limit=${PAGE}&offset=${from}`,
+      { headers },
+    );
 
     const rows = data ?? [];
     allRows.push(...rows);
@@ -100,14 +105,11 @@ export function getPaginatedProducts(
   }
 
   const total = filteredProducts.length;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const safePage = Math.min(Math.max(1, page), totalPages);
-  const start = (safePage - 1) * PAGE_SIZE;
-  return {
-    products: filteredProducts.slice(start, start + PAGE_SIZE),
-    total,
-    totalPages,
-  };
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const start = (Math.min(page, totalPages || 1) - 1) * PAGE_SIZE;
+  const products = filteredProducts.slice(start, start + PAGE_SIZE);
+
+  return { products, total, totalPages };
 }
 
 export async function warmUp(): Promise<void> {
