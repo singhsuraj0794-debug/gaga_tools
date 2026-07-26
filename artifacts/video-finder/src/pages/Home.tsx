@@ -66,10 +66,6 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="mb-8">
-          <ProductSync />
-        </div>
-
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {sections.map((section) => (
             <Link key={section.title} href={section.path}>
@@ -90,6 +86,10 @@ export default function Home() {
               </Card>
             </Link>
           ))}
+        </div>
+
+        <div className="mt-12">
+          <ProductSync />
         </div>
       </div>
     </div>

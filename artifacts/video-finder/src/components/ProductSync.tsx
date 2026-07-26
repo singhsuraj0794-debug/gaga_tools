@@ -252,496 +252,309 @@ export default function ProductSync() {
 
   return (
     <div className="space-y-4">
-      <Card className="border-indigo-200 bg-indigo-50/50">
+      <Card className="border-slate-200 bg-white/80">
         <CardHeader
-          className="cursor-pointer select-none"
+          className="cursor-pointer select-none pb-3"
           onClick={() => setExpanded(!expanded)}
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               {expanded ? (
-                <ChevronDown className="h-5 w-5 text-indigo-600" />
+                <ChevronDown className="h-5 w-5 text-slate-600" />
               ) : (
-                <ChevronRight className="h-5 w-5 text-indigo-600" />
+                <ChevronRight className="h-5 w-5 text-slate-600" />
               )}
-              <Database className="h-6 w-6 text-indigo-600" />
+              <Database className="h-6 w-6 text-slate-600" />
               <div>
-                <CardTitle className="text-lg">Product Sync Manager</CardTitle>
+                <CardTitle className="text-lg">Database Management</CardTitle>
                 <p className="text-sm text-slate-500 font-normal">
                   {loading
                     ? "Loading..."
                     : supabaseCount !== null
-                    ? `${supabaseCount} products in Supabase`
+                    ? `${supabaseCount} products · Sync, find duplicates & detect image matches`
                     : "Unable to load status"}
                 </p>
               </div>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={(e) => {
-                e.stopPropagation();
-                fetchStatus();
-              }}
-              disabled={loading}
-              className="h-8 text-xs"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
           </div>
         </CardHeader>
 
         {expanded && (
-          <CardContent className="space-y-4 pt-0">
-            <div className="bg-white rounded-lg border p-4">
-              <p className="text-sm text-slate-600 mb-3">
-                One-click sync: fetches live Gajab sitemaps, then:
+          <CardContent className="space-y-6 pt-2">
+
+            {/* ── Product Sync ── */}
+            <div className="border rounded-lg p-4 bg-indigo-50/30">
+              <div className="flex items-center gap-2 mb-3">
+                <RefreshCw className="h-5 w-5 text-indigo-600" />
+                <h3 className="text-sm font-semibold text-indigo-800">Product Sync</h3>
+              </div>
+              <p className="text-xs text-slate-600 mb-3">
+                One-click sync: fetches live Gajab sitemaps — imports new products, removes inactive, enriches data.
               </p>
-              <ul className="text-xs text-slate-500 space-y-1 mb-4 list-disc pl-4">
-                <li>Imports new products from Gajab</li>
-                <li>Deletes products no longer on Gajab</li>
-                <li>Scrapes prices, brands &amp; categories for all products</li>
-              </ul>
               <Button
-                size="default"
+                size="sm"
                 onClick={handleSync}
                 disabled={syncing}
-                className="w-full"
+                className="bg-indigo-600 hover:bg-indigo-700"
               >
-                <RefreshCw className={`w-4 h-4 mr-2 ${syncing ? "animate-spin" : ""}`} />
-                {syncing ? "Syncing & Cleaning..." : "Sync & Clean"}
+                <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${syncing ? "animate-spin" : ""}`} />
+                {syncing ? "Syncing..." : "Sync & Clean"}
               </Button>
+
+              {syncing && (
+                <div className="mt-3 text-xs text-slate-500">
+                  <RefreshCw className="w-4 h-4 inline mr-1 animate-spin" />
+                  Syncing Gajab products, scraping prices & categories...
+                </div>
+              )}
+
+              {result && (
+                <div className="mt-3 bg-white rounded border p-3 text-xs space-y-2">
+                  <p className="font-semibold text-green-600 flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Sync Complete
+                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div><span className="font-bold text-indigo-600">{result.imported}</span> imported</div>
+                    <div><span className="font-bold text-violet-600">{result.enriched}</span> enriched</div>
+                    <div><span className="font-bold text-amber-600">{result.deleted}</span> removed</div>
+                  </div>
+                </div>
+              )}
+
+              {error && (
+                <div className="mt-3 bg-red-50 border border-red-200 rounded p-2 text-xs text-red-600 flex items-center gap-1">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {error}
+                </div>
+              )}
             </div>
 
-            {syncing && (
-              <div className="bg-white rounded-lg border p-4 text-center">
-                <RefreshCw className="w-6 h-6 mx-auto mb-2 text-indigo-500 animate-spin" />
-                <p className="text-sm text-slate-600">Syncing Gajab products, scraping prices &amp; categories...</p>
-                <p className="text-xs text-slate-400 mt-1">This may take 2-3 minutes</p>
+            {/* ── Duplicate Detection ── */}
+            <div className="border rounded-lg p-4 bg-rose-50/30">
+              <div className="flex items-center gap-2 mb-3">
+                <Copy className="h-5 w-5 text-rose-600" />
+                <h3 className="text-sm font-semibold text-rose-800">Duplicate Detection</h3>
+                <span className="text-[10px] text-slate-400 ml-auto">
+                  {verifyResult
+                    ? `${verifyResult.verified_duplicates} verified`
+                    : dupResult
+                    ? `${dupResult.total_duplicate_products} potential`
+                    : ""}
+                </span>
               </div>
-            )}
 
-            {result && (
-              <div className="bg-white rounded-lg border p-4 space-y-3">
-                <h3 className="text-sm font-semibold flex items-center gap-2 text-green-600">
-                  <CheckCircle2 className="h-4 w-4" />
-                  Sync Complete
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-                  <div className="text-center p-2 bg-indigo-50 rounded">
-                    <p className="text-lg font-bold text-indigo-600">{result.gajab_active}</p>
-                    <p className="text-[10px] text-slate-500">Active on Gajab</p>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={findDuplicates}
+                  disabled={dupLoading || verifying}
+                  className="bg-rose-600 hover:bg-rose-700 h-7 text-xs"
+                >
+                  {dupLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Copy className="w-3 h-3 mr-1" />}
+                  {dupLoading ? "Scanning..." : "Find Duplicates"}
+                </Button>
+                {dupResult && dupResult.total_groups > 0 && !verifyResult && (
+                  <Button
+                    size="sm"
+                    variant="default"
+                    onClick={verifyDuplicates}
+                    disabled={verifying}
+                    className="bg-purple-600 hover:bg-purple-700 h-7 text-xs"
+                  >
+                    {verifying ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Brain className="w-3 h-3 mr-1" />}
+                    {verifying ? "Verifying..." : "Verify with AI"}
+                  </Button>
+                )}
+                {dupResult && dupResult.total_groups > 0 && (
+                  <Button size="sm" variant="outline" onClick={exportDuplicates} className="h-7 text-xs border-rose-300">
+                    <Download className="w-3 h-3 mr-1" /> CSV
+                  </Button>
+                )}
+                {verifyResult && verifyResult.verified_duplicates > 0 && !showConfirm && (
+                  <Button size="sm" variant="destructive" onClick={() => setShowConfirm(true)} className="h-7 text-xs">
+                    <Trash2 className="w-3 h-3 mr-1" />
+                    Delete {verifyResult.verified_duplicates}
+                  </Button>
+                )}
+              </div>
+
+              {showConfirm && (
+                <div className="bg-white rounded border border-red-300 p-3 text-xs space-y-2 mb-3">
+                  <div className="flex items-start gap-1.5">
+                    <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-red-700">Confirm deletion of {verifyResult?.verified_duplicates} duplicates?</p>
+                      <p className="text-slate-500 mt-0.5">This cannot be undone.</p>
+                    </div>
                   </div>
-                  <div className="text-center p-2 bg-blue-50 rounded">
-                    <p className="text-lg font-bold text-blue-600">{result.supabase_before}</p>
-                    <p className="text-[10px] text-slate-500">Before</p>
-                  </div>
-                  <div className="text-center p-2 bg-emerald-50 rounded">
-                    <p className="text-lg font-bold text-emerald-600">{result.imported}</p>
-                    <p className="text-[10px] text-slate-500">Imported</p>
-                  </div>
-                  <div className="text-center p-2 bg-violet-50 rounded">
-                    <p className="text-lg font-bold text-violet-600">{result.enriched}</p>
-                    <p className="text-[10px] text-slate-500">Enriched</p>
-                  </div>
-                  <div className="text-center p-2 bg-amber-50 rounded">
-                    <p className="text-lg font-bold text-amber-600">{result.deleted}</p>
-                    <p className="text-[10px] text-slate-500">Removed</p>
-                  </div>
-                  <div className="text-center p-2 bg-green-50 rounded">
-                    <p className="text-lg font-bold text-green-600">{result.supabase_after}</p>
-                    <p className="text-[10px] text-slate-500">After</p>
+                  <div className="flex gap-2 justify-end">
+                    <Button size="sm" variant="outline" onClick={() => setShowConfirm(false)} disabled={deleting}>Cancel</Button>
+                    <Button size="sm" variant="destructive" onClick={deleteVerifiedDuplicates} disabled={deleting}>
+                      {deleting ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
+                      {deleting ? "Deleting..." : "Delete"}
+                    </Button>
                   </div>
                 </div>
-                <p className="text-xs text-slate-500 pt-2 border-t">
-                  {result.message}
+              )}
+
+              {deleteDone && (
+                <div className="bg-green-50 border border-green-200 rounded p-2 text-xs text-green-700 flex items-center gap-1 mb-3">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Verified duplicates deleted
+                </div>
+              )}
+
+              {(dupLoading || verifying) && (
+                <div className="text-xs text-slate-500 mb-3">
+                  <Loader2 className="w-3.5 h-3.5 inline mr-1 animate-spin" />
+                  {dupLoading ? "Scanning products..." : "Running DINOv2 & CLIP verification..."}
+                </div>
+              )}
+
+              {dupError && (
+                <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-600 flex items-center gap-1 mb-3">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {dupError}
+                </div>
+              )}
+
+              {displayGroups.length > 0 && (
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                  {displayGroups.map((group, gi) => (
+                    <div key={gi} className="bg-white rounded border p-2 text-xs">
+                      <p className="font-medium text-slate-800 truncate">{group.name}</p>
+                      <p className="text-[10px] text-slate-500 mb-1">{group.brand} · {group.price} · {group.products.length}x</p>
+                      <div className="flex flex-wrap gap-1">
+                        {group.products.map((p) => (
+                          <span key={p.id} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] ${p.verified_duplicate ? "bg-red-50 text-red-700" : "bg-slate-50 text-slate-600"}`}>
+                            <span className="font-mono truncate max-w-[80px]">{p.id}</span>
+                            {p.dinov2_sim != null && <span className="text-green-600">D:{p.dinov2_sim.toFixed(2)}</span>}
+                            {p.clip_text_sim != null && <span className="text-blue-600">C:{p.clip_text_sim.toFixed(2)}</span>}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!dupLoading && !verifying && !dupResult && !dupError && !deleteDone && !verifyResult && (
+                <p className="text-xs text-slate-400 text-center py-2">Click "Find Duplicates" to scan for products with the same name, price & seller</p>
+              )}
+              {!dupLoading && !verifying && displayGroups.length === 0 && dupResult && (
+                <p className="text-xs text-green-600 text-center py-2 flex items-center justify-center gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> No duplicate products found
                 </p>
-              </div>
-            )}
+              )}
+            </div>
 
-            {error && (
-              <div className="bg-white rounded-lg border border-red-200 p-4">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-medium text-red-600">Sync Failed</p>
-                    <p className="text-xs text-red-500 mt-1">{error}</p>
+            {/* ── Image Duplicate Detection ── */}
+            <div className="border rounded-lg p-4 bg-amber-50/30">
+              <div className="flex items-center gap-2 mb-3">
+                <Image className="h-5 w-5 text-amber-600" />
+                <h3 className="text-sm font-semibold text-amber-800">Image Duplicate Detection</h3>
+                <span className="text-[10px] text-slate-400 ml-auto">
+                  {imgDupResult ? `${imgDupResult.total_duplicate_products} found` : ""}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={findImageDuplicates}
+                  disabled={imgDupLoading || imgDeleting}
+                  className="bg-amber-600 hover:bg-amber-700 h-7 text-xs"
+                >
+                  {imgDupLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Image className="w-3 h-3 mr-1" />}
+                  {imgDupLoading ? "Analyzing..." : "Find by Image"}
+                </Button>
+                {imgDupResult && imgDupResult.total_groups > 0 && !imgDeleteDone && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setImgShowConfirm(true)}
+                    disabled={imgDeleting}
+                    className="h-7 text-xs"
+                  >
+                    <Trash2 className="w-3 h-3 mr-1" />
+                    Delete {imgDupResult.total_duplicate_products}
+                  </Button>
+                )}
+              </div>
+
+              {imgShowConfirm && (
+                <div className="bg-white rounded border border-red-300 p-3 text-xs space-y-2 mb-3">
+                  <div className="flex items-start gap-1.5">
+                    <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-red-700">Confirm deletion of {imgDupResult?.total_duplicate_products} image duplicates?</p>
+                      <p className="text-slate-500 mt-0.5">This cannot be undone.</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <Button size="sm" variant="outline" onClick={() => setImgShowConfirm(false)} disabled={imgDeleting}>Cancel</Button>
+                    <Button size="sm" variant="destructive" onClick={deleteImageDuplicates} disabled={imgDeleting}>
+                      {imgDeleting ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
+                      {imgDeleting ? "Deleting..." : "Delete"}
+                    </Button>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {!syncing && !result && !error && (
-              <div className="text-center py-4 text-xs text-slate-400">
-                Click "Sync & Clean" to compare with live Gajab products
-              </div>
-            )}
+              {imgDeleteDone && (
+                <div className="bg-green-50 border border-green-200 rounded p-2 text-xs text-green-700 flex items-center gap-1 mb-3">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Image duplicates deleted
+                </div>
+              )}
+
+              {imgDupLoading && (
+                <div className="text-xs text-slate-500 mb-3">
+                  <Loader2 className="w-3.5 h-3.5 inline mr-1 animate-spin" />
+                  Running DINOv2 vision AI on all product images...
+                </div>
+              )}
+
+              {imgDupError && (
+                <div className="bg-red-50 border border-red-200 rounded p-2 text-xs text-red-600 flex items-center gap-1 mb-3">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" /> {imgDupError}
+                </div>
+              )}
+
+              {imgDupResult && imgDupResult.groups.length > 0 && (
+                <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                  {imgDupResult.groups.map((group, gi) => (
+                    <div key={gi} className="bg-white rounded border p-2 text-xs">
+                      <p className="font-medium text-slate-800 truncate">{group.name}</p>
+                      <p className="text-[10px] text-slate-500 mb-1">{group.brand} · {group.price} · {group.count}x visually similar</p>
+                      <div className="flex gap-1.5 overflow-x-auto pb-1">
+                        {group.products.map((p) => (
+                          <div key={p.id} className="flex-shrink-0 w-16 text-center">
+                            {p.image_url ? (
+                              <img src={p.image_url} alt="" className="w-full h-14 object-cover rounded border" />
+                            ) : (
+                              <div className="w-full h-14 bg-slate-100 rounded flex items-center justify-center text-[10px] text-slate-400">—</div>
+                            )}
+                            <p className="text-[9px] font-mono text-slate-400 truncate">{p.id}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!imgDupLoading && imgDupResult && imgDupResult.total_groups === 0 && !imgDeleteDone && (
+                <p className="text-xs text-green-600 text-center py-2 flex items-center justify-center gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> No image duplicates found
+                </p>
+              )}
+
+              {!imgDupLoading && !imgDupResult && !imgDupError && !imgDeleteDone && (
+                <p className="text-xs text-slate-400 text-center py-2">Click "Find by Image" to scan for visual duplicates using DINOv2 AI</p>
+              )}
+            </div>
+
           </CardContent>
         )}
-      </Card>
-
-      <Card className="border-rose-200 bg-rose-50/50">
-        <CardHeader>
-          <div className="flex items-center gap-3">
-            <Copy className="h-6 w-6 text-rose-600" />
-            <div>
-              <CardTitle className="text-lg">Duplicate Detection</CardTitle>
-              <p className="text-sm text-slate-500 font-normal">
-                {verifyResult
-                  ? `${verifyResult.verified_duplicates} AI-verified duplicates in ${verifyResult.verified_groups.length} groups`
-                  : dupResult
-                  ? `${dupResult.total_groups} groups, ${dupResult.total_duplicate_products} potential duplicates`
-                  : "Find products with same name, price & seller"}
-              </p>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4 pt-0">
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="default"
-              onClick={findDuplicates}
-              disabled={dupLoading || verifying}
-              className="bg-rose-600 hover:bg-rose-700"
-            >
-              {dupLoading ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Copy className="w-4 h-4 mr-2" />
-              )}
-              {dupLoading ? "Scanning..." : "Find Duplicates"}
-            </Button>
-            {dupResult && dupResult.total_groups > 0 && !verifyResult && (
-              <Button
-                variant="default"
-                onClick={verifyDuplicates}
-                disabled={verifying}
-                className="bg-purple-600 hover:bg-purple-700"
-              >
-                {verifying ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Brain className="w-4 h-4 mr-2" />
-                )}
-                {verifying ? "Verifying..." : "Verify with AI"}
-              </Button>
-            )}
-            {dupResult && dupResult.total_groups > 0 && (
-              <Button
-                variant="outline"
-                onClick={exportDuplicates}
-                className="border-rose-300"
-              >
-                <Download className="w-4 h-4 mr-2" />
-                Export CSV
-              </Button>
-            )}
-            {verifyResult && verifyResult.verified_duplicates > 0 && !showConfirm && (
-              <Button
-                variant="destructive"
-                onClick={() => setShowConfirm(true)}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete {verifyResult.verified_duplicates} Verified
-              </Button>
-            )}
-          </div>
-
-          {showConfirm && (
-            <div className="bg-white rounded-lg border border-red-300 p-4 space-y-3">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-red-700">Confirm Deletion</p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    This will delete {verifyResult?.verified_duplicates} AI-verified duplicates,
-                    keeping one copy of each. This action cannot be undone.
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-2 justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowConfirm(false)}
-                  disabled={deleting}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={deleteVerifiedDuplicates}
-                  disabled={deleting}
-                >
-                  {deleting ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-4 h-4 mr-1" />
-                  )}
-                  {deleting ? "Deleting..." : `Delete ${verifyResult?.verified_duplicates} Duplicates`}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {deleteDone && (
-            <div className="bg-white rounded-lg border border-green-200 p-3 flex items-center gap-2 text-sm text-green-700">
-              <CheckCircle2 className="h-4 w-4" />
-              Verified duplicates deleted successfully
-            </div>
-          )}
-
-          {(dupLoading || verifying) && (
-            <div className="bg-white rounded-lg border p-4 text-center">
-              <Loader2 className="w-6 h-6 mx-auto mb-2 text-rose-500 animate-spin" />
-              <p className="text-sm text-slate-600">
-                {dupLoading ? "Scanning all products for duplicates..." : "Running DINOv2 & CLIP AI verification..."}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                {dupLoading ? "Comparing names, prices & sellers" : "Checking images with DINOv2 and titles with CLIP"}
-              </p>
-            </div>
-          )}
-
-          {dupError && (
-            <div className="bg-white rounded-lg border border-red-200 p-4">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-red-600">Error</p>
-                  <p className="text-xs text-red-500 mt-1">{dupError}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!dupLoading && !verifying && displayGroups.length === 0 && (
-            <div className="bg-white rounded-lg border p-4 text-center text-sm text-slate-500">
-              <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-green-500" />
-              No duplicate products found
-            </div>
-          )}
-
-          {displayGroups.length > 0 && (
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {displayGroups.map((group, gi) => (
-                <div key={gi} className="bg-white rounded-lg border p-3">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1 min-w-0 mr-2">
-                      <p className="text-sm font-medium text-slate-800 truncate">{group.name}</p>
-                      <p className="text-xs text-slate-500">
-                        {group.brand} &middot; {group.price} &middot; {group.products.length}x copies
-                      </p>
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    {group.products.map((p) => (
-                      <div
-                        key={p.id}
-                        className={`flex items-center gap-2 text-xs rounded px-2 py-1 ${
-                          p.verified_duplicate
-                            ? "bg-red-50 text-red-700"
-                            : "bg-slate-50 text-slate-600"
-                        }`}
-                      >
-                        <span className="font-mono w-28 truncate shrink-0">{p.id}</span>
-                        {p.image_url && (
-                          <img src={p.image_url} alt="" className="w-6 h-6 rounded object-cover shrink-0" />
-                        )}
-                        <span className="truncate flex-1">{p.category || "—"}</span>
-                        {p.dinov2_sim !== undefined && p.dinov2_sim !== null && (
-                          <span className={`shrink-0 font-mono ${p.dinov2_sim >= 0.8 ? "text-green-600" : "text-slate-400"}`}>
-                            D:{p.dinov2_sim.toFixed(2)}
-                          </span>
-                        )}
-                        {p.clip_text_sim !== undefined && p.clip_text_sim !== null && (
-                          <span className={`shrink-0 font-mono ${p.clip_text_sim >= 0.9 ? "text-green-600" : "text-slate-400"}`}>
-                            C:{p.clip_text_sim.toFixed(2)}
-                          </span>
-                        )}
-                        {p.verified_duplicate && (
-                          <Trash2 className="w-3 h-3 text-red-500 shrink-0" />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {!dupLoading && !verifying && !dupResult && !dupError && !deleteDone && (
-            <div className="text-center py-4 text-xs text-slate-400">
-              Click "Find Duplicates" to scan for products with the same name, price &amp; seller
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="border-amber-200 bg-amber-50/50">
-        <CardHeader>
-          <div className="flex items-center gap-3">
-            <Image className="h-6 w-6 text-amber-600" />
-            <div>
-              <CardTitle className="text-lg">Image Duplicate Detection</CardTitle>
-              <p className="text-sm text-slate-500 font-normal">
-                {imgDupResult
-                  ? `${imgDupResult.total_duplicate_products} image duplicates in ${imgDupResult.total_groups} groups`
-                  : "Find products that look the same using DINOv2 vision AI"}
-              </p>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4 pt-0">
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="default"
-              onClick={findImageDuplicates}
-              disabled={imgDupLoading || imgDeleting}
-              className="bg-amber-600 hover:bg-amber-700"
-            >
-              {imgDupLoading ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Image className="w-4 h-4 mr-2" />
-              )}
-              {imgDupLoading ? "Analyzing Images..." : "Find by Image"}
-            </Button>
-            {imgDupResult && imgDupResult.total_groups > 0 && !imgDeleteDone && (
-              <Button
-                variant="destructive"
-                onClick={() => setImgShowConfirm(true)}
-                disabled={imgDeleting}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete {imgDupResult.total_duplicate_products} Duplicates
-              </Button>
-            )}
-          </div>
-
-          {imgShowConfirm && (
-            <div className="bg-white rounded-lg border border-red-300 p-4 space-y-3">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-red-700">Confirm Deletion</p>
-                  <p className="text-xs text-slate-600 mt-1">
-                    This will delete {imgDupResult?.total_duplicate_products} image-identified duplicates,
-                    keeping one copy of each. This action cannot be undone.
-                  </p>
-                </div>
-              </div>
-              <div className="flex gap-2 justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setImgShowConfirm(false)}
-                  disabled={imgDeleting}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={deleteImageDuplicates}
-                  disabled={imgDeleting}
-                >
-                  {imgDeleting ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-4 h-4 mr-1" />
-                  )}
-                  {imgDeleting ? "Deleting..." : `Delete ${imgDupResult?.total_duplicate_products} Duplicates`}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {imgDeleteDone && (
-            <div className="bg-white rounded-lg border border-green-200 p-3 flex items-center gap-2 text-sm text-green-700">
-              <CheckCircle2 className="h-4 w-4" />
-              Image duplicates deleted successfully
-            </div>
-          )}
-
-          {imgDupLoading && (
-            <div className="bg-white rounded-lg border p-4 text-center">
-              <Loader2 className="w-6 h-6 mx-auto mb-2 text-amber-500 animate-spin" />
-              <p className="text-sm text-slate-600">
-                Running DINOv2 vision AI on all product images...
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Computing embeddings and comparing every pair. This may take several minutes.
-              </p>
-            </div>
-          )}
-
-          {imgDupError && (
-            <div className="bg-white rounded-lg border border-red-200 p-4">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-red-600">Error</p>
-                  <p className="text-xs text-red-500 mt-1">{imgDupError}</p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!imgDupLoading && imgDupResult && imgDupResult.total_groups === 0 && !imgDeleteDone && (
-            <div className="bg-white rounded-lg border p-4 text-center text-sm text-slate-500">
-              <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-green-500" />
-              No image duplicates found
-            </div>
-          )}
-
-          {imgDupResult && imgDupResult.groups.length > 0 && (
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {imgDupResult.groups.map((group, gi) => (
-                <div key={gi} className="bg-white rounded-lg border p-3">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1 min-w-0 mr-2">
-                      <p className="text-sm font-medium text-slate-800 truncate">{group.name}</p>
-                      <p className="text-xs text-slate-500">
-                        {group.brand} &middot; {group.price} &middot; {group.count}x visually similar
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 overflow-x-auto pb-1">
-                    {group.products.map((p) => (
-                      <div
-                        key={p.id}
-                        className="flex-shrink-0 w-24 bg-slate-50 rounded border p-1.5 text-center"
-                      >
-                        {p.image_url ? (
-                          <img
-                            src={p.image_url}
-                            alt=""
-                            className="w-full h-20 object-cover rounded mb-1"
-                          />
-                        ) : (
-                          <div className="w-full h-20 bg-slate-200 rounded mb-1 flex items-center justify-center text-xs text-slate-400">
-                            No img
-                          </div>
-                        )}
-                        <p className="text-[10px] font-mono text-slate-500 truncate">{p.id}</p>
-                        <p className="text-[10px] text-slate-400 truncate">{p.category || "—"}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {!imgDupLoading && !imgDupResult && !imgDupError && !imgDeleteDone && (
-            <div className="text-center py-4 text-xs text-slate-400">
-              Click "Find by Image" to scan all products for visual duplicates using DINOv2 AI
-            </div>
-          )}
-        </CardContent>
       </Card>
     </div>
   );
