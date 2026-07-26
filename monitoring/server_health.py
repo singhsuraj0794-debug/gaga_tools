@@ -4,9 +4,10 @@ import urllib.request
 import json
 
 HEALTH_ENDPOINTS = {
-    "api_server": "https://product-video-scraper-api.onrender.com/api/healthz",
-    "gajab_home": "https://gajab.com/",
-    "gajab_gateway": "https://gatewayservice.gajab.com/customer/api/customer/mobile-send-otp-new",
+    "gajab.com (main)": "https://gajab.com/",
+    "gajab.com (category)": "https://gajab.com/product-list/all",
+    "gateway.gajab.com": "https://gatewayservice.gajab.com/customer/api/customer/mobile-send-otp-new",
+    "resize.gajab.com (CDN)": "https://resize.gajab.com/",
 }
 
 
@@ -31,10 +32,7 @@ def check_health(threshold_ms: int = 5000) -> list[dict]:
         except urllib.error.HTTPError as e:
             duration = int((time.time() - t0) * 1000)
             status_code = e.code
-            if e.code >= 500:
-                status = "fail"
-            else:
-                status = "degraded"
+            status = "degraded" if e.code < 500 else "fail"
             error = f"HTTP {e.code}"
         except Exception as e:
             duration = int((time.time() - t0) * 1000)
