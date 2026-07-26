@@ -5,10 +5,13 @@
 End-user experience monitoring for gajab.com.
 
 ### Structure
-- `run_monitor.py` — Entrypoint: runs Lighthouse audits + happy-flow check, writes to Supabase, alerts Slack
+- `run_monitor.py` — Entrypoint: runs all checks, writes to Supabase, alerts Slack
 - `config.py` — All thresholds, URLs, time budgets in one place
+- `server_health.py` — Pings API server, gateway, and gajab.com for uptime + latency
+- `api_monitor.py` — Tests key API endpoints (healthz, products/status, price-mappings)
 - `lighthouse_audit.py` — Lighthouse CLI audits + PageSpeed Insights API
 - `happy_flow.py` — Playwright journey (home → category → PDP → bargain flow)
+- `feature_checks.py` — Element-level UI checks (buttons, banners, search bar, product grid, filters, PDP elements)
 - `supabase_client.py` — Writes to Supabase `monitoring_runs` table
 - `slack_alert.py` — Posts failures/degradations to Slack webhook
 - `dashboard/index.html` — Standalone dashboard
