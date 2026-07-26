@@ -1,10 +1,10 @@
 [build]
-  command = "pnpm install --ignore-scripts && pnpm run build:frontend"
+  command = "corepack enable && pnpm install && pnpm run build:frontend"
   publish = "artifacts/video-finder/dist"
 
 [[redirects]]
   from = "/api/*"
-  to = "https://YOUR_RENDER_BACKEND.onrender.com/api/:splat"
+  to = "https://product-video-scraper-api.onrender.com/api/:splat"
   status = 200
   force = true
 
