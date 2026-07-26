@@ -21,12 +21,15 @@ PORT = 9000
 sys.path.insert(0, ".")
 import _scraper as flipkart_scraper
 import _amazon_scraper as amazon_scraper
+import _platform_searcher
 
 
 class ScraperHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/scrape":
             self._handle_scrape()
+        elif self.path == "/search":
+            self._handle_search()
         else:
             self.send_response(404)
             self.end_headers()
@@ -50,6 +53,27 @@ class ScraperHandler(BaseHTTPRequestHandler):
             else:
                 result = flipkart_scraper.scrape(url)
 
+            self._json(200, result)
+
+        except Exception as e:
+            traceback.print_exc()
+            self._json(500, {"status": "failed", "error": str(e)})
+
+    def _handle_search(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            title = body.get("title", "")
+            image_url = body.get("imageUrl", body.get("image_url", ""))
+            gajab_price = body.get("price", "")
+            gajab_url = body.get("url", "")
+
+            if not title:
+                self._json(400, {"status": "failed", "error": "title required"})
+                return
+
+            print(f"[SEARCH] {title[:80]}", flush=True)
+            result = _platform_searcher.search_all(title, image_url, gajab_price, gajab_url)
             self._json(200, result)
 
         except Exception as e:

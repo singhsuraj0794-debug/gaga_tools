@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runLocalSearch, hasLocalScraper } from "../../lib/localScraper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +60,11 @@ async function callScraper(productUrl: string): Promise<any> {
 }
 
 async function callSearch(title: string, imageUrl: string, gajabPrice: string = "", gajabUrl: string = ""): Promise<any> {
+  if (hasLocalScraper()) {
+    const localResult = await runLocalSearch(title, imageUrl, gajabPrice, gajabUrl);
+    if (localResult) return localResult;
+  }
+
   const env: Record<string, string> = { ...process.env as Record<string, string> };
 
   try {
