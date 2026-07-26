@@ -315,7 +315,7 @@ router.get("/videos/preview", async (req, res): Promise<void> => {
         // Fallback to tiktok-scraper2 before yt-dlp
         req.log.info("TikTok preview: trying tiktok-scraper2 fallback");
         try {
-          const scraper2Url = await fetchTikTokVideoFromScraper2(rawUrl, rapidApiKey);
+          const scraper2Url = await fetchTikTokVideoFromScraper2(rawUrl, rapidApiKey!);
           if (scraper2Url) {
             directUrl = scraper2Url;
             req.log.info("TikTok preview: got direct URL from tiktok-scraper2");

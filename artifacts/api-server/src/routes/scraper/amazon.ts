@@ -96,7 +96,7 @@ async function scrapeAmazonProduct(url: string): Promise<AmazonDetailedProduct> 
       if (localResult) {
         if (localResult.status === "blocked") return emptyProduct(asin, url, "Blocked by Amazon", "blocked", localResult.error);
         if (localResult.status === "failed") return emptyProduct(asin, url, "Failed to scrape", "failed", localResult.error);
-        return { ...emptyProduct(asin, url, localResult.title || "Untitled", "success", null), ...localResult };
+        return { ...emptyProduct(asin, url, localResult.title || "Untitled", "success", ""), ...localResult };
       }
     }
 

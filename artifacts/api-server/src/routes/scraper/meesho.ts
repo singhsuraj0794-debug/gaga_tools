@@ -193,7 +193,7 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
 });
 
 router.get("/scrape/:jobId", (req: Request, res: Response): void => {
-  const job = jobs.get(req.params.jobId);
+  const job = jobs.get(req.params.jobId as string);
   if (!job) {
     res.status(404).json({ error: "Job not found" });
     return;
