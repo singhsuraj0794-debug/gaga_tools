@@ -9,6 +9,9 @@ import FlipkartScraper from "@/pages/FlipkartScraper";
 import MeeshoScraper from "@/pages/MeeshoScraper";
 import AmazonScraper from "@/pages/AmazonScraper";
 import PriceMapper from "@/pages/PriceMapper";
+import { setBaseUrl } from "@workspace/api-client-react";
+
+setBaseUrl("https://product-video-scraper-api.onrender.com");
 
 const queryClient = new QueryClient();
 
