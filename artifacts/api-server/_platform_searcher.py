@@ -315,7 +315,7 @@ def _make_query(title: str, gajab_url: str = "") -> str:
     return query or ' '.join(tokens[:3])
 
 
-SEARCHAPI_KEY = "w9PQpaqQSghYun6uoUN4SLRG"
+SEARCHAPI_KEY = os.environ.get("SEARCHAPI_KEY", "w9PQpaqQSghYun6uoUN4SLRG")
 
 def _reverse_image_search(image_url: str) -> dict:
     """Use SearchAPI Google Lens to find platform product URLs."""
@@ -351,6 +351,8 @@ def _reverse_image_search(image_url: str) -> dict:
                 timeout=30,
             )
             data = resp.json()
+            if "error" in data:
+                print(f"[SearchAPI] {data['error']}", flush=True)
             for item in data.get("visual_matches", []):
                 link = (item.get("link") or "").split("?")[0].split("#")[0]
                 if "amazon.in" in link and "/dp/" in link:
@@ -362,8 +364,8 @@ def _reverse_image_search(image_url: str) -> dict:
             # Stop retrying if we found results
             if combined["amazon"] or combined["flipkart"] or combined["meesho"]:
                 break
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[SearchAPI] request failed: {e}", flush=True)
     result = {"amazon": [], "flipkart": [], "meesho": []}
     for k in result:
         result[k] = list(dict.fromkeys(combined[k]))[:3]
