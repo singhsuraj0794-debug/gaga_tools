@@ -394,13 +394,18 @@ router.post("/flipkart/export", async (req: Request, res: Response): Promise<voi
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Flipkart Products");
 
-    worksheet.columns = [
+    const maxImages = Math.max(...products.map((p: FlipkartDetailedProduct) => p.images?.length || 0), 1);
+
+    const columns: any[] = [
       { header: "Product ID", key: "id", width: 30 },
       { header: "Title", key: "title", width: 50 },
       { header: "Description", key: "description", width: 80 },
       { header: "Meta Description", key: "meta_description", width: 80 },
-      { header: "Image URL", key: "imageUrl", width: 50 },
-      { header: "All Images", key: "allImages", width: 80 },
+    ];
+    for (let i = 1; i <= maxImages; i++) {
+      columns.push({ header: `Image ${i}`, key: `image${i}`, width: 60 });
+    }
+    columns.push(
       { header: "HSN", key: "hsn", width: 20 },
       { header: "GST", key: "gst", width: 15 },
       { header: "Dimensions", key: "dimensions", width: 30 },
@@ -409,19 +414,18 @@ router.post("/flipkart/export", async (req: Request, res: Response): Promise<voi
       { header: "Variants", key: "variants", width: 100 },
       { header: "Price", key: "price", width: 20 },
       { header: "Product URL", key: "url", width: 80 },
-    ];
+    );
+    worksheet.columns = columns;
 
     products.forEach((product: FlipkartDetailedProduct) => {
       const specsStr = product.specifications
         ? Object.entries(product.specifications).map(([k, v]) => `${k}: ${v}`).join("\n")
         : "";
-      worksheet.addRow({
+      const row: any = {
         id: product.id,
         title: product.title,
         description: product.description,
         meta_description: product.meta_description,
-        imageUrl: product.imageUrl,
-        allImages: product.images?.join("\n") || "",
         hsn: product.hsn,
         gst: product.gst,
         dimensions: product.dimensions,
@@ -430,7 +434,11 @@ router.post("/flipkart/export", async (req: Request, res: Response): Promise<voi
         variants: product.variants,
         price: product.price,
         url: product.url,
+      };
+      (product.images || []).forEach((img: string, i: number) => {
+        row[`image${i + 1}`] = img;
       });
+      worksheet.addRow(row);
     });
 
     const headerRow = worksheet.getRow(1);
