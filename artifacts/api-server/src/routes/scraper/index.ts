@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRAPER_SCRIPT = path.resolve(__dirname, "_scraper.py");
 
 const router = Router();
-const RAPID_API_KEY = process.env.RAPIDAPI_KEY || "e4f0168123msh21c83ca8fa786cap141b25jsn6b69c0e25be1";
+const RAPID_API_KEY = process.env.RAPIDAPI_KEY;
 
 /** Find the column index that contains the most URL-like values. */
 function _findUrlColumn(rows: any[][]): number {

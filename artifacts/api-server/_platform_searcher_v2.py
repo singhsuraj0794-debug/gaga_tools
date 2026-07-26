@@ -315,7 +315,7 @@ def _make_query(title: str, gajab_url: str = "") -> str:
     return query or ' '.join(tokens[:3])
 
 
-SEARCHAPI_KEY = "pmMUQZ14cBXiC3evoMVuHog6"
+SEARCHAPI_KEY = os.environ.get("SEARCHAPI_KEY", "")
 
 def _reverse_image_search(image_url: str) -> dict:
     """Use SearchAPI Google Lens to find platform product URLs."""

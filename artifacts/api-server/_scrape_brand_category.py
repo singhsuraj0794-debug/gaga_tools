@@ -102,7 +102,7 @@ def main():
     if len(sys.argv) < 3:
         supabase_url = os.environ.get("SUPABASE_URL", "https://okxyskmjsmtykblrtmyi.supabase.co")
         supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or \
-                       os.environ.get("VITE_SUPABASE_ANON_KEY", "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp")
+                       os.environ.get("VITE_SUPABASE_ANON_KEY", "")
     else:
         supabase_url = sys.argv[1]
         supabase_key = sys.argv[2]

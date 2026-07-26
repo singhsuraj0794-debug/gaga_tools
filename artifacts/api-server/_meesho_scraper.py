@@ -20,7 +20,7 @@ import traceback
 
 PROXY = os.environ.get("SCRAPER_PROXY", "")
 SCRAPE_DO_TOKEN = os.environ.get("SCRAPE_DO_TOKEN", "")
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "") or "7e56de094143378c93388a567bbf72b1"
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "") or f"https://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url="
 SCRAPPLEY_API_KEY = os.environ.get("SCRAPPLEY_API_KEY", "v8Og7UGcDAICreAxioRhtgZ5ZGeYorZFlObIQxJp7P9eDIqITEZH1D0rf9R2")
 
