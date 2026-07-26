@@ -202,13 +202,16 @@ export default function MonitoringDashboard() {
     if (!url || !key) return;
     try {
       const u = new URL(`${url}/rest/v1/monitoring_runs`);
-      u.searchParams.set("select", "id,run_at,page,metric,value,status,step_failed,duration_ms,details");
+      u.searchParams.set("select", "*");
       u.searchParams.set("order", "run_at.desc");
       u.searchParams.set("limit", "600");
+      console.log("Fetching from:", u.toString().slice(0, 60) + "...");
       const r = await fetch(u.toString(), { headers: { apikey: key, Authorization: `Bearer ${key}` } });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setRuns(await r.json());
-    } catch (e: any) { console.error(e); }
+      const data = await r.json();
+      console.log(`Fetched ${data.length} rows`);
+      setRuns(data);
+    } catch (e: any) { console.error("Supabase fetch error:", e); }
     finally { setLoading(false); }
   }
 
@@ -223,7 +226,12 @@ export default function MonitoringDashboard() {
     return { happy, lh, server, api, feature };
   }, [runs]);
 
-  const latestRun = runs[0]?.run_at;
+  function getLatestRunTime(): string | null {
+    if (runs.length === 0) return null;
+    const times = [...new Set(runs.map(r => r.run_at))];
+    return times.sort().reverse()[0] || runs[0].run_at;
+  }
+  const latestRun = getLatestRunTime();
   const latestAll = runs.filter(r => r.run_at === latestRun);
   const pCount = latestAll.filter(r => r.status === "pass").length;
   const fCount = latestAll.filter(r => r.status === "fail").length;

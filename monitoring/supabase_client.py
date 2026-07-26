@@ -11,13 +11,14 @@ class SupabaseStore:
             self._client = None
             return
         self._client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        self._run_at = datetime.now(timezone.utc).isoformat()
 
     def store_result(self, page_or_flow: str, metric: str, value: float, status: str, step_failed: str | None = None, duration_ms: int | None = None, details: dict | None = None):
         if not self._client:
             print(f"[SUPABASE] Would store: {page_or_flow}/{metric}={value} status={status}")
             return
         row = {
-            "run_at": datetime.now(timezone.utc).isoformat(),
+            "run_at": self._run_at,
             "page": page_or_flow,
             "metric": metric,
             "value": value,
