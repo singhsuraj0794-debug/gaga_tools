@@ -25,7 +25,9 @@ jobs:
         run: pip install -r monitoring/requirements.txt
 
       - name: Install Lighthouse CLI
-        run: npm install -g lighthouse
+        run: |
+          cd monitoring
+          npm install lighthouse
 
       - name: Install Playwright browsers
         run: playwright install chromium
