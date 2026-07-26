@@ -7,6 +7,8 @@ export function getSupabase(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_KEY;
   if (!url || !key) return null;
-  client = createClient(url, key);
+  client = createClient(url, key, {
+    realtime: { enabled: false },
+  });
   return client;
 }
