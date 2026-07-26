@@ -163,11 +163,6 @@ def scrape(url: str, attempt: int = 1, max_attempts: int = 3) -> dict:
         if parsed.get("status") == "success":
             return parsed
 
-    if SCRAPING_SERVICE_URL:
-        service_result = _via_scraping_service(url)
-        if service_result.get("status") == "success":
-            return service_result
-
     result = _try_playwright(url, ua)
     if result and result.get("status") == "success":
         return result

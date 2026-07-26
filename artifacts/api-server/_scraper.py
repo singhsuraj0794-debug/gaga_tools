@@ -34,10 +34,6 @@ def scrape(url: str, attempt: int = 1, max_attempts: int = 3) -> dict:
     html = _try_direct(url, ua)
     if html:
         return _parse_html(html, url)
-    if SCRAPING_SERVICE_URL:
-        result = _via_scraping_service(url)
-        if result.get("status") != "blocked" or attempt >= max_attempts:
-            return result
     html = _try_playwright(url, ua)
     if html:
         return _parse_html(html, url)
