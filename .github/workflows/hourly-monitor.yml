@@ -1,44 +1,54 @@
-name: Hourly Synthetic Monitor
+name: Gajab.com Happy Flow Monitor
 on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
-  monitor:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
-      - name: Run health checks
-        id: checks
+          python-version: '3.11'
+      - name: Install Playwright
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://product-video-scraper-api.onrender.com/api/healthz)
-          PRODUCTS=$(curl -s --max-time 60 https://product-video-scraper-api.onrender.com/api/products/status | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('supabase_total', d.get('count', '?')))" 2>/dev/null || echo "fail")
-          echo "api_status=$STATUS" >> $GITHUB_OUTPUT
-          echo "product_count=$PRODUCTS" >> $GITHUB_OUTPUT
-
-      - name: Notify Slack if down
-        if: steps.checks.outputs.api_status != '200'
+          pip install playwright
+          python3 -m playwright install chromium
+      - name: Run happy flow check
+        id: check
+        run: |
+          RESULT=$(python3 scripts/happy_flow_checker.py 2>&1)
+          echo "$RESULT"
+          # Extract JSON from the output (last line)
+          JSON=$(echo "$RESULT" | tail -1)
+          echo "json<<EOF" >> $GITHUB_OUTPUT
+          echo "$JSON" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Post result to Render API
+        run: |
+          curl -s -X POST "https://product-video-scraper-api.onrender.com/api/monitor/results" \
+            -H "Content-Type: application/json" \
+            -d '${{ steps.check.outputs.json }}' \
+            --max-time 10 2>/dev/null || true
+      - name: Notify Slack on failure
+        if: fromJson(steps.check.outputs.json).overall == 'fail'
         run: |
           curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
-            -d '{"text":"🚨 *Gajab Hub Alert* — API is down (HTTP ${{ steps.checks.outputs.api_status }}). Product count: ${{ steps.checks.outputs.product_count }}"}' 2>/dev/null || true
-
-      - name: Notify Slack summary
-        if: steps.checks.outputs.api_status == '200'
+            -d '{"text":"🚨 *Gajab.com Happy Flow FAILED*\n${{ fromJson(steps.check.outputs.json).failed }} step(s) failed out of ${{ fromJson(steps.check.outputs.json).passed + fromJson(steps.check.outputs.json).failed }}. Check the monitoring dashboard for details."}' 2>/dev/null || true
+      - name: Notify Slack on success
+        if: fromJson(steps.check.outputs.json).overall == 'pass'
         run: |
           curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
-            -d '{"text":"✅ *Gajab Hub hourly check* — API OK · ${{ steps.checks.outputs.product_count }} products"}' 2>/dev/null || true
-
-      - name: SMS alert via Twilio if down
-        if: steps.checks.outputs.api_status != '200'
+            -d '{"text":"✅ *Gajab.com Happy Flow OK* — ${{ fromJson(steps.check.outputs.json).passed }} steps passed in ${{ fromJson(steps.check.outputs.json).steps[-1].duration }}s"}' 2>/dev/null || true
+      - name: SMS alert via Twilio on failure
+        if: fromJson(steps.check.outputs.json).overall == 'fail'
         run: |
           curl -s -X POST "https://api.twilio.com/2010-04-01/Accounts/${{ secrets.TWILIO_SID }}/Messages.json" \
             --data-urlencode "To=${{ secrets.MONITOR_PHONE }}" \
             --data-urlencode "From=+14755968037" \
-            --data-urlencode "Body=🚨 Gajab Hub API is down (HTTP ${{ steps.checks.outputs.api_status }})" \
+            --data-urlencode "Body=🚨 Gajab.com happy flow check FAILED" \
             -u "${{ secrets.TWILIO_SID }}:${{ secrets.TWILIO_AUTH_TOKEN }}" 2>/dev/null || true

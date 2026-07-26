@@ -56,8 +56,8 @@ export default function Home() {
       color: "bg-yellow-50 hover:bg-yellow-100 border-yellow-200",
     },
     {
-      title: "Monitoring Dashboard",
-      description: "Synthetic monitoring: Core Web Vitals, Lighthouse scores & happy-flow checks",
+      title: "Synthetic Monitor",
+      description: "Gajab.com happy flow — hourly Playwright checks with Slack & SMS alerts",
       icon: <Activity className="h-10 w-10 text-rose-600" />,
       path: "/monitoring",
       color: "bg-rose-50 hover:bg-rose-100 border-rose-200",
