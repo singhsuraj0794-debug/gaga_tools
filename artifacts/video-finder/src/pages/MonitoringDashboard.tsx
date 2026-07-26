@@ -44,14 +44,17 @@ function MetricValue({ metric, value }: { metric: string; value: number | null }
   return <span className="font-mono font-medium">{formatted}</span>;
 }
 
+const _SUPABASE_URL = "https://okxyskmjsmtykblrtmyi.supabase.co";
+const _SUPABASE_KEY = "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp";
+
 export default function MonitoringDashboard() {
   const [runs, setRuns] = useState<MonitoringRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   async function fetchRuns() {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || _SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_KEY || _SUPABASE_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
       setError("VITE_SUPABASE_URL and VITE_SUPABASE_KEY env vars required");
