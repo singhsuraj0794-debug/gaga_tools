@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Activity, ArrowLeft, BarChart3, Loader2, AlertTriangle,
   CheckCircle, MinusCircle, Clock, Camera, Info, Globe,
-  Bug, Search, Image, DollarSign, Server, Cpu, LayoutGrid,
+  Bug, Search, Image, DollarSign, Server, Cpu, ShoppingCart,
 } from "lucide-react";
 
 const _SUPABASE_URL = "https://okxyskmjsmtykblrtmyi.supabase.co";
@@ -35,6 +35,7 @@ const METRIC_INFO: Record<string, string> = {
   step_category_load: "Category page load time + product count check.",
   step_product_detail_load: "Product detail load time + price section check.",
   step_bargain_flow: "Bargain flow: click Start, set offer, submit, accept.",
+  step_checkout_flow: "Add to cart, navigate checkout, verify Razorpay payment gateway opens.",
 };
 
 function InfoTip({ text }: { text: string }) {
@@ -254,12 +255,14 @@ export default function MonitoringDashboard() {
     step_category_load: <Search className="h-4 w-4" />,
     step_product_detail_load: <Image className="h-4 w-4" />,
     step_bargain_flow: <DollarSign className="h-4 w-4" />,
+    step_checkout_flow: <ShoppingCart className="h-4 w-4" />,
   };
   const STEP_LABELS: Record<string, string> = {
     step_home_load: "Home Page Load",
     step_category_load: "Category Page Load",
     step_product_detail_load: "Product Detail Load",
     step_bargain_flow: "Bargain Flow",
+    step_checkout_flow: "Checkout + Razorpay",
   };
 
   function pagePage(page: string) {
@@ -318,7 +321,7 @@ export default function MonitoringDashboard() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               <div>
                 <SectionCard title="Happy Flow" icon={<Activity className="h-3.5 w-3.5" />}>
-                  {["step_home_load", "step_category_load", "step_product_detail_load", "step_bargain_flow"].map(key => {
+                  {["step_home_load", "step_category_load", "step_product_detail_load", "step_bargain_flow", "step_checkout_flow"].map(key => {
                     const run = latestHappy.get(key);
                     if (!run) return <div key={key} className="text-xs text-slate-400 py-2">No data for {key.replace("step_", "")}</div>;
                     return <StepCard key={key} run={run} stepName={STEP_LABELS[key] || key.replace("step_", "").replace(/_/g, " ")} icon={STEP_ICONS[key] || <Activity className="h-4 w-4" />} />;

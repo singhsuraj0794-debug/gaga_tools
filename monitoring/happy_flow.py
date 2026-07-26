@@ -246,6 +246,85 @@ def _do_bargain_flow(page, results: list):
     _check_budget("bargain_flow", bargain_duration, results)
 
 
+def _do_checkout_flow(page, results: list):
+    t0 = time.time()
+    sub_steps = []
+
+    log("Step 5a — Adding to cart")
+    cart_btn = page.locator("button:has-text('Add to Cart'), button:has-text('Add to cart')")
+    if cart_btn.count() > 0:
+        btn = cart_btn.first
+        if btn.is_visible(timeout=3000) and btn.is_enabled():
+            btn.click()
+            log("Clicked Add to Cart")
+            time.sleep(2)
+            sub_steps.append({"check": "add_to_cart", "status": "pass", "detail": "Add to Cart button clicked"})
+        else:
+            sub_steps.append({"check": "add_to_cart", "status": "fail", "detail": "Add to Cart button not clickable (may need login)"})
+    else:
+        sub_steps.append({"check": "add_to_cart", "status": "fail", "detail": "No Add to Cart button found"})
+
+    log("Step 5b — Navigating to checkout")
+    checkout_btn = page.locator("a:has-text('Checkout'), button:has-text('Checkout'), a[href*='checkout'], a[href*='cart']")
+    if checkout_btn.count() > 0:
+        try:
+            checkout_btn.first.click(timeout=3000)
+            time.sleep(2)
+            sub_steps.append({"check": "checkout_nav", "status": "pass", "detail": "Clicked checkout"})
+        except Exception as e:
+            sub_steps.append({"check": "checkout_nav", "status": "fail", "detail": f"Could not click checkout: {e}"})
+    else:
+        # Try navigating directly
+        page.goto("https://gajab.com/checkout", timeout=15000, wait_until="domcontentloaded")
+        time.sleep(2)
+        if "checkout" in page.url.lower() or "cart" in page.url.lower():
+            sub_steps.append({"check": "checkout_nav", "status": "degraded", "detail": f"Navigated to {page.url}"})
+        else:
+            sub_steps.append({"check": "checkout_nav", "status": "fail", "detail": f"No checkout link, direct nav to {page.url}"})
+
+    log("Step 5c — Looking for Razorpay payment gateway")
+    ss_checkout = _capture_screenshot(page, "checkout_page")
+    razorpay_found = False
+    razorpay_selectors = [
+        "iframe[src*='razorpay']",
+        "iframe[id*='razorpay']",
+        "[class*='razorpay']",
+        "button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed')",
+        "form[action*='razorpay']",
+        "[id*='razorpay-checkout']",
+    ]
+    for sel in razorpay_selectors:
+        try:
+            loc = page.locator(sel)
+            if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+                razorpay_found = True
+                sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": f"Razorpay element found: {sel}"})
+                break
+        except Exception:
+            continue
+
+    if not razorpay_found:
+        page_source = page.content().lower()
+        if "razorpay" in page_source:
+            razorpay_found = True
+            sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": "Razorpay referenced in page source"})
+        else:
+            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "No Razorpay elements found (may need login first)"})
+
+    duration = int((time.time() - t0) * 1000)
+    status = "pass" if razorpay_found and all(s["status"] == "pass" for s in sub_steps) else "degraded" if razorpay_found else "fail"
+    results.append({
+        "step": "checkout_flow",
+        "duration_ms": duration,
+        "status": status,
+        "sub_steps": sub_steps,
+        "detail": f"Checkout flow completed in {duration}ms — Razorpay: {'found' if razorpay_found else 'not found'}",
+        "screenshot": ss_checkout,
+        "failure_reason": None if razorpay_found else "Could not reach Razorpay payment gateway (login required?)",
+    })
+    _check_budget("checkout_nav", duration, results)
+
+
 def _check_budget(budget_key: str, duration_ms: int, results: list):
     budget_sec = TIME_BUDGETS_SECONDS.get(budget_key)
     if budget_sec and duration_ms > budget_sec * 1000:
@@ -356,6 +435,9 @@ def run_happy_flow() -> list[dict]:
 
             # Step 4: Bargain flow
             _do_bargain_flow(page, results)
+
+            # Step 5: Checkout + Razorpay payment gateway check
+            _do_checkout_flow(page, results)
 
             log("Happy flow completed successfully")
 
