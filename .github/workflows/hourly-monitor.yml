@@ -12,43 +12,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install Playwright
+      - name: Install Playwright + deps
         run: |
           pip install playwright
           python3 -m playwright install chromium
+          python3 -m playwright install-deps chromium
       - name: Run happy flow check
         id: check
         run: |
-          RESULT=$(python3 scripts/happy_flow_checker.py 2>&1)
-          echo "$RESULT"
-          # Extract JSON from the output (last line)
-          JSON=$(echo "$RESULT" | tail -1)
-          echo "json<<EOF" >> $GITHUB_OUTPUT
-          echo "$JSON" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          python3 scripts/happy_flow_checker.py > /tmp/check_output.txt 2>&1
+          cat /tmp/check_output.txt
+          JSON=$(cat /tmp/check_output.txt | grep '^{')
+          echo "result=$JSON" >> $GITHUB_OUTPUT
       - name: Post result to Render API
         run: |
           curl -s -X POST "https://product-video-scraper-api.onrender.com/api/monitor/results" \
             -H "Content-Type: application/json" \
-            -d '${{ steps.check.outputs.json }}' \
-            --max-time 10 2>/dev/null || true
-      - name: Notify Slack on failure
-        if: fromJson(steps.check.outputs.json).overall == 'fail'
+            -d '${{ steps.check.outputs.result }}' \
+            --max-time 10
+      - name: Notify on failure
+        if: failure()
         run: |
           curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
-            -d '{"text":"🚨 *Gajab.com Happy Flow FAILED*\n${{ fromJson(steps.check.outputs.json).failed }} step(s) failed out of ${{ fromJson(steps.check.outputs.json).passed + fromJson(steps.check.outputs.json).failed }}. Check the monitoring dashboard for details."}' 2>/dev/null || true
-      - name: Notify Slack on success
-        if: fromJson(steps.check.outputs.json).overall == 'pass'
-        run: |
-          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d '{"text":"✅ *Gajab.com Happy Flow OK* — ${{ fromJson(steps.check.outputs.json).passed }} steps passed in ${{ fromJson(steps.check.outputs.json).steps[-1].duration }}s"}' 2>/dev/null || true
-      - name: SMS alert via Twilio on failure
-        if: fromJson(steps.check.outputs.json).overall == 'fail'
-        run: |
+            -d '{"text":"🚨 Gajab.com Happy Flow check FAILED — see https://product-video-scraper-api.onrender.com/api/monitor/results"}'
           curl -s -X POST "https://api.twilio.com/2010-04-01/Accounts/${{ secrets.TWILIO_SID }}/Messages.json" \
             --data-urlencode "To=${{ secrets.MONITOR_PHONE }}" \
             --data-urlencode "From=+14755968037" \
-            --data-urlencode "Body=🚨 Gajab.com happy flow check FAILED" \
-            -u "${{ secrets.TWILIO_SID }}:${{ secrets.TWILIO_AUTH_TOKEN }}" 2>/dev/null || true
+            --data-urlencode "Body=Gajab.com happy flow check FAILED" \
+            -u "${{ secrets.TWILIO_SID }}:${{ secrets.TWILIO_AUTH_TOKEN }}"
