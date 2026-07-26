@@ -1,0 +1,44 @@
+name: Hourly Synthetic Monitor
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Run health checks
+        id: checks
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://product-video-scraper-api.onrender.com/api/healthz)
+          PRODUCTS=$(curl -s --max-time 60 https://product-video-scraper-api.onrender.com/api/products/status | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('supabase_total', d.get('count', '?')))" 2>/dev/null || echo "fail")
+          echo "api_status=$STATUS" >> $GITHUB_OUTPUT
+          echo "product_count=$PRODUCTS" >> $GITHUB_OUTPUT
+
+      - name: Notify Slack if down
+        if: steps.checks.outputs.api_status != '200'
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"text":"🚨 *Gajab Hub Alert* — API is down (HTTP ${{ steps.checks.outputs.api_status }}). Product count: ${{ steps.checks.outputs.product_count }}"}' 2>/dev/null || true
+
+      - name: Notify Slack summary
+        if: steps.checks.outputs.api_status == '200'
+        run: |
+          curl -s -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"text":"✅ *Gajab Hub hourly check* — API OK · ${{ steps.checks.outputs.product_count }} products"}' 2>/dev/null || true
+
+      - name: SMS alert via Twilio if down
+        if: steps.checks.outputs.api_status != '200'
+        run: |
+          curl -s -X POST "https://api.twilio.com/2010-04-01/Accounts/${{ secrets.TWILIO_SID }}/Messages.json" \
+            --data-urlencode "To=${{ secrets.MONITOR_PHONE }}" \
+            --data-urlencode "From=+14755968037" \
+            --data-urlencode "Body=🚨 Gajab Hub API is down (HTTP ${{ steps.checks.outputs.api_status }})" \
+            -u "${{ secrets.TWILIO_SID }}:${{ secrets.TWILIO_AUTH_TOKEN }}" 2>/dev/null || true
