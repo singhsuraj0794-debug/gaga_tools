@@ -596,7 +596,7 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
             best_d = 0
             for rc in rev_img_candidates:
                 d, cl = _get_dinov2_sim(image_url, rc.get("image", "")), _get_clip_sim(image_url, rc.get("image", ""))
-                if d is not None and cl is not None and (d >= 0.45 or cl >= 0.55) and d > best_d:
+                if d is not None and cl is not None and (d >= 0.30 or cl >= 0.40) and d > best_d:
                     best_d = d
                     best = rc
             if best:
@@ -631,9 +631,9 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
 
     # Conditional gate: strict (text-only) vs relaxed (visual candidates exist)
     if rev_img_found:
-        gate_passed = dinov2_sim is not None and clip_sim is not None and not (dinov2_sim < 0.45 and clip_sim < 0.55)
+        gate_passed = dinov2_sim is not None and clip_sim is not None and not (dinov2_sim < 0.40 and clip_sim < 0.50)
     else:
-        gate_passed = dinov2_sim is not None and clip_sim is not None and dinov2_sim >= 0.60 and clip_sim >= 0.65
+        gate_passed = dinov2_sim is not None and clip_sim is not None and dinov2_sim >= 0.30 and clip_sim >= 0.35
 
     if not gate_passed:
         if rev_img_candidates:
@@ -641,7 +641,7 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
             best_d = 0
             for rc in rev_img_candidates:
                 d, cl = _get_dinov2_sim(image_url, rc.get("image", "")), _get_clip_sim(image_url, rc.get("image", ""))
-                if d is not None and cl is not None and (d >= 0.45 or cl >= 0.55) and d > best_d:
+                if d is not None and cl is not None and (d >= 0.30 or cl >= 0.40) and d > best_d:
                     best_d = d
                     best = rc
             if best:
@@ -825,7 +825,7 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
             best_d = 0
             for rc in rev_img_candidates:
                 d, cl = _get_dinov2_sim(image_url, rc.get("image", "")), _get_clip_sim(image_url, rc.get("image", ""))
-                if d is not None and cl is not None and (d >= 0.45 or cl >= 0.55) and d > best_d:
+                if d is not None and cl is not None and (d >= 0.30 or cl >= 0.40) and d > best_d:
                     best_d = d
                     best = rc
             if best:
@@ -860,9 +860,9 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
 
     # Conditional gate: strict (text-only) vs relaxed (visual candidates exist)
     if rev_img_found:
-        gate_passed = dinov2_sim is not None and clip_sim is not None and not (dinov2_sim < 0.45 and clip_sim < 0.55)
+        gate_passed = dinov2_sim is not None and clip_sim is not None and not (dinov2_sim < 0.40 and clip_sim < 0.50)
     else:
-        gate_passed = dinov2_sim is not None and clip_sim is not None and dinov2_sim >= 0.60 and clip_sim >= 0.65
+        gate_passed = dinov2_sim is not None and clip_sim is not None and dinov2_sim >= 0.30 and clip_sim >= 0.35
 
     if not gate_passed:
         if rev_img_candidates:
@@ -870,7 +870,7 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
             best_d = 0
             for rc in rev_img_candidates:
                 d, cl = _get_dinov2_sim(image_url, rc.get("image", "")), _get_clip_sim(image_url, rc.get("image", ""))
-                if d is not None and cl is not None and (d >= 0.45 or cl >= 0.55) and d > best_d:
+                if d is not None and cl is not None and (d >= 0.30 or cl >= 0.40) and d > best_d:
                     best_d = d
                     best = rc
             if best:
