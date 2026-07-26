@@ -205,7 +205,7 @@ function VideoPreview({ video }: { video: VideoResult }) {
         ) : (
           <video
             src={videoSource}
-            className="absolute inset-0 w-full h-full"
+            className="absolute inset-0 w-full h-full object-contain"
             controls
             autoPlay
             onError={(e) => {
@@ -322,6 +322,7 @@ export default function Dashboard() {
 
   // Active (pending/downloading) jobs — shown immediately after starting
   const [activeJobs, setActiveJobs] = useState<DownloadJob[]>([]);
+  const [downloadsCollapsed, setDownloadsCollapsed] = useState(true);
 
   // ── Queries & Mutations ────────────────────────────────────────────────
 
@@ -1019,38 +1020,48 @@ export default function Dashboard() {
         </section>
 
         {/* ── Right Panel: Downloads ── */}
-        <section className="w-[320px] border-l flex flex-col bg-card/50">
-          <div className="p-3 border-b flex items-center justify-between bg-card">
-            <h2 className="font-medium text-sm">Downloads</h2>
-            {hasDownloads && (
-              <Badge variant="secondary" className="text-[10px] h-5">
-                {activeJobs.length + completedDownloads.length}
-              </Badge>
-            )}
-          </div>
+        <section className={`${downloadsCollapsed ? "w-10" : "w-[320px]"} border-l flex flex-col bg-card/50 relative transition-all duration-200`}>
+          <button
+            onClick={() => setDownloadsCollapsed(!downloadsCollapsed)}
+            className="absolute -left-3 top-3 z-10 w-6 h-6 rounded-full border bg-background flex items-center justify-center shadow-sm hover:bg-accent"
+          >
+            {downloadsCollapsed ? <ChevronLeft className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          </button>
+          {!downloadsCollapsed && (
+            <>
+              <div className="p-3 border-b flex items-center justify-between bg-card pl-8">
+                <h2 className="font-medium text-sm">Downloads</h2>
+                {hasDownloads && (
+                  <Badge variant="secondary" className="text-[10px] h-5">
+                    {activeJobs.length + completedDownloads.length}
+                  </Badge>
+                )}
+              </div>
 
-          <ScrollArea className="flex-1 p-3">
-            <div className="space-y-3">
-              {activeJobs.map((job) => (
-                <DownloadItem
-                  key={job.jobId}
-                  job={job}
-                  onComplete={handleJobComplete}
-                />
-              ))}
+              <ScrollArea className="flex-1 p-3">
+                <div className="space-y-3">
+                  {activeJobs.map((job) => (
+                    <DownloadItem
+                      key={job.jobId}
+                      job={job}
+                      onComplete={handleJobComplete}
+                    />
+                  ))}
 
-              {completedDownloads.map((dl) => (
-                <DownloadItem key={dl.jobId} job={dl} />
-              ))}
+                  {completedDownloads.map((dl) => (
+                    <DownloadItem key={dl.jobId} job={dl} />
+                  ))}
 
-              {!hasDownloads && (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Download className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                  <p className="text-xs">No downloads yet.</p>
+                  {!hasDownloads && (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Download className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                      <p className="text-xs">No downloads yet.</p>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          </ScrollArea>
+              </ScrollArea>
+            </>
+          )}
         </section>
       </main>
     </div>
