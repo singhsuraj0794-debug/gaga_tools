@@ -41,7 +41,7 @@ echo "    Keep this terminal open while scraping."
 echo ""
 
 while true; do
-  ~/bin/ngrok http --domain="${NGROK_DOMAIN}" 9000 2>&1 &
+  ~/bin/ngrok http --url="${NGROK_DOMAIN}" 9000 2>&1 &
   NGROK_PID=$!
   wait $NGROK_PID 2>/dev/null
   echo "[$(date '+%H:%M:%S')] ngrok dropped — reconnecting in 5s..."
