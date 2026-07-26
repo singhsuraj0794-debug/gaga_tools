@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS monitoring_runs (
   status TEXT NOT NULL CHECK (status IN ('pass', 'fail', 'degraded')),
   step_failed TEXT,
   duration_ms INTEGER,
+  details JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

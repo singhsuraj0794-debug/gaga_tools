@@ -92,8 +92,22 @@ def main():
         duration = step["duration_ms"]
         error = step.get("error")
         detail = step.get("detail", "")
-        print(f"  {step_name}: status={step_status} duration={duration}ms", flush=True)
-        store.store_flow_step("happy_flow", step_name, duration, step_status, error or detail[:200] if detail else error)
+        screenshot = step.get("screenshot", {})
+        failure_reason = step.get("failure_reason")
+        console_errors = step.get("console_errors", [])
+        sub_steps = step.get("sub_steps", [])
+        details = {
+            "screenshot_base64": screenshot.get("base64"),
+            "failure_reason": failure_reason or error,
+            "console_errors": console_errors,
+            "sub_steps": sub_steps,
+            "detail": detail,
+            "url": step.get("url"),
+            "product_count": step.get("product_count"),
+        }
+        if screenshot.get("path"):
+            details["screenshot_path"] = screenshot["path"]
+        store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details)
         if step_status in ("fail", "degraded"):
             flow_overall = step_status
             msg = f"Step '{step_name}' failed: {error}" if error else f"Step '{step_name}' degraded ({duration}ms)"

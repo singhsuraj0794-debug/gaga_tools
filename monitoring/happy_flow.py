@@ -74,16 +74,25 @@ def _dismiss_overlays(page):
         pass
 
 
-def _capture_screenshot(page, label: str):
+import base64 as _base64
+import io as _io
+
+def _capture_screenshot(page, label: str) -> dict:
     ts = datetime.now().strftime("%H%M%S")
     path = _SCREENSHOT_DIR / f"{label}_{ts}.png"
+    result = {"path": None, "base64": None}
     try:
-        page.screenshot(path=str(path))
-        log(f"Screenshot saved: {path}")
-        return str(path)
+        buf = _io.BytesIO()
+        page.screenshot(path=str(path), full_page=False)
+        with open(path, "rb") as f:
+            raw = f.read()
+        result["path"] = str(path)
+        if len(raw) < 500000:
+            result["base64"] = "data:image/png;base64," + _base64.b64encode(raw).decode()
+        log(f"Screenshot saved: {path} ({len(raw)}b)")
     except Exception as e:
         log(f"Screenshot failed: {e}")
-        return None
+    return result
 
 
 def _check_page_ready(page, expected_url_substring: str | None = None, expected_element: str | None = None) -> dict:
@@ -225,12 +234,14 @@ def _do_bargain_flow(page, results: list):
         sub_steps.append({"check": "accept_offer", "status": "degraded", "detail": "No accept button appeared (seller may not have responded within timeout)"})
 
     bargain_duration = int((time.time() - t0) * 1000)
+    ss_bargain = _capture_screenshot(page, "bargain_complete")
     results.append({
         "step": "bargain_flow",
         "duration_ms": bargain_duration,
         "status": "pass",
         "sub_steps": sub_steps,
         "detail": f"Bargain flow completed in {bargain_duration}ms ({len(sub_steps)} sub-steps)",
+        "screenshot": ss_bargain,
     })
     _check_budget("bargain_flow", bargain_duration, results)
 
@@ -275,13 +286,16 @@ def run_happy_flow() -> list[dict]:
             duration = int((time.time() - t0) * 1000)
             title = page.title()
             has_gajab = "Gajab" in title or "gajab" in title.lower()
+            ss_home = _capture_screenshot(page, "home")
             results.append({
                 "step": "home_load",
                 "duration_ms": duration,
                 "status": "pass" if has_gajab else "fail",
                 "detail": f"Title: '{title}', URL: {page.url}",
                 "title_found": has_gajab,
-                "console_errors": [c for c in console_errors if c["type"] == "error"],
+                "screenshot": ss_home,
+                "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                "failure_reason": None if has_gajab else "Page title missing 'Gajab'",
             })
             _check_budget("home_page_load", duration, results)
 
@@ -293,13 +307,21 @@ def run_happy_flow() -> list[dict]:
             duration = int((time.time() - t0) * 1000)
             product_links = page.locator("a[href*='/product-detail/']")
             has_products = product_links.count() > 0
+            ss_cat = _capture_screenshot(page, "category")
+            failure_reason = None
+            if not has_products:
+                failure_reason = "No product links found on category page"
+            elif duration > TIME_BUDGETS_SECONDS.get("category_page_load", 5) * 1000:
+                failure_reason = f"Page load slow ({duration}ms)"
             results.append({
                 "step": "category_load",
                 "duration_ms": duration,
                 "status": "pass" if has_products else "fail",
                 "detail": f"Products found: {product_links.count()}, URL: {page.url}",
                 "product_count": product_links.count(),
-                "console_errors": [c for c in console_errors if c["type"] == "error"],
+                "screenshot": ss_cat,
+                "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                "failure_reason": failure_reason,
             })
             _check_budget("category_page_load", duration, results)
 
@@ -312,13 +334,19 @@ def run_happy_flow() -> list[dict]:
             duration = int((time.time() - t0) * 1000)
             varient_price = page.locator("#varient-price")
             has_varient = varient_price.count() > 0 and varient_price.first.is_visible(timeout=5000)
+            ss_pdp = _capture_screenshot(page, "product_detail")
+            failure_reason = None
+            if not has_varient:
+                failure_reason = "#varient-price element not found"
             results.append({
                 "step": "product_detail_load",
                 "duration_ms": duration,
                 "status": "pass" if has_varient else "fail",
                 "detail": f"#varient-price visible: {has_varient}, title: {page.title()[:60]}",
                 "varient_price_found": has_varient,
-                "console_errors": [c for c in console_errors if c["type"] == "error"],
+                "screenshot": ss_pdp,
+                "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                "failure_reason": failure_reason,
             })
             _check_budget("product_detail_load", duration, results)
 
@@ -335,15 +363,16 @@ def run_happy_flow() -> list[dict]:
             step_name = results[-1]["step"] if results else "unknown"
             log(f"HAPPY FLOW FAILED at step '{step_name}': {e}")
             try:
-                ss_path = _capture_screenshot(page, f"failure_{step_name}")
+                ss = _capture_screenshot(page, f"failure_{step_name}")
             except Exception:
-                ss_path = None
+                ss = {"path": None, "base64": None}
             results.append({
                 "step": step_name,
                 "duration_ms": 0,
                 "status": "fail",
                 "error": str(e),
-                "screenshot": ss_path,
+                "failure_reason": str(e),
+                "screenshot": ss,
                 "console_errors": [c for c in console_errors if c["type"] == "error"],
             })
 
