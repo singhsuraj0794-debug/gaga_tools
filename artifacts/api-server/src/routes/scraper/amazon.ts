@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -90,6 +91,15 @@ async function scrapeAmazonProduct(url: string): Promise<AmazonDetailedProduct> 
     url;
 
   try {
+    if (hasLocalScraper()) {
+      const localResult = await runLocalScraper(url, "amazon");
+      if (localResult) {
+        if (localResult.status === "blocked") return emptyProduct(asin, url, "Blocked by Amazon", "blocked", localResult.error);
+        if (localResult.status === "failed") return emptyProduct(asin, url, "Failed to scrape", "failed", localResult.error);
+        return { ...emptyProduct(asin, url, localResult.title || "Untitled", "success", null), ...localResult };
+      }
+    }
+
     logger.info({ url }, "Scraping Amazon via Python subprocess");
 
     const env: Record<string, string> = { ...process.env as Record<string, string> };

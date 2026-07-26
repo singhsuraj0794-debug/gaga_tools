@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 import {
   SearchEcommerceProductsBody,
   ExportProductsToExcelBody,
@@ -68,11 +69,28 @@ interface FlipkartDetailedProduct {
   error: string | null;
 }
 
+function buildFlipkartProduct(pid: string, url: string, result: any): FlipkartDetailedProduct {
+  if (result.status === "blocked") {
+    return { id: pid, title: "Blocked by Flipkart", description: null, meta_description: null, imageUrl: null, images: [], hsn: null, gst: null, dimensions: null, weight: null, specifications: null, variants: null, price: null, url, status: "blocked", error: result.error || "Request blocked by Flipkart's CDN" };
+  }
+  if (result.status === "failed") {
+    return { id: pid, title: "Failed to scrape", description: null, meta_description: null, imageUrl: null, images: [], hsn: null, gst: null, dimensions: null, weight: null, specifications: null, variants: null, price: null, url, status: "failed", error: result.error || "Scraping failed" };
+  }
+  return { id: pid, title: result.title || "Untitled Product", description: result.description || null, meta_description: result.meta_description || null, imageUrl: (result.images || [])[0] || null, images: result.images || [], hsn: result.hsn || null, gst: result.gst || null, dimensions: result.dimensions || null, weight: result.weight || null, specifications: result.specifications || null, variants: null, price: result.price || null, url, status: "success", error: null };
+}
+
 async function scrapeFlipkartProduct(url: string): Promise<FlipkartDetailedProduct> {
   const pid =
     url.match(/pid=([^&]+)/)?.[1] || url.split("/").pop()?.split("?")[0] || url;
 
   try {
+    if (hasLocalScraper()) {
+      const localResult = await runLocalScraper(url, "flipkart");
+      if (localResult) {
+        return buildFlipkartProduct(pid, url, localResult);
+      }
+    }
+
     logger.info({ url }, "Scraping Flipkart via Python subprocess");
 
     const env: Record<string, string> = { ...process.env as Record<string, string> };
@@ -86,71 +104,7 @@ async function scrapeFlipkartProduct(url: string): Promise<FlipkartDetailedProdu
     });
 
     const result = JSON.parse(stdout);
-
-    if (result.status === "blocked") {
-      logger.warn({ url }, "Flipkart blocked — " + (result.error || "unknown"));
-      return {
-        id: pid,
-        title: "Blocked by Flipkart",
-        description: null,
-        meta_description: null,
-        imageUrl: null,
-        images: [],
-        hsn: null,
-        gst: null,
-        dimensions: null,
-        weight: null,
-        specifications: null,
-        variants: null,
-        price: null,
-        url,
-        status: "blocked",
-        error: result.error || "Request blocked by Flipkart's CDN",
-      };
-    }
-
-    if (result.status === "failed") {
-      logger.error({ url }, "Scraper failed — " + (result.error || "unknown"));
-      return {
-        id: pid,
-        title: "Failed to scrape",
-        description: null,
-        meta_description: null,
-        imageUrl: null,
-        images: [],
-        hsn: null,
-        gst: null,
-        dimensions: null,
-        weight: null,
-        specifications: null,
-        variants: null,
-        price: null,
-        url,
-        status: "failed",
-        error: result.error || "Scraping failed",
-      };
-    }
-
-    logger.info({ url, title: result.title }, "Scraped successfully");
-
-    return {
-      id: pid,
-      title: result.title || "Untitled Product",
-      description: result.description || null,
-      meta_description: result.meta_description || null,
-      imageUrl: (result.images || [])[0] || null,
-      images: result.images || [],
-      hsn: result.hsn || null,
-      gst: result.gst || null,
-      dimensions: result.dimensions || null,
-      weight: result.weight || null,
-      specifications: result.specifications || null,
-      variants: null,
-      price: result.price || null,
-      url,
-      status: "success",
-      error: null,
-    };
+    return buildFlipkartProduct(pid, url, result);
   } catch (err: any) {
     logger.error({ err: err.message, url }, "Python scraper subprocess failed");
     return {
