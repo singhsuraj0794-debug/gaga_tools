@@ -9,6 +9,7 @@ import FlipkartScraper from "@/pages/FlipkartScraper";
 import MeeshoScraper from "@/pages/MeeshoScraper";
 import AmazonScraper from "@/pages/AmazonScraper";
 import PriceMapper from "@/pages/PriceMapper";
+import MonitoringDashboard from "@/pages/MonitoringDashboard";
 import { setBaseUrl } from "@workspace/api-client-react";
 
 setBaseUrl("https://product-video-scraper-api.onrender.com");
@@ -32,6 +33,7 @@ function Router() {
       <Route path="/price-mapper" component={PriceMapper} />
       <Route path="/flipkart-scraper" component={FlipkartScraper} />
       <Route path="/amazon-scraper" component={AmazonScraper} />
+      <Route path="/monitoring" component={MonitoringDashboard} />
       <Route component={NotFound} />
     </Switch>
   );
