@@ -124,7 +124,7 @@ def run_feature_checks() -> list[dict]:
                 {"name": "price_display", "type": "visible", "selector": "#varient-price, [class*='price'], [class*='Price']"},
                 {"name": "start_bargaining_btn", "type": "visible", "selector": "button:has-text('Start Bargaining'), #varient-price button"},
                 {"name": "asking_price", "type": "visible", "selector": "text=Asking price, text=₹, [class*='asking']"},
-                {"name": "ratings_section", "type": "visible", "selector": "[class*='rating'], img[alt*='rating'], text=ratings"},
+                {"name": "ratings_section", "type": "visible", "selector": "[class*='rating'], img[class*='rating'], text=ratings"},
             ]
             log(f"Running {len(pdp_checks)} product detail feature checks")
             for r in check_elements(page, pdp_checks):

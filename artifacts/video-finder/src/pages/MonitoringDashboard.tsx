@@ -346,12 +346,56 @@ export default function MonitoringDashboard() {
                   })}
                 </SectionCard>
 
-                {grouped.server.length > 0 && (
-                  <GroupMetrics runs={grouped.server} title="Server Health" icon={<Server className="h-3.5 w-3.5" />} />
-                )}
-                {grouped.api.length > 0 && (
-                  <GroupMetrics runs={grouped.api} title="API Endpoints" icon={<Cpu className="h-3.5 w-3.5" />} />
-                )}
+                {grouped.server.length > 0 && (() => {
+                  const latestRun = getLatestRunTime();
+                  const serverLatest = grouped.server.filter(r => r.run_at === latestRun);
+                  const byEndpoint = new Map<string, typeof serverLatest>();
+                  for (const r of serverLatest) {
+                    const name = r.page.replace("server/", "");
+                    if (!byEndpoint.has(name)) byEndpoint.set(name, []);
+                    byEndpoint.get(name)!.push(r);
+                  }
+                  return (
+                    <SectionCard title="Server Health" icon={<Server className="h-3.5 w-3.5" />}>
+                      {[...byEndpoint.entries()].map(([name, endpointRuns]) => (
+                        <div key={name} className="mb-2 last:mb-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-medium text-slate-700">{name}</span>
+                            <Badge status={endpointRuns.some(r => r.status === "fail") ? "fail" : endpointRuns.some(r => r.status === "degraded") ? "degraded" : "pass"} />
+                          </div>
+                          {endpointRuns.map(r => (
+                            <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} />
+                          ))}
+                        </div>
+                      ))}
+                    </SectionCard>
+                  );
+                })()}
+                {grouped.api.length > 0 && (() => {
+                  const latestRun = getLatestRunTime();
+                  const apiLatest = grouped.api.filter(r => r.run_at === latestRun);
+                  const byEndpoint = new Map<string, typeof apiLatest>();
+                  for (const r of apiLatest) {
+                    const name = r.page.replace("api/", "");
+                    if (!byEndpoint.has(name)) byEndpoint.set(name, []);
+                    byEndpoint.get(name)!.push(r);
+                  }
+                  return (
+                    <SectionCard title="API Endpoints" icon={<Cpu className="h-3.5 w-3.5" />}>
+                      {[...byEndpoint.entries()].map(([name, endpointRuns]) => (
+                        <div key={name} className="mb-2 last:mb-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-medium text-slate-700">{name}</span>
+                            <Badge status={endpointRuns.some(r => r.status === "fail") ? "fail" : endpointRuns.some(r => r.status === "degraded") ? "degraded" : "pass"} />
+                          </div>
+                          {endpointRuns.map(r => (
+                            <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} />
+                          ))}
+                        </div>
+                      ))}
+                    </SectionCard>
+                  );
+                })()}
               </div>
             </div>
 

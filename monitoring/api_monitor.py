@@ -4,9 +4,9 @@ import urllib.request
 import json
 
 API_ENDPOINTS = [
-    {"name": "healthz", "method": "GET", "url": "https://product-video-scraper-api.onrender.com/api/healthz"},
-    {"name": "products_status", "method": "GET", "url": "https://product-video-scraper-api.onrender.com/api/products/status"},
-    {"name": "price_mappings", "method": "GET", "url": "https://product-video-scraper-api.onrender.com/api/price-mapper/mappings"},
+    {"name": "Health Check (healthz)", "method": "GET", "url": "https://product-video-scraper-api.onrender.com/api/healthz"},
+    {"name": "Products Status (products/status)", "method": "GET", "url": "https://product-video-scraper-api.onrender.com/api/products/status"},
+    {"name": "Price Mappings (price-mapper/mappings)", "method": "GET", "url": "https://product-video-scraper-api.onrender.com/api/price-mapper/mappings"},
 ]
 
 

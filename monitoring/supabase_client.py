@@ -31,7 +31,14 @@ class SupabaseStore:
         try:
             self._client.table("monitoring_runs").insert(row).execute()
         except Exception as e:
-            print(f"[SUPABASE] Insert error: {e}")
+            if "details" in str(e) and details:
+                row.pop("details", None)
+                try:
+                    self._client.table("monitoring_runs").insert(row).execute()
+                except Exception as e2:
+                    print(f"[SUPABASE] Insert error (retry): {e2}")
+            else:
+                print(f"[SUPABASE] Insert error: {e}")
 
     def store_audit_results(self, page: str, metrics: dict, status: str):
         for metric, value in metrics.items():
