@@ -495,12 +495,11 @@ def _check_bargain_ui(page) -> bool:
 
 
 def _pick_random_product(page) -> str | None:
-    """Pick a random product from visible products, verify it has actual bargain UI (slider)."""
+    """Pick a random VISIBLE product that has the Start Bargaining button."""
     try:
         page.goto("https://gajab.com/product-list/all", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
         time.sleep(1)
-        # Only select from VISIBLE product links (on-screen)
         visible_links = []
         all_links = page.locator("a[href*='/product-detail/']")
         count = all_links.count()
@@ -519,7 +518,6 @@ def _pick_random_product(page) -> str | None:
             page.goto(url, timeout=15000, wait_until="domcontentloaded")
             page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
             time.sleep(1)
-            # Check Start Bargaining button exists
             has_btn = page.evaluate("""() => {
                 const vp = document.getElementById('varient-price');
                 if (!vp) return false;
@@ -528,37 +526,11 @@ def _pick_random_product(page) -> str | None:
                 }
                 return false;
             }""")
-            if not has_btn:
-                log(f"Visible product {idx}: no Start Bargaining button")
-                continue
-            # Click it and check for slider (bargain UI)
-            page.evaluate("""() => {
-                const vp = document.getElementById('varient-price');
-                if (!vp) return;
-                for (const btn of vp.querySelectorAll('button')) {
-                    if (btn.textContent.includes('Start Bargaining')) {
-                        btn.removeAttribute('disabled');
-                        btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                        return;
-                    }
-                }
-            }""")
-            time.sleep(3)
-            has_slider = page.evaluate("""() => {
-                const ranges = document.querySelectorAll('input[type="range"]');
-                for (const r of ranges) {
-                    if (r.getBoundingClientRect().width > 100 && parseFloat(r.max) > 1) return true;
-                }
-                return false;
-            }""")
-            if has_slider:
-                log(f"Visible product with bargain UI: {url}")
-                # Dismiss bargain modal before returning
-                page.keyboard.press("Escape")
-                time.sleep(0.5)
+            if has_btn:
+                log(f"Visible product with bargaining button: {url}")
                 return url
-            log(f"Visible product {idx}: button found but no slider, trying another")
-        log("No visible product with bargain slider found")
+            log(f"Visible product {idx}: no Start Bargaining button")
+        log("No visible product with bargaining button found")
         return None
     except Exception as e:
         log(f"Product selection failed: {e}")
