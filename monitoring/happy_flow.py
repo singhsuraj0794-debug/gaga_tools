@@ -127,7 +127,37 @@ def _do_bargain_flow(page, results: list):
     t0 = time.time()
     sub_steps = []
 
-    log("Step 4a — Locating Start Bargaining button")
+    log("Step 4a — Setting delivery pincode")
+    pc_btn = page.locator("button:has-text('pincode'), button:has-text('Pincode'), button:has-text('city')")
+    if pc_btn.count() > 0 and pc_btn.first.is_visible(timeout=2000):
+        pc_btn.first.click()
+        time.sleep(1)
+        pc_input = page.locator("input[type='text']")
+        pincode_set = False
+        for i in range(pc_input.count()):
+            inp = pc_input.nth(i)
+            if inp.is_visible():
+                inp.fill("400001")
+                time.sleep(0.5)
+                page.keyboard.press("Enter")
+                time.sleep(1)
+                pincode_set = True
+                log("Pincode 400001 entered")
+                break
+        sub_steps.append({"check": "set_pincode", "status": "pass" if pincode_set else "degraded", "detail": "Pincode 400001 set" if pincode_set else "No pincode input found"})
+    else:
+        # Check for location text asking to set delivery location
+        location_prompt = page.evaluate("""() => {
+            const body = document.body.innerText;
+            return body.includes('Add delivery location') || body.includes('Enter pincode') || body.includes('delivery location');
+        }""")
+        if location_prompt:
+            log("Location prompt detected but no pincode button visible")
+            sub_steps.append({"check": "set_pincode", "status": "degraded", "detail": "Location prompt visible but pincode button not clickable"})
+        else:
+            sub_steps.append({"check": "set_pincode", "status": "pass", "detail": "Pincode already set or not required")}
+
+    log("Step 4b — Locating Start Bargaining button")
     btn_info = page.evaluate("""() => {
         const vp = document.getElementById('varient-price');
         if (!vp) return null;
@@ -150,12 +180,12 @@ def _do_bargain_flow(page, results: list):
     sub_steps.append({"check": "start_bargaining_button", "status": "pass", "detail": "Button found and clicked"})
 
     page.mouse.click(btn_info["x"], btn_info["y"])
-    log("Step 4b — Start Bargaining clicked")
+    log("Step 4c — Start Bargaining clicked")
     time.sleep(2)
     _dismiss_overlays(page)
     sub_steps.append({"check": "bargain_modal_opened", "status": "pass", "detail": "Overlay dismissed after click"})
 
-    log("Step 4c — Setting offer price via slider")
+    log("Step 4d — Setting offer price via slider")
     slider_result = page.evaluate("""() => {
         const ranges = document.querySelectorAll('input[type="range"]');
         for (const r of ranges) {
@@ -181,7 +211,7 @@ def _do_bargain_flow(page, results: list):
         sub_steps.append({"check": "price_slider", "status": "pass", "detail": f"Slider set (min={slider_result['min']}, max={slider_result['max']})"})
     time.sleep(0.5)
 
-    log("Step 4d — Clicking Offer Your Price button")
+    log("Step 4e — Clicking Offer Your Price button")
     offered = False
     for sel in [
         "button:has-text('Offer Your Price')",
@@ -214,7 +244,7 @@ def _do_bargain_flow(page, results: list):
 
     time.sleep(3)
 
-    log("Step 4e — Checking for Accept offer button")
+    log("Step 4f — Checking for Accept offer button")
     accepted = False
     for sel in ["button:has-text('Accept the offer')", "button:has-text('Accept')"]:
         loc = page.locator(sel)
