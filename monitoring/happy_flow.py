@@ -162,15 +162,10 @@ def _do_bargain_flow(page, results: list):
         const vp = document.getElementById('varient-price');
         if (!vp) return false;
         let clicked_any = false;
-        // Click any Start Bargaining button inside varient-price
         for (const btn of vp.querySelectorAll('button')) {
             if (btn.textContent.includes('Start Bargaining')) {
+                // Only remove disabled attribute - don't change any visual styles
                 btn.removeAttribute('disabled');
-                btn.style.pointerEvents = 'auto !important';
-                btn.style.opacity = '1';
-                btn.style.visibility = 'visible';
-                btn.style.position = 'relative';
-                btn.style.zIndex = '99999';
                 btn.scrollIntoView({behavior:'instant',block:'center'});
                 const event = new MouseEvent('click', {
                     view: window, bubbles: true, cancelable: true,
