@@ -418,13 +418,20 @@ def _do_search_flow(page, results: list):
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
         time.sleep(1)
 
-        search_icon = page.locator("img[src*='search'], [placeholder*='Search'], input[type='search'], img[alt*='search']").first
-        if search_icon.is_visible(timeout=3000):
+        search_icon = page.locator("img[src*='search-icon'], img[src*='search'], [placeholder*='Search'], input[type='search'], [class*='search']").first
+        if search_icon.count() > 0 and search_icon.is_visible(timeout=3000):
             search_icon.click()
-            time.sleep(1)
+            time.sleep(1.5)
             sub_steps.append({"check": "search_opened", "status": "pass", "detail": "Search icon clicked"})
         else:
-            sub_steps.append({"check": "search_opened", "status": "degraded", "detail": "Search icon not found"})
+            # Try clicking via JS
+            clicked = page.evaluate("""() => {
+                const icons = document.querySelectorAll('img[src*=\"search\"], [class*=\"search\"]');
+                for (const el of icons) { if (el.offsetParent !== null) { el.click(); return true; } }
+                return false;
+            }""")
+            sub_steps.append({"check": "search_opened", "status": "pass" if clicked else "degraded", "detail": "Search clicked via JS" if clicked else "Search icon not found"})
+            time.sleep(1)
 
         search_input = page.locator("input[placeholder*='Search'], input[type='search']").first
         if search_input.is_visible(timeout=3000):
