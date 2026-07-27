@@ -495,25 +495,25 @@ def _check_bargain_ui(page) -> bool:
 
 
 def _pick_random_product(page) -> str | None:
-    """Navigate to category page and pick a random product that has actual bargaining UI (slider)."""
+    """Pick a random product from visible products, verify it has actual bargain UI (slider)."""
     try:
         page.goto("https://gajab.com/product-list/all", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
         time.sleep(1)
-        links = page.locator("a[href*='/product-detail/']")
-        count = links.count()
-        if count == 0:
-            log("No product links found on category page")
+        # Only select from VISIBLE product links (on-screen)
+        visible_links = []
+        all_links = page.locator("a[href*='/product-detail/']")
+        count = all_links.count()
+        for i in range(count):
+            if all_links.nth(i).is_visible():
+                visible_links.append(i)
+        if not visible_links:
+            log("No visible product links found")
             return None
         import random
-        attempts = min(count - 1, 20)
-        tried = set()
-        for _ in range(6):
-            idx = random.randint(0, attempts)
-            while idx in tried and len(tried) < attempts:
-                idx = random.randint(0, attempts)
-            tried.add(idx)
-            url = links.nth(idx).get_attribute("href")
+        random.shuffle(visible_links)
+        for idx in visible_links[:8]:
+            url = all_links.nth(idx).get_attribute("href")
             if url and not url.startswith("http"):
                 url = "https://gajab.com" + url
             page.goto(url, timeout=15000, wait_until="domcontentloaded")
@@ -529,11 +529,36 @@ def _pick_random_product(page) -> str | None:
                 return false;
             }""")
             if not has_btn:
-                log(f"Product {idx}: no Start Bargaining button")
+                log(f"Visible product {idx}: no Start Bargaining button")
                 continue
-            log(f"Product with bargaining button: {url}")
-            return url
-        log("No product with bargaining found")
+            # Click it and check for slider (bargain UI)
+            page.evaluate("""() => {
+                const vp = document.getElementById('varient-price');
+                if (!vp) return;
+                for (const btn of vp.querySelectorAll('button')) {
+                    if (btn.textContent.includes('Start Bargaining')) {
+                        btn.removeAttribute('disabled');
+                        btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                        return;
+                    }
+                }
+            }""")
+            time.sleep(3)
+            has_slider = page.evaluate("""() => {
+                const ranges = document.querySelectorAll('input[type="range"]');
+                for (const r of ranges) {
+                    if (r.getBoundingClientRect().width > 100 && parseFloat(r.max) > 1) return true;
+                }
+                return false;
+            }""")
+            if has_slider:
+                log(f"Visible product with bargain UI: {url}")
+                # Dismiss bargain modal before returning
+                page.keyboard.press("Escape")
+                time.sleep(0.5)
+                return url
+            log(f"Visible product {idx}: button found but no slider, trying another")
+        log("No visible product with bargain slider found")
         return None
     except Exception as e:
         log(f"Product selection failed: {e}")
