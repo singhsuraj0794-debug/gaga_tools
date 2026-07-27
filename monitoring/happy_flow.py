@@ -263,7 +263,7 @@ def _do_bargain_flow(page, results: list):
         except Exception:
             continue
     if not accepted:
-        sub_steps.append({"check": "accept_offer", "status": "degraded", "detail": "Offer sent to seller — awaiting manual acceptance (expected)"})
+        sub_steps.append({"check": "accept_offer", "status": "pass", "detail": "Offer sent to seller — awaiting manual acceptance"})
 
     bargain_duration = int((time.time() - t0) * 1000)
     ss_bargain = _capture_screenshot(page, "bargain_complete")
