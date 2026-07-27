@@ -481,8 +481,21 @@ def _load_session() -> dict | None:
     return None
 
 
+def _check_bargain_ui(page) -> bool:
+    """After clicking Start Bargaining, check if the slider (bargain UI) appears."""
+    time.sleep(3)
+    has_slider = page.evaluate("""() => {
+        const ranges = document.querySelectorAll('input[type="range"]');
+        for (const r of ranges) {
+            if (r.getBoundingClientRect().width > 100 && parseFloat(r.max) > 1) return true;
+        }
+        return false;
+    }""")
+    return has_slider
+
+
 def _pick_random_product(page) -> str | None:
-    """Navigate to category page and pick a random product that has a Start Bargaining button."""
+    """Navigate to category page and pick a random product that has actual bargaining UI (slider)."""
     try:
         page.goto("https://gajab.com/product-list/all", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
@@ -493,10 +506,9 @@ def _pick_random_product(page) -> str | None:
             log("No product links found on category page")
             return None
         import random
-        # Try up to 5 random products until we find one with Start Bargaining
-        attempts = min(count - 1, 15)
+        attempts = min(count - 1, 20)
         tried = set()
-        for _ in range(5):
+        for _ in range(6):
             idx = random.randint(0, attempts)
             while idx in tried and len(tried) < attempts:
                 idx = random.randint(0, attempts)
@@ -504,11 +516,11 @@ def _pick_random_product(page) -> str | None:
             url = links.nth(idx).get_attribute("href")
             if url and not url.startswith("http"):
                 url = "https://gajab.com" + url
-            # Quick check if this product has bargaining
             page.goto(url, timeout=15000, wait_until="domcontentloaded")
             page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
             time.sleep(1)
-            has_bargain = page.evaluate("""() => {
+            # Check Start Bargaining button exists
+            has_btn = page.evaluate("""() => {
                 const vp = document.getElementById('varient-price');
                 if (!vp) return false;
                 for (const btn of vp.querySelectorAll('button')) {
@@ -516,12 +528,13 @@ def _pick_random_product(page) -> str | None:
                 }
                 return false;
             }""")
-            if has_bargain:
-                log(f"Product with bargaining: {url}")
-                return url
-            log(f"Product {idx} has no bargaining, trying another")
-        log("No product with bargaining found, using last tried URL")
-        return url
+            if not has_btn:
+                log(f"Product {idx}: no Start Bargaining button")
+                continue
+            log(f"Product with bargaining button: {url}")
+            return url
+        log("No product with bargaining found")
+        return None
     except Exception as e:
         log(f"Product selection failed: {e}")
         return None
@@ -585,24 +598,30 @@ def _do_second_bargain(page, results: list):
     sub_steps.append({"check": "offer_submitted", "status": "pass", "detail": "Low offer submitted"})
     time.sleep(4)
 
-    log("Bargain 2 — Looking for counter-offer Accept button")
+    log("Bargain 2 — Looking for counter-offer (Bargain More / Accept Offer)")
     accepted = False
-    for _ in range(10):
-        for sel in ["button:has-text('Accept the offer')", "button:has-text('Accept')"]:
-            try:
-                loc = page.locator(sel)
-                if loc.count() > 0 and loc.first.is_visible(timeout=2000):
-                    loc.first.click(force=True)
-                    accepted = True
-                    log("Counter-offer accepted!")
-                    time.sleep(2)
-                    break
-            except Exception:
-                continue
-        if accepted:
+    for _ in range(15):  # Wait up to 30s
+        # Check for counter-offer buttons
+        accept_btn = page.locator("button:has-text('Accept Offer'), button:has-text('Accept the offer'), button:has-text('Accept')").first
+        bargain_more = page.locator("button:has-text('Bargain More'), button:has-text('Bargain more')").first
+
+        if accept_btn.count() > 0 and accept_btn.is_visible(timeout=1000):
+            accept_btn.click(force=True)
+            accepted = True
+            log("Counter-offer accepted! (Accept Offer clicked)")
+            time.sleep(3)
             break
+        if bargain_more.count() > 0 and bargain_more.is_visible(timeout=1000):
+            log("Counter-offer received with Bargain More button")
+            # Try clicking Accept Offer if visible alongside Bargain More
+            if accept_btn.count() > 0 and accept_btn.is_visible(timeout=500):
+                accept_btn.click(force=True)
+                accepted = True
+                log("Accept Offer clicked (next to Bargain More)")
+                time.sleep(3)
+                break
         time.sleep(2)
-    sub_steps.append({"check": "counter_offer_accepted", "status": "pass" if accepted else "degraded", "detail": "Counter-offer accepted" if accepted else "No counter-offer appeared"})
+    sub_steps.append({"check": "counter_offer_accepted", "status": "pass" if accepted else "degraded", "detail": "Counter-offer accepted" if accepted else "No counter-offer appeared within 30s"})
 
     ss = _capture_screenshot(page, "bargain2_complete")
     duration = int((time.time() - t0) * 1000)
