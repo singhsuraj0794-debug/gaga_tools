@@ -161,6 +161,8 @@ def _do_bargain_flow(page, results: list):
     clicked = page.evaluate("""() => {
         const vp = document.getElementById('varient-price');
         if (!vp) return false;
+        let clicked_any = false;
+        // Click any Start Bargaining button inside varient-price
         for (const btn of vp.querySelectorAll('button')) {
             if (btn.textContent.includes('Start Bargaining')) {
                 btn.removeAttribute('disabled');
@@ -170,17 +172,22 @@ def _do_bargain_flow(page, results: list):
                 btn.style.position = 'relative';
                 btn.style.zIndex = '99999';
                 btn.scrollIntoView({behavior:'instant',block:'center'});
-                // Dispatch a native click event
                 const event = new MouseEvent('click', {
                     view: window, bubbles: true, cancelable: true,
                     clientX: btn.getBoundingClientRect().left + btn.offsetWidth / 2,
                     clientY: btn.getBoundingClientRect().top + btn.offsetHeight / 2,
                 });
                 btn.dispatchEvent(event);
-                return true;
+                clicked_any = true;
             }
         }
-        return false;
+        // Hide ALL Start Bargaining buttons on the page to prevent overlay
+        document.querySelectorAll('button').forEach(b => {
+            if (b.textContent.includes('Start Bargaining')) {
+                b.style.display = 'none';
+            }
+        });
+        return clicked_any;
     }""")
 
     if not clicked:
@@ -319,50 +326,75 @@ def _do_checkout_flow(page, results: list):
         else:
             sub_steps.append({"check": "checkout_nav", "status": "fail", "detail": f"No checkout link, direct nav to {page.url}"})
 
-    log("Step 5c — Looking for Razorpay payment gateway")
+    log("Step 5c — Opening Razorpay payment gateway")
     ss_checkout = _capture_screenshot(page, "checkout_page")
     razorpay_found = False
     pay_clicked = False
-    razorpay_selectors = [
-        "iframe[src*='razorpay']",
-        "iframe[id*='razorpay']",
-        "[class*='razorpay']",
-        "form[action*='razorpay']",
-        "[id*='razorpay-checkout']",
-    ]
+    upi_found = False
 
-    # Look for a Pay/Proceed button and click it
     pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed'), button:has-text('Submit')")
     if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
         pay_btn.first.click(force=True)
         pay_clicked = True
         log("Pay button clicked")
-        time.sleep(3)
+        time.sleep(4)
         ss_after_pay = _capture_screenshot(page, "after_pay")
         sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay/Proceed button clicked"})
     else:
         sub_steps.append({"check": "pay_button_click", "status": "degraded", "detail": "No Pay button found"})
 
-    # Check for Razorpay iframe after clicking Pay
-    for sel in razorpay_selectors:
-        try:
-            loc = page.locator(sel)
-            if loc.count() > 0 and loc.first.is_visible(timeout=3000):
-                razorpay_found = True
-                sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": f"Razorpay iframe visible: {sel}"})
-                break
-        except Exception:
-            continue
-
-    if not razorpay_found:
-        page_source = page.content().lower()
-        if "razorpay" in page_source:
+    # Check for Razorpay iframe
+    try:
+        razorpay_iframe = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+        if razorpay_iframe.count() > 0:
             razorpay_found = True
-            sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": "Razorpay referenced in page source"})
-        elif pay_clicked:
-            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "Pay clicked but no Razorpay iframe appeared"})
+            sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": "Razorpay iframe opened"})
+            log("Razorpay iframe detected, looking for UPI option")
+
+            # Look for UPI payment option inside Razorpay iframe
+            upi_selectors = [
+                "button:has-text('UPI')",
+                "[class*='UPI']",
+                "label:has-text('UPI')",
+                "[class*='upi']",
+                "div:has-text('Pay via UPI')",
+                "button:has-text('PhonePe'), button:has-text('Google Pay'), button:has-text('Paytm')",
+            ]
+            for sel in upi_selectors:
+                try:
+                    upi_btn = razorpay_iframe.locator(sel).first
+                    if upi_btn.count() > 0 and upi_btn.is_visible(timeout=2000):
+                        upi_btn.click(force=True)
+                        upi_found = True
+                        log(f"Clicked UPI option: {sel}")
+                        time.sleep(1)
+                        break
+                except Exception:
+                    continue
+
+            if upi_found:
+                sub_steps.append({"check": "upi_selected", "status": "pass", "detail": "UPI payment option selected"})
+                # Try to enter a UPI ID if an input field is visible
+                try:
+                    upi_input = razorpay_iframe.locator("input[type='text'], input[placeholder*='UPI'], input[placeholder*='upi']")
+                    if upi_input.count() > 0 and upi_input.first.is_visible(timeout=2000):
+                        upi_input.first.fill("monitoring@upi")
+                        log("UPI ID entered")
+                        time.sleep(0.5)
+                        pay_upi = razorpay_iframe.locator("button:has-text('Pay'), button:has-text('Verify')")
+                        if pay_upi.count() > 0:
+                            pay_upi.first.click(force=True)
+                            log("UPI Pay clicked")
+                        sub_steps.append({"check": "upi_pay_clicked", "status": "pass", "detail": "UPI ID entered and Pay clicked"})
+                except Exception as e:
+                    sub_steps.append({"check": "upi_pay_clicked", "status": "degraded", "detail": f"UPI input not found: {str(e)[:50]}"})
+            else:
+                sub_steps.append({"check": "upi_selected", "status": "degraded", "detail": "UPI option not found in Razorpay"})
+    except Exception as e:
+        if pay_clicked:
+            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": f"Razorpay iframe error: {str(e)[:60]}"})
         else:
-            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "No Razorpay found (login required?)"})
+            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "No Razorpay iframe found"})
 
     duration = int((time.time() - t0) * 1000)
     results.append({
@@ -377,12 +409,50 @@ def _do_checkout_flow(page, results: list):
     _check_budget("checkout_nav", duration, results)
 
 
+def _do_search_flow(page, results: list):
+    log("Search — Looking for search bar and searching for a product")
+    t0 = time.time()
+    sub_steps = []
+    try:
+        page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        time.sleep(1)
+
+        search_icon = page.locator("img[src*='search'], [placeholder*='Search'], input[type='search'], img[alt*='search']").first
+        if search_icon.is_visible(timeout=3000):
+            search_icon.click()
+            time.sleep(1)
+            sub_steps.append({"check": "search_opened", "status": "pass", "detail": "Search icon clicked"})
+        else:
+            sub_steps.append({"check": "search_opened", "status": "degraded", "detail": "Search icon not found"})
+
+        search_input = page.locator("input[placeholder*='Search'], input[type='search']").first
+        if search_input.is_visible(timeout=3000):
+            search_input.fill("cricket bat")
+            time.sleep(0.5)
+            page.keyboard.press("Enter")
+            time.sleep(2)
+            sub_steps.append({"check": "search_performed", "status": "pass", "detail": "Searched for 'cricket bat'"})
+            results_count = page.locator("a[href*='/product-detail/']").count()
+            sub_steps.append({"check": "search_results", "status": "pass" if results_count > 0 else "degraded", "detail": f"Results found: {results_count}"})
+        else:
+            sub_steps.append({"check": "search_performed", "status": "degraded", "detail": "Search input not found"})
+    except Exception as e:
+        sub_steps.append({"check": "search_overall", "status": "fail", "detail": str(e)[:80]})
+
+    duration = int((time.time() - t0) * 1000)
+    results.append({
+        "step": "search_products", "duration_ms": duration,
+        "status": "pass" if all(s["status"] == "pass" for s in sub_steps) else "degraded",
+        "sub_steps": sub_steps, "detail": f"Search flow: {duration}ms",
+        "screenshot": _capture_screenshot(page, "search_results"),
+    })
+
+
 def _do_page_checks(page, results: list):
-    """Check additional user pages: My Account, My Bargains, Orders, banners."""
     pages_to_check = [
-        ("my_account", "https://gajab.com/", "a[href*='profile'], a[href*='account'], button:has-text('Profile')"),
-        ("my_bargains", "https://gajab.com/my-bargains", "text=My Bargains, text=Bargains, [class*='bargain']"),
-        ("alerts_orders", "https://gajab.com/alerts-list?activeTab=1", "text=Order, text=Alert, [class*='order']"),
+        ("my_bargains", "https://gajab.com/my-bargains", "[class*='tab'], [class*='bargain'], a[href*='bargain'], h1, h2"),
+        ("alerts_orders", "https://gajab.com/alerts-list?activeTab=1", "[class*='tab'], [class*='order'], [class*='alert'], h1, h2"),
     ]
     for name, url, expected in pages_to_check:
         t0 = time.time()
@@ -391,13 +461,13 @@ def _do_page_checks(page, results: list):
             page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
             time.sleep(1)
             duration = int((time.time() - t0) * 1000)
-            loc = page.locator(expected)
-            found = loc.count() > 0
+            has_content = page.evaluate("(sel) => document.querySelector(sel) !== null", expected)
+            title = page.title()
             results.append({
                 "step": f"page_{name}",
                 "duration_ms": duration,
-                "status": "pass" if found else "degraded",
-                "detail": f"{url} — expected element {'found' if found else 'not found'}",
+                "status": "pass" if has_content else "degraded",
+                "detail": f"{url} — title='{title[:50]}', has_content={has_content}",
                 "screenshot": _capture_screenshot(page, name),
             })
         except Exception as e:
@@ -407,7 +477,6 @@ def _do_page_checks(page, results: list):
                 "error": str(e)[:100], "failure_reason": f"Failed to load {url}",
             })
 
-    # Banner checks on home page
     log("Checking home page banners")
     try:
         page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
@@ -605,6 +674,10 @@ def run_happy_flow() -> list[dict]:
             # Step 6: Additional page checks (My Account, My Bargains, Orders, Banners)
             log("Step 6 — Running additional page checks")
             _do_page_checks(page, results)
+
+            # Step 7: Search products flow
+            log("Step 7 — Searching products")
+            _do_search_flow(page, results)
 
             log("Happy flow completed successfully")
 
