@@ -481,19 +481,6 @@ def _load_session() -> dict | None:
     return None
 
 
-def _check_bargain_ui(page) -> bool:
-    """After clicking Start Bargaining, check if the slider (bargain UI) appears."""
-    time.sleep(3)
-    has_slider = page.evaluate("""() => {
-        const ranges = document.querySelectorAll('input[type="range"]');
-        for (const r of ranges) {
-            if (r.getBoundingClientRect().width > 100 && parseFloat(r.max) > 1) return true;
-        }
-        return false;
-    }""")
-    return has_slider
-
-
 def _pick_random_product(page) -> str | None:
     """Pick a random VISIBLE product that has the Start Bargaining button."""
     try:
