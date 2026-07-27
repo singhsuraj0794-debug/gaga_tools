@@ -86,12 +86,21 @@ def main():
     print("\n--- Happy-Flow Check ---", flush=True)
     flow_results = run_happy_flow()
     flow_overall = "pass"
+    session_video_url = None
     for step in flow_results:
         step_name = step["step"]
         step_status = step["status"]
         duration = step["duration_ms"]
         error = step.get("error")
         detail = step.get("detail", "")
+
+        # Upload session recording to Supabase Storage
+        if step_name == "session_recording" and step.get("video_path"):
+            video_url = store.upload_video(step["video_path"])
+            if video_url:
+                session_video_url = video_url
+            continue
+
         screenshot = step.get("screenshot", {})
         failure_reason = step.get("failure_reason")
         console_errors = step.get("console_errors", [])
@@ -107,6 +116,8 @@ def main():
         }
         if screenshot.get("path"):
             details["screenshot_path"] = screenshot["path"]
+        if session_video_url:
+            details["session_recording_url"] = session_video_url
         store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details)
         if step_status in ("fail", "degraded"):
             flow_overall = step_status

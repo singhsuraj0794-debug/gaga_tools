@@ -335,6 +335,7 @@ def _check_budget(budget_key: str, duration_ms: int, results: list):
 
 def run_happy_flow() -> list[dict]:
     results = []
+    video_path = None
     product_url = "https://gajab.com/product-detail/prestige-pvc-80-veggie-cutter-with-3-stainless-steel-blades-jumbo-bowl-black/4305598878914"
 
     log("Starting happy-flow check")
@@ -350,6 +351,7 @@ def run_happy_flow() -> list[dict]:
             permissions=["geolocation"],
             locale="en-IN",
             timezone_id="Asia/Kolkata",
+            record_video_dir=str(_SCREENSHOT_DIR / "recordings"),
         )
         page = context.new_page()
 
@@ -459,6 +461,23 @@ def run_happy_flow() -> list[dict]:
             })
 
         finally:
+            try:
+                if page.video:
+                    vpath = page.video.path()
+                    if vpath and Path(vpath).exists():
+                        video_path = str(vpath)
+                        size_kb = Path(vpath).stat().st_size / 1024
+                        log(f"Session recording saved: {video_path} ({size_kb:.0f}KB)")
+                        results.append({
+                            "step": "session_recording",
+                            "duration_ms": 0,
+                            "status": "pass",
+                            "detail": f"Recording saved ({size_kb:.0f}KB)",
+                            "screenshot": None,
+                            "video_path": video_path,
+                        })
+            except Exception as e:
+                log(f"Video save error: {e}")
             context.close()
             browser.close()
 

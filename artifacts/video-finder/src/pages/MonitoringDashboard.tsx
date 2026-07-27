@@ -79,6 +79,23 @@ function Val({ metric, value }: { metric: string; value: number | null }) {
   return <span className="font-mono text-sm font-medium">{fmt}</span>;
 }
 
+function VideoPlayer({ url, label }: { url?: string; label: string }) {
+  const [open, setOpen] = useState(false);
+  if (!url) return null;
+  return (
+    <div className="mt-1.5">
+      <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700">
+        ▶ {open ? "Hide" : "Watch"} session recording
+      </button>
+      {open && (
+        <video controls className="mt-1.5 rounded border max-w-full max-h-64 bg-black">
+          <source src={url} type="video/webm" />
+        </video>
+      )}
+    </div>
+  );
+}
+
 function Screenshot({ base64, label }: { base64?: string; label: string }) {
   const [open, setOpen] = useState(false);
   if (!base64) return null;
@@ -147,6 +164,7 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
               </div>
             )}
             <Screenshot base64={run.details?.screenshot_base64} label={stepName} />
+            <VideoPlayer url={run.details?.session_recording_url} label={stepName} />
           </div>
         </div>
       </CardContent>

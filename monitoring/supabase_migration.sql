@@ -32,3 +32,13 @@ CREATE POLICY "anon_can_insert" ON monitoring_runs
 
 CREATE POLICY "service_can_all" ON monitoring_runs
   FOR ALL USING (true);
+
+-- Storage bucket for monitoring recordings
+INSERT INTO storage.buckets (id, name, public) VALUES ('monitoring', 'monitoring', true)
+  ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "anon_can_view_recordings" ON storage.objects
+  FOR SELECT USING (bucket_id = 'monitoring');
+
+CREATE POLICY "anon_can_upload_recordings" ON storage.objects
+  FOR INSERT WITH CHECK (bucket_id = 'monitoring');
