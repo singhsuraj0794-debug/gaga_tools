@@ -65,21 +65,22 @@ def main():
     for result in audit_results:
         page = result["page"]
         metrics = result["metrics"]
-        status = result["status"]
         violations = result["violations"]
-        print(f"  {page}: status={status} metrics={metrics}", flush=True)
-        store.store_audit_results(page, metrics, status)
-        if status == "fail":
-            failures.append(f"Lighthouse/{page}: {', '.join(violations)}")
+        violated_metrics = set()
+        for v in violations:
+            for m in metrics:
+                if m in v:
+                    violated_metrics.add(m)
+        print(f"  {page}: violations={violations} metrics={metrics}", flush=True)
+        for metric_name, metric_value in metrics.items():
+            metric_status = "fail" if metric_name in violated_metrics else "pass"
+            store.store_result(page_or_flow=page, metric=metric_name, value=metric_value, status=metric_status)
+        if violations:
+            page_violations = [v for v in violations]
+            failures.append(f"Lighthouse/{page}: {', '.join(page_violations)}")
             send_alert(
-                f"Lighthouse audit failed: {page}",
-                f"Status: {status}\nMetrics: {metrics}\nViolations: {', '.join(violations)}",
-            )
-        elif violations:
-            failures.append(f"Lighthouse/{page}: degraded - {', '.join(violations)}")
-            send_alert(
-                f"Lighthouse degraded: {page}",
-                f"Metrics: {metrics}\nViolations: {', '.join(violations)}",
+                f"Lighthouse audit issues: {page}",
+                f"Violations: {', '.join(page_violations)}\nMetrics: {metrics}",
             )
 
     # ── Part 4: Happy-Flow Check ──
