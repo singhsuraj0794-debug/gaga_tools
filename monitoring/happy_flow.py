@@ -181,10 +181,11 @@ def _do_bargain_flow(page, results: list):
                 clicked_any = true;
             }
         }
-        // Hide ALL Start Bargaining buttons on the page to prevent overlay
+        // Lower opacity of other Start Bargaining buttons to prevent visual overlay
         document.querySelectorAll('button').forEach(b => {
-            if (b.textContent.includes('Start Bargaining')) {
-                b.style.display = 'none';
+            if (b.textContent.includes('Start Bargaining') && b !== vp?.querySelector('button')) {
+                b.style.opacity = '0.3';
+                b.style.pointerEvents = 'none';
             }
         });
         return clicked_any;
