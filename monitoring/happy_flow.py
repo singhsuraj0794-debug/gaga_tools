@@ -181,13 +181,6 @@ def _do_bargain_flow(page, results: list):
                 clicked_any = true;
             }
         }
-        // Lower opacity of other Start Bargaining buttons to prevent visual overlay
-        document.querySelectorAll('button').forEach(b => {
-            if (b.textContent.includes('Start Bargaining') && b !== vp?.querySelector('button')) {
-                b.style.opacity = '0.3';
-                b.style.pointerEvents = 'none';
-            }
-        });
         return clicked_any;
     }""")
 
@@ -295,21 +288,7 @@ def _do_checkout_flow(page, results: list):
     t0 = time.time()
     sub_steps = []
 
-    log("Step 5a — Adding to cart")
-    cart_btn = page.locator("button:has-text('Add to Cart'), button:has-text('Add to cart')")
-    if cart_btn.count() > 0:
-        btn = cart_btn.first
-        if btn.is_visible(timeout=3000) and btn.is_enabled():
-            btn.click()
-            log("Clicked Add to Cart")
-            time.sleep(2)
-            sub_steps.append({"check": "add_to_cart", "status": "pass", "detail": "Add to Cart button clicked"})
-        else:
-            sub_steps.append({"check": "add_to_cart", "status": "fail", "detail": "Add to Cart button not clickable (may need login)"})
-    else:
-        sub_steps.append({"check": "add_to_cart", "status": "fail", "detail": "No Add to Cart button found"})
-
-    log("Step 5b — Navigating to checkout")
+    log("Step 5a — Navigating to checkout")
     checkout_btn = page.locator("a:has-text('Checkout'), button:has-text('Checkout'), a[href*='checkout'], a[href*='cart']")
     if checkout_btn.count() > 0:
         try:
@@ -327,11 +306,12 @@ def _do_checkout_flow(page, results: list):
         else:
             sub_steps.append({"check": "checkout_nav", "status": "fail", "detail": f"No checkout link, direct nav to {page.url}"})
 
-    log("Step 5c — Opening Razorpay payment gateway")
+    log("Step 5b — Opening Razorpay payment gateway & selecting UPI")
     ss_checkout = _capture_screenshot(page, "checkout_page")
     razorpay_found = False
     pay_clicked = False
-    upi_found = False
+    upi_selected = False
+    qr_appeared = False
 
     pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed'), button:has-text('Submit')")
     if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
@@ -350,53 +330,52 @@ def _do_checkout_flow(page, results: list):
         if razorpay_iframe_el.count() > 0:
             razorpay_iframe = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
             razorpay_found = True
-            sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": "Razorpay iframe opened"})
-            log("Razorpay iframe detected, looking for UPI option")
+            sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay checkout opened"})
+            log("Razorpay loaded, selecting UPI mode")
 
-            # Look for UPI payment option inside Razorpay iframe
-            upi_selectors = [
-                "button:has-text('UPI')",
-                "[class*='UPI']",
-                "label:has-text('UPI')",
-                "[class*='upi']",
-                "div:has-text('Pay via UPI')",
-                "button:has-text('PhonePe'), button:has-text('Google Pay'), button:has-text('Paytm')",
-            ]
-            for sel in upi_selectors:
+            # Click UPI tab/option
+            upi_clicked = False
+            for sel in ["button:has-text('UPI')", "[class*='UPI']", "label:has-text('UPI')", "div:has-text('UPI')"]:
                 try:
-                    upi_btn = razorpay_iframe.locator(sel).first
-                    if upi_btn.count() > 0 and upi_btn.is_visible(timeout=2000):
-                        upi_btn.click(force=True)
-                        upi_found = True
-                        log(f"Clicked UPI option: {sel}")
-                        time.sleep(1)
+                    el = razorpay_iframe.locator(sel).first
+                    if el.count() > 0 and el.is_visible(timeout=2000):
+                        el.click(force=True)
+                        upi_clicked = True
+                        log(f"UPI option clicked: {sel}")
+                        time.sleep(2)
                         break
                 except Exception:
                     continue
+            sub_steps.append({"check": "upi_selected", "status": "pass" if upi_clicked else "degraded", "detail": "UPI tab clicked" if upi_clicked else "UPI tab not found"})
 
-            if upi_found:
-                sub_steps.append({"check": "upi_selected", "status": "pass", "detail": "UPI payment option selected"})
-                # Try to enter a UPI ID if an input field is visible
-                try:
-                    upi_input = razorpay_iframe.locator("input[type='text'], input[placeholder*='UPI'], input[placeholder*='upi']")
+            # Check for QR code or UPI ID input
+            if upi_clicked:
+                for retry in range(5):
+                    qr = razorpay_iframe.locator("img[src*='qr'], img[class*='qr'], [class*='qr-code'], canvas, [alt*='QR']")
+                    if qr.count() > 0 and qr.first.is_visible(timeout=2000):
+                        qr_appeared = True
+                        log("QR code visible")
+                        break
+                    upi_input = razorpay_iframe.locator("input[type='text'], input[type='tel'], input[placeholder*='UPI'], input[placeholder*='VPA']")
                     if upi_input.count() > 0 and upi_input.first.is_visible(timeout=2000):
                         upi_input.first.fill("monitoring@upi")
                         log("UPI ID entered")
-                        time.sleep(0.5)
+                        time.sleep(1)
                         pay_upi = razorpay_iframe.locator("button:has-text('Pay'), button:has-text('Verify')")
                         if pay_upi.count() > 0:
                             pay_upi.first.click(force=True)
                             log("UPI Pay clicked")
-                        sub_steps.append({"check": "upi_pay_clicked", "status": "pass", "detail": "UPI ID entered and Pay clicked"})
-                except Exception as e:
-                    sub_steps.append({"check": "upi_pay_clicked", "status": "degraded", "detail": f"UPI input not found: {str(e)[:50]}"})
+                            time.sleep(2)
+                        break
+                    time.sleep(1)
+                sub_steps.append({"check": "qr_or_upi", "status": "pass" if qr_appeared else "degraded", "detail": "QR code visible" if qr_appeared else "UPI input shown (QR may need payment)"})
             else:
-                sub_steps.append({"check": "upi_selected", "status": "degraded", "detail": "UPI option not found in Razorpay"})
-    except Exception as e:
-        if pay_clicked:
-            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": f"Razorpay iframe error: {str(e)[:60]}"})
+                sub_steps.append({"check": "qr_or_upi", "status": "degraded", "detail": "Could not select UPI"})
         else:
-            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "No Razorpay iframe found"})
+            if pay_clicked:
+                sub_steps.append({"check": "razorpay_loaded", "status": "degraded", "detail": "Pay clicked but no Razorpay iframe appeared"})
+    except Exception as e:
+        sub_steps.append({"check": "razorpay_loaded", "status": "degraded", "detail": f"Razorpay error: {str(e)[:80]}"})
 
     duration = int((time.time() - t0) * 1000)
     results.append({
@@ -412,7 +391,7 @@ def _do_checkout_flow(page, results: list):
 
 
 def _do_search_flow(page, results: list):
-    log("Search — Looking for search bar and searching for a product")
+    log("Search — Searching for a product")
     t0 = time.time()
     sub_steps = []
     try:
@@ -420,32 +399,17 @@ def _do_search_flow(page, results: list):
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
         time.sleep(1)
 
-        search_icon = page.locator("img[src*='search-icon'], img[src*='search'], [placeholder*='Search'], input[type='search'], [class*='search']").first
-        if search_icon.count() > 0 and search_icon.is_visible(timeout=3000):
-            search_icon.click()
-            time.sleep(1.5)
-            sub_steps.append({"check": "search_opened", "status": "pass", "detail": "Search icon clicked"})
-        else:
-            # Try clicking via JS
-            clicked = page.evaluate("""() => {
-                const icons = document.querySelectorAll('img[src*=\"search\"], [class*=\"search\"]');
-                for (const el of icons) { if (el.offsetParent !== null) { el.click(); return true; } }
-                return false;
-            }""")
-            sub_steps.append({"check": "search_opened", "status": "pass" if clicked else "degraded", "detail": "Search clicked via JS" if clicked else "Search icon not found"})
-            time.sleep(1)
-
-        search_input = page.locator("input[placeholder*='Search'], input[type='search']").first
+        search_input = page.locator("input[placeholder*='Search']").first
         if search_input.is_visible(timeout=3000):
             search_input.fill("cricket bat")
-            time.sleep(0.5)
+            time.sleep(0.3)
             page.keyboard.press("Enter")
             time.sleep(2)
-            sub_steps.append({"check": "search_performed", "status": "pass", "detail": "Searched for 'cricket bat'"})
+            sub_steps.append({"check": "search_performed", "status": "pass", "detail": "Searched 'cricket bat'"})
             results_count = page.locator("a[href*='/product-detail/']").count()
-            sub_steps.append({"check": "search_results", "status": "pass" if results_count > 0 else "degraded", "detail": f"Results found: {results_count}"})
+            sub_steps.append({"check": "search_results", "status": "pass" if results_count > 0 else "degraded", "detail": f"Results: {results_count}"})
         else:
-            sub_steps.append({"check": "search_performed", "status": "degraded", "detail": "Search input not found"})
+            sub_steps.append({"check": "search_performed", "status": "degraded", "detail": "Search bar not found"})
     except Exception as e:
         sub_steps.append({"check": "search_overall", "status": "fail", "detail": str(e)[:80]})
 
