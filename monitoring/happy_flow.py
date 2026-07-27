@@ -333,20 +333,33 @@ def _do_checkout_flow(page, results: list):
             sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay checkout opened"})
             log("Razorpay loaded, selecting UPI mode")
 
-            # Click UPI tab/option
+            # Wait for Razorpay iframe content to load, then find UPI tab
             upi_clicked = False
-            for sel in ["button:has-text('UPI')", "[class*='UPI']", "label:has-text('UPI')", "div:has-text('UPI')"]:
+            time.sleep(2)
+            for attempt in range(10):
                 try:
-                    el = razorpay_iframe.locator(sel).first
-                    if el.count() > 0 and el.is_visible(timeout=2000):
-                        el.click(force=True)
-                        upi_clicked = True
-                        log(f"UPI option clicked: {sel}")
-                        time.sleep(2)
-                        break
+                    # Check what's in the iframe
+                    iframe_text = razorpay_iframe.locator("body").text_content(timeout=2000)
+                    log(f"Razorpay iframe content ({len(iframe_text)} chars)")
+                    if "UPI" in iframe_text or "upi" in iframe_text:
+                        log("UPI found in iframe text")
                 except Exception:
-                    continue
-            sub_steps.append({"check": "upi_selected", "status": "pass" if upi_clicked else "degraded", "detail": "UPI tab clicked" if upi_clicked else "UPI tab not found"})
+                    pass
+
+                for sel in ["button:has-text('UPI')", "[class*='UPI']", "[class*='upi']", "label:has-text('UPI')", "div:has-text('UPI')", "span:has-text('UPI')", "[data-method='upi']", "li:has-text('UPI')"]:
+                    try:
+                        el = razorpay_iframe.locator(sel).first
+                        if el.count() > 0 and el.is_visible(timeout=1000):
+                            el.click(force=True)
+                            upi_clicked = True
+                            log(f"UPI clicked via: {sel}")
+                            break
+                    except Exception:
+                        continue
+                if upi_clicked:
+                    break
+                time.sleep(1)
+            sub_steps.append({"check": "upi_selected", "status": "pass" if upi_clicked else "degraded", "detail": "UPI selected" if upi_clicked else "UPI tab not found in Razorpay"})
 
             # Check for QR code or UPI ID input
             if upi_clicked:
@@ -400,8 +413,8 @@ def _do_search_flow(page, results: list):
         time.sleep(1)
 
         search_input = page.locator("input[placeholder*='Search']").first
-        if search_input.is_visible(timeout=3000):
-            search_input.fill("cricket bat")
+        if search_input.count() > 0:
+            search_input.fill("cricket bat", force=True)
             time.sleep(0.3)
             page.keyboard.press("Enter")
             time.sleep(2)
