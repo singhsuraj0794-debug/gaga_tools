@@ -353,29 +353,69 @@ def _do_checkout_flow(page, results: list):
 
                     time.sleep(2)
                     try:
-                        card_input = razorpay_iframe.locator("input[placeholder*='card'], input[placeholder*='Card'], input[type='tel']").first
-                        if card_input.count() > 0:
-                            card_input.fill("4529566615008376")
-                            log("Card number entered")
-                            sub_steps.append({"check": "card_number", "status": "pass", "detail": "Card number entered"})
+                        # Scan ALL frames on the page for card input fields (PCI sub-iframes)
+                        all_frames = page.frames
+                        log(f"Total frames: {len(all_frames)}")
+                        card_number_filled = False
+                        card_details_filled = False
+                        for frame in all_frames:
+                            url = frame.url[:60]
+                            try:
+                                card_input = frame.locator("input[placeholder*='card'], input[placeholder*='Card'], input[type='tel']").first
+                                if card_input.count() > 0 and card_input.is_visible(timeout=1000):
+                                    card_input.fill("4529566615008376")
+                                    card_number_filled = True
+                                    log(f"Card number filled in frame: {url}")
+                                    break
+                                # Also try iframe-based card inputs (common in Razorpay)
+                                frame_inputs = frame.locator("input").all()
+                                for inp in frame_inputs:
+                                    cls = inp.get_attribute("class") or ""
+                                    placeholder = inp.get_attribute("placeholder") or ""
+                                    if "card" in placeholder.lower() or "card" in cls.lower() or "number" in placeholder.lower():
+                                        inp.fill("4529566615008376")
+                                        card_number_filled = True
+                                        log(f"Card number filled in frame via class: {url}")
+                                        break
+                                if card_number_filled:
+                                    break
+                            except Exception:
+                                continue
+                        sub_steps.append({"check": "card_number", "status": "pass" if card_number_filled else "degraded", "detail": "Card number entered" if card_number_filled else "Card input not found in any frame"})
 
-                        razorpay_iframe.locator("input[placeholder*='MM'], input[placeholder*='expir']").first.fill("11/30")
-                        razorpay_iframe.locator("input[placeholder*='CVV'], input[placeholder*='cvv']").first.fill("994")
-                        razorpay_iframe.locator("input[placeholder*='name'], input[placeholder*='Name']").first.fill("Gracie Ullrich")
-                        log("Card details entered")
-                        sub_steps.append({"check": "card_details", "status": "pass", "detail": "Card/expiry/CVV/name entered"})
+                        # Try filling remaining fields in the main Razorpay iframe or any frame
+                        for frame in all_frames:
+                            try:
+                                frame.locator("input[placeholder*='MM'], input[placeholder*='expir']").first.fill("11/30")
+                                frame.locator("input[placeholder*='CVV'], input[placeholder*='cvv']").first.fill("994")
+                                frame.locator("input[placeholder*='name'], input[placeholder*='Name']").first.fill("Gracie Ullrich")
+                                log(f"Card details filled in frame: {frame.url[:60]}")
+                                card_details_filled = True
+                                break
+                            except Exception:
+                                continue
+                        sub_steps.append({"check": "card_details", "status": "pass" if card_details_filled else "degraded", "detail": "Card/expiry/CVV/name entered" if card_details_filled else "Card details form not found"})
 
                         time.sleep(1)
-                        final_pay = razorpay_iframe.locator("button:has-text('Pay'), button[type='submit']").first
-                        if final_pay.count() > 0:
-                            final_pay.click(force=True)
-                            log("Final Pay clicked")
+                        # Find and click final Pay in any frame
+                        final_pay_clicked = False
+                        for frame in all_frames:
+                            try:
+                                final_pay = frame.locator("button:has-text('Pay'), button[type='submit']").first
+                                if final_pay.count() > 0 and final_pay.is_visible(timeout=1000):
+                                    final_pay.click(force=True)
+                                    log("Final Pay clicked")
+                                    final_pay_clicked = True
+                                    break
+                            except Exception:
+                                continue
+                        if final_pay_clicked:
                             time.sleep(3)
                             ss_after_payment = _capture_screenshot(page, "payment_result")
-                            sub_steps.append({"check": "final_pay_clicked", "status": "pass", "detail": "Payment submitted (expected to fail)"})
+                            sub_steps.append({"check": "final_pay_clicked", "status": "pass", "detail": "Payment submitted"})
                             card_filled = True
                         else:
-                            sub_steps.append({"check": "final_pay_clicked", "status": "degraded", "detail": "Final Pay not found"})
+                            sub_steps.append({"check": "final_pay_clicked", "status": "degraded", "detail": "Final Pay button not found"})
                     except Exception as e:
                         sub_steps.append({"check": "card_form", "status": "degraded", "detail": f"Form error: {str(e)[:60]}"})
                 else:
