@@ -56,10 +56,11 @@ def save_state():
         otp_fields = page.locator("input[maxlength='1'][inputmode='numeric']")
         count = otp_fields.count()
         print(f"   Found {count} OTP digit inputs")
-        for i, digit in enumerate(otp):
-            if i < count:
-                otp_fields.nth(i).fill(digit)
-                time.sleep(0.1)
+        first = otp_fields.first
+        if first.is_visible():
+            first.click()
+            time.sleep(0.3)
+            page.keyboard.type(otp, delay=0.15)
         time.sleep(2)
         
         # Check if there's a submit/verify button
