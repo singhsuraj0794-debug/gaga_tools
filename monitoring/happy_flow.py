@@ -346,8 +346,9 @@ def _do_checkout_flow(page, results: list):
 
     # Check for Razorpay iframe
     try:
-        razorpay_iframe = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
-        if razorpay_iframe.count() > 0:
+        razorpay_iframe_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+        if razorpay_iframe_el.count() > 0:
+            razorpay_iframe = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
             razorpay_found = True
             sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": "Razorpay iframe opened"})
             log("Razorpay iframe detected, looking for UPI option")
