@@ -595,13 +595,13 @@ def _do_second_bargain(page, results: list):
     time.sleep(3)
     sub_steps.append({"check": "start_bargaining", "status": "pass", "detail": "Bargain started"})
 
-    log("Bargain 2 — Setting ~70% lower offer")
+    log("Bargain 2 — Sliding to extreme lowest (red zone) to trigger counter-offer")
     slider_set = page.evaluate("""() => {
         const ranges = document.querySelectorAll('input[type="range"]');
         for (const r of ranges) {
             if (r.getBoundingClientRect().width > 100 && parseFloat(r.max) > 1) {
-                const max = parseFloat(r.max);
-                const target = max * 0.3;  // Offer 70% lower = 30% of max
+                const min = parseFloat(r.min);
+                const target = min + 0.01;  // Slide to absolute minimum (red zone)
                 const key = Object.keys(r).find(k => k.startsWith('__reactProps$'));
                 if (key) { try { r[key].onChange({target: {value: target}}); } catch(e) {} }
                 return {found: true, min: r.min, max: r.max, target: target};
@@ -609,7 +609,7 @@ def _do_second_bargain(page, results: list):
         }
         return {found: false};
     }""")
-    sub_steps.append({"check": "low_offer_set", "status": "pass" if slider_set.get("found") else "degraded", "detail": f"Slider set to {slider_set.get('target', 'N/A')} (70% off)" if slider_set.get("found") else "Slider not found"})
+    sub_steps.append({"check": "low_offer_set", "status": "pass" if slider_set.get("found") else "degraded", "detail": f"Slider set to minimum {slider_set.get('target', 'N/A')} (red zone)" if slider_set.get("found") else "Slider not found"})
 
     time.sleep(0.5)
     for sel in ["button:has-text('Offer Your Price')", "button:has-text('Submit Offer')"]:
