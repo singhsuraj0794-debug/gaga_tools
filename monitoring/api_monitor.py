@@ -23,14 +23,14 @@ API_ENDPOINTS = [
         "content_type": "application/json",
     },
     {
-        "name": "Product Store API",
+        "name": "Product Store API (gateway)",
         "method": "GET",
         "url": "https://gatewayservice.gajab.com/product/api/product-store/product/prestige-pvc-80-veggie-cutter-with-3-stainless-steel-blades-jumbo-bowl-black/4305598878914?pincode=400001",
     },
     {
         "name": "Image CDN (resize.gajab.com)",
         "method": "GET",
-        "url": "https://resize.gajab.com/",
+        "url": "https://resize.gajab.com/favicon.ico",
     },
 ]
 
@@ -55,7 +55,7 @@ def call_api(entry: dict) -> dict:
                 "Content-Type": entry.get("content_type", "application/json"),
             },
         )
-        resp = urllib.request.urlopen(req, timeout=15)
+        resp = urllib.request.urlopen(req, timeout=10)
         duration = int((time.time() - t0) * 1000)
         status_code = resp.status
         raw = resp.read()

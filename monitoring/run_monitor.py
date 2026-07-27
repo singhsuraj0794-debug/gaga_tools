@@ -55,7 +55,7 @@ def main():
         store.store_result(
             page_or_flow=f"api/{r['api']}",
             metric="status_code",
-            value=float(r.get("status_code", 0)),
+            value=float(r.get("status_code") or 0),
             status=r["status"],
         )
 
