@@ -32,11 +32,13 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install chromium
 
-      - name: Restore saved session
+      - name: Download saved session from Supabase
         run: |
-          if [ -n "${{ secrets.GAJAB_SESSION }}" ]; then
-            echo "${{ secrets.GAJAB_SESSION }}" | base64 -d > monitoring/.gajab_session.json
-            echo "Saved session restored"
+          curl -s -o monitoring/.gajab_session.json \
+            "https://okxyskmjsmtykblrtmyi.supabase.co/storage/v1/object/public/monitoring/gajab_session.json" \
+            --max-time 15 || echo "No session file available"
+          if [ -f monitoring/.gajab_session.json ] && [ -s monitoring/.gajab_session.json ]; then
+            echo "Session restored ($(wc -c < monitoring/.gajab_session.json) bytes)"
           fi
 
       - name: Run monitor

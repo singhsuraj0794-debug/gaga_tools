@@ -1,4 +1,6 @@
 from __future__ import annotations
+import urllib.request
+from urllib.error import HTTPError
 from datetime import datetime, timezone
 from pathlib import Path
 from supabase import create_client, Client
@@ -24,11 +26,24 @@ class SupabaseStore:
                 return None
             ts = self._run_at.replace(":", "-").replace(".", "-")
             remote_path = f"recordings/{ts}.webm"
+            url = f"{SUPABASE_URL}/storage/v1/object/monitoring/{remote_path}"
+            headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "video/webm",
+            }
+            import urllib.request
             with open(p, "rb") as f:
-                self._client.storage.from_("monitoring").upload(remote_path, f, {"content-type": "video/webm"})
+                data = f.read()
+            req = urllib.request.Request(url, data=data, headers=headers, method="PUT")
+            urllib.request.urlopen(req, timeout=30)
             public_url = f"{SUPABASE_URL}/storage/v1/object/public/monitoring/{remote_path}"
             print(f"[SUPABASE] Video uploaded: {public_url} ({p.stat().st_size / 1024:.0f}KB)")
             return public_url
+        except urllib.error.HTTPError as e:
+            err = e.read().decode()
+            print(f"[SUPABASE] Video upload failed: HTTP {e.code} {err[:200]}")
+            return None
         except Exception as e:
             print(f"[SUPABASE] Video upload error: {e}")
             return None
@@ -74,6 +89,48 @@ class SupabaseStore:
             duration_ms=duration_ms,
             details=details,
         )
+
+    def upload_session(self, filepath: str) -> str | None:
+        if not self._client:
+            return None
+        try:
+            p = Path(filepath)
+            if not p.exists():
+                return None
+            url = f"{SUPABASE_URL}/storage/v1/object/monitoring/gajab_session.json"
+            headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+            import urllib.request
+            with open(p, "rb") as f:
+                data = f.read()
+            req = urllib.request.Request(url, data=data, headers=headers, method="PUT")
+            urllib.request.urlopen(req, timeout=30)
+            pub_url = f"{SUPABASE_URL}/storage/v1/object/public/monitoring/gajab_session.json"
+            print(f"[SUPABASE] Session uploaded: {pub_url}")
+            return pub_url
+        except Exception as e:
+            print(f"[SUPABASE] Session upload error: {e}")
+            return None
+
+    @staticmethod
+    def download_session(filepath: str) -> bool:
+        url = f"{SUPABASE_URL}/storage/v1/object/public/monitoring/gajab_session.json"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "gajab-monitor"})
+            resp = urllib.request.urlopen(req, timeout=15)
+            data = resp.read()
+            with open(filepath, "wb") as f:
+                f.write(data)
+            print(f"[SUPABASE] Session downloaded: {filepath} ({len(data)}b)")
+            return True
+        except HTTPError as e:
+            if e.code == 404:
+                print("[SUPABASE] No session found in storage")
+            else:
+                print(f"[SUPABASE] Session download error: HTTP {e.code}")
+            return False
+        except Exception as e:
+            print(f"[SUPABASE] Session download error: {e}")
+            return False
 
     def get_latest_runs(self, limit: int = 100):
         if not self._client:

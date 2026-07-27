@@ -366,6 +366,7 @@ def _check_budget(budget_key: str, duration_ms: int, results: list):
 _SESSION_FILE = Path(__file__).parent / ".gajab_session.json"
 
 def _load_session() -> dict | None:
+    # Try local file first
     if _SESSION_FILE.exists():
         try:
             with open(_SESSION_FILE) as f:
@@ -373,7 +374,17 @@ def _load_session() -> dict | None:
             log(f"Loaded saved session from {_SESSION_FILE}")
             return state
         except Exception as e:
-            log(f"Failed to load session: {e}")
+            log(f"Failed to load local session: {e}")
+    # Fallback: download from Supabase Storage
+    try:
+        from supabase_client import SupabaseStore
+        if SupabaseStore.download_session(str(_SESSION_FILE)):
+            with open(_SESSION_FILE) as f:
+                state = json.load(f)
+            log("Loaded session from Supabase Storage")
+            return state
+    except Exception as e:
+        log(f"Failed to load session from Supabase: {e}")
     return None
 
 
