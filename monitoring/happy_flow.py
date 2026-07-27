@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 import re
 import time
@@ -362,6 +363,20 @@ def _check_budget(budget_key: str, duration_ms: int, results: list):
         results[-1]["budget_exceeded"] = {"budget_ms": budget_sec * 1000, "actual_ms": duration_ms}
 
 
+_SESSION_FILE = Path(__file__).parent / ".gajab_session.json"
+
+def _load_session() -> dict | None:
+    if _SESSION_FILE.exists():
+        try:
+            with open(_SESSION_FILE) as f:
+                state = json.load(f)
+            log(f"Loaded saved session from {_SESSION_FILE}")
+            return state
+        except Exception as e:
+            log(f"Failed to load session: {e}")
+    return None
+
+
 def run_happy_flow() -> list[dict]:
     results = []
     video_path = None
@@ -369,6 +384,7 @@ def run_happy_flow() -> list[dict]:
 
     log("Starting happy-flow check")
 
+    session_state = _load_session()
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(
@@ -381,6 +397,7 @@ def run_happy_flow() -> list[dict]:
             locale="en-IN",
             timezone_id="Asia/Kolkata",
             record_video_dir=str(_SCREENSHOT_DIR / "recordings"),
+            storage_state=session_state,
         )
         page = context.new_page()
 

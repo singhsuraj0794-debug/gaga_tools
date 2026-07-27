@@ -32,6 +32,13 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install chromium
 
+      - name: Restore saved session
+        run: |
+          if [ -n "${{ secrets.GAJAB_SESSION }}" ]; then
+            echo "${{ secrets.GAJAB_SESSION }}" | base64 -d > monitoring/.gajab_session.json
+            echo "Saved session restored"
+          fi
+
       - name: Run monitor
         run: python monitoring/run_monitor.py
         env:

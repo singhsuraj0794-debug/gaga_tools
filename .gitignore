@@ -54,3 +54,4 @@ Thumbs.db
 **/.env
 **/.env.local
 monitoring/screenshots/
+monitoring/.gajab_session.json
