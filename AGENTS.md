@@ -22,8 +22,15 @@ End-user experience monitoring for gajab.com.
 - Category: `https://gajab.com/product-list/all`
 - Product detail: `https://gajab.com/product-detail/prestige-pvc-80-veggie-cutter-with-3-stainless-steel-blades-jumbo-bowl-black/4305598878914`
 
-### Happy-flow steps (no login required)
-1. home_load → 2. category_load → 3. product_detail_load → 4. bargain_flow
+### Happy-flow steps (session persisted via Supabase Storage)
+1. home_load → 2. category_load → 3. random_product → 4. bargain_flow (slider + offer) → 5. checkout_nav + Pay + Razorpay + UPI → 6. my_bargains + alerts_orders + banners → 7. search_products
+
+### Session persistence
+- One-time login via `monitoring/setup_login.py` (OTP from Indian mobile)
+- Session saved to `monitoring/.gajab_session.json` and uploaded to Supabase Storage
+- Each run auto-loads session — no OTP needed
+- Session is 573KB (too large for GitHub Secrets), stored in Supabase Storage bucket `monitoring/gajab_session.json`
+- Re-login when session expires by re-running setup_login.py
 
 ### Credentials (in `monitoring/.env`, gitignored)
 - Twilio SID: `AC...` (in .env)
