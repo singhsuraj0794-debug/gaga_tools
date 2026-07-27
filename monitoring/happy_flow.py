@@ -519,7 +519,7 @@ def _load_session() -> dict | None:
 
 
 def _pick_random_product(page) -> str | None:
-    """Navigate to category page and pick a random product URL."""
+    """Navigate to category page and pick a random product that has a Start Bargaining button."""
     try:
         page.goto("https://gajab.com/product-list/all", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
@@ -530,14 +530,37 @@ def _pick_random_product(page) -> str | None:
             log("No product links found on category page")
             return None
         import random
-        idx = random.randint(0, min(count - 1, 30))
-        url = links.nth(idx).get_attribute("href")
-        if url and not url.startswith("http"):
-            url = "https://gajab.com" + url
-        log(f"Random product #{idx}: {url}")
+        # Try up to 5 random products until we find one with Start Bargaining
+        attempts = min(count - 1, 15)
+        tried = set()
+        for _ in range(5):
+            idx = random.randint(0, attempts)
+            while idx in tried and len(tried) < attempts:
+                idx = random.randint(0, attempts)
+            tried.add(idx)
+            url = links.nth(idx).get_attribute("href")
+            if url and not url.startswith("http"):
+                url = "https://gajab.com" + url
+            # Quick check if this product has bargaining
+            page.goto(url, timeout=15000, wait_until="domcontentloaded")
+            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+            time.sleep(1)
+            has_bargain = page.evaluate("""() => {
+                const vp = document.getElementById('varient-price');
+                if (!vp) return false;
+                for (const btn of vp.querySelectorAll('button')) {
+                    if (btn.textContent.includes('Start Bargaining')) return true;
+                }
+                return false;
+            }""")
+            if has_bargain:
+                log(f"Product with bargaining: {url}")
+                return url
+            log(f"Product {idx} has no bargaining, trying another")
+        log("No product with bargaining found, using last tried URL")
         return url
     except Exception as e:
-        log(f"Random product selection failed: {e}")
+        log(f"Product selection failed: {e}")
         return None
 
 
