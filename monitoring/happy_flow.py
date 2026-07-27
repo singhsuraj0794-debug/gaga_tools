@@ -386,12 +386,13 @@ def _do_checkout_flow(page, results: list):
         sub_steps.append({"check": "pay_button_click", "status": "degraded", "detail": "Not on checkout page (redirected)"})
 
     duration = int((time.time() - t0) * 1000)
+    pay_was_clicked = any(s["check"] == "pay_button_click" and s["status"] == "pass" for s in sub_steps)
     results.append({
         "step": "checkout_flow",
         "duration_ms": duration,
-        "status": "pass" if razorpay_found and pay_clicked else "degraded" if razorpay_found or pay_clicked else "fail",
+        "status": "pass" if razorpay_found and pay_was_clicked else "degraded" if razorpay_found or pay_was_clicked else "fail",
         "sub_steps": sub_steps,
-        "detail": f"Checkout: Pay={'clicked' if pay_clicked else 'not found'}, Razorpay={'found' if razorpay_found else 'not found'}",
+        "detail": f"Checkout: Pay={pay_was_clicked}, Razorpay={'found' if razorpay_found else 'not found'}",
         "screenshot": ss_checkout,
         "failure_reason": None if razorpay_found else "Payment gateway did not appear",
     })
