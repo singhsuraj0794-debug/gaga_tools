@@ -181,12 +181,6 @@ def _do_bargain_flow(page, results: list):
                 clicked_any = true;
             }
         }
-        // Hide all Start Bargaining buttons to prevent overlay on bargain modal
-        document.querySelectorAll('button').forEach(b => {
-            if (b.textContent.includes('Start Bargaining')) {
-                b.style.display = 'none';
-            }
-        });
         return clicked_any;
     }""")
 
