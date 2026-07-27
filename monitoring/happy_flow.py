@@ -322,20 +322,34 @@ def _do_checkout_flow(page, results: list):
     log("Step 5c — Looking for Razorpay payment gateway")
     ss_checkout = _capture_screenshot(page, "checkout_page")
     razorpay_found = False
+    pay_clicked = False
     razorpay_selectors = [
         "iframe[src*='razorpay']",
         "iframe[id*='razorpay']",
         "[class*='razorpay']",
-        "button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed')",
         "form[action*='razorpay']",
         "[id*='razorpay-checkout']",
     ]
+
+    # Look for a Pay/Proceed button and click it
+    pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed'), button:has-text('Submit')")
+    if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
+        pay_btn.first.click(force=True)
+        pay_clicked = True
+        log("Pay button clicked")
+        time.sleep(3)
+        ss_after_pay = _capture_screenshot(page, "after_pay")
+        sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay/Proceed button clicked"})
+    else:
+        sub_steps.append({"check": "pay_button_click", "status": "degraded", "detail": "No Pay button found"})
+
+    # Check for Razorpay iframe after clicking Pay
     for sel in razorpay_selectors:
         try:
             loc = page.locator(sel)
-            if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+            if loc.count() > 0 and loc.first.is_visible(timeout=3000):
                 razorpay_found = True
-                sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": f"Razorpay element found: {sel}"})
+                sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": f"Razorpay iframe visible: {sel}"})
                 break
         except Exception:
             continue
@@ -345,21 +359,76 @@ def _do_checkout_flow(page, results: list):
         if "razorpay" in page_source:
             razorpay_found = True
             sub_steps.append({"check": "razorpay_detected", "status": "pass", "detail": "Razorpay referenced in page source"})
+        elif pay_clicked:
+            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "Pay clicked but no Razorpay iframe appeared"})
         else:
-            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "No Razorpay elements found (may need login first)"})
+            sub_steps.append({"check": "razorpay_detected", "status": "degraded", "detail": "No Razorpay found (login required?)"})
 
     duration = int((time.time() - t0) * 1000)
-    status = "pass" if razorpay_found and all(s["status"] == "pass" for s in sub_steps) else "degraded" if razorpay_found else "fail"
     results.append({
         "step": "checkout_flow",
         "duration_ms": duration,
-        "status": status,
+        "status": "pass" if razorpay_found and pay_clicked else "degraded" if razorpay_found or pay_clicked else "fail",
         "sub_steps": sub_steps,
-        "detail": f"Checkout flow completed in {duration}ms — Razorpay: {'found' if razorpay_found else 'not found'}",
+        "detail": f"Checkout: Pay={'clicked' if pay_clicked else 'not found'}, Razorpay={'found' if razorpay_found else 'not found'}",
         "screenshot": ss_checkout,
-        "failure_reason": None if razorpay_found else "Could not reach Razorpay payment gateway (login required?)",
+        "failure_reason": None if razorpay_found else "Payment gateway did not appear",
     })
     _check_budget("checkout_nav", duration, results)
+
+
+def _do_page_checks(page, results: list):
+    """Check additional user pages: My Account, My Bargains, Orders, banners."""
+    pages_to_check = [
+        ("my_account", "https://gajab.com/", "a[href*='profile'], a[href*='account'], button:has-text('Profile')"),
+        ("my_bargains", "https://gajab.com/my-bargains", "text=My Bargains, text=Bargains, [class*='bargain']"),
+        ("alerts_orders", "https://gajab.com/alerts-list?activeTab=1", "text=Order, text=Alert, [class*='order']"),
+    ]
+    for name, url, expected in pages_to_check:
+        t0 = time.time()
+        try:
+            page.goto(url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+            time.sleep(1)
+            duration = int((time.time() - t0) * 1000)
+            loc = page.locator(expected)
+            found = loc.count() > 0
+            results.append({
+                "step": f"page_{name}",
+                "duration_ms": duration,
+                "status": "pass" if found else "degraded",
+                "detail": f"{url} — expected element {'found' if found else 'not found'}",
+                "screenshot": _capture_screenshot(page, name),
+            })
+        except Exception as e:
+            duration = int((time.time() - t0) * 1000)
+            results.append({
+                "step": f"page_{name}", "duration_ms": duration, "status": "fail",
+                "error": str(e)[:100], "failure_reason": f"Failed to load {url}",
+            })
+
+    # Banner checks on home page
+    log("Checking home page banners")
+    try:
+        page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        time.sleep(1)
+        banners = page.locator("[class*='banner'] img, section img[src*='banner'], [class*='carousel'] img")
+        banner_count = banners.count()
+        banner_images_loaded = True
+        for i in range(min(banner_count, 5)):
+            src = banners.nth(i).get_attribute("src") or ""
+            if "resize.gajab.com" not in src and "banner" not in src.lower():
+                banner_images_loaded = False
+        results.append({
+            "step": "banners_check",
+            "duration_ms": 0,
+            "status": "pass" if banner_count >= 2 and banner_images_loaded else "degraded",
+            "detail": f"Banners found: {banner_count}, images from CDN: {banner_images_loaded}",
+            "screenshot": _capture_screenshot(page, "banners"),
+        })
+    except Exception as e:
+        results.append({"step": "banners_check", "duration_ms": 0, "status": "fail", "error": str(e)[:100]})
 
 
 def _check_budget(budget_key: str, duration_ms: int, results: list):
@@ -395,10 +464,32 @@ def _load_session() -> dict | None:
     return None
 
 
+def _pick_random_product(page) -> str | None:
+    """Navigate to category page and pick a random product URL."""
+    try:
+        page.goto("https://gajab.com/product-list/all", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        time.sleep(1)
+        links = page.locator("a[href*='/product-detail/']")
+        count = links.count()
+        if count == 0:
+            log("No product links found on category page")
+            return None
+        import random
+        idx = random.randint(0, min(count - 1, 30))
+        url = links.nth(idx).get_attribute("href")
+        if url and not url.startswith("http"):
+            url = "https://gajab.com" + url
+        log(f"Random product #{idx}: {url}")
+        return url
+    except Exception as e:
+        log(f"Random product selection failed: {e}")
+        return None
+
+
 def run_happy_flow() -> list[dict]:
     results = []
     video_path = None
-    product_url = "https://gajab.com/product-detail/prestige-pvc-80-veggie-cutter-with-3-stainless-steel-blades-jumbo-bowl-black/4305598878914"
 
     log("Starting happy-flow check")
 
@@ -470,6 +561,12 @@ def run_happy_flow() -> list[dict]:
             })
             _check_budget("category_page_load", duration, results)
 
+            # Pick a random product for bargain
+            product_url = _pick_random_product(page)
+            if not product_url:
+                raise HappyFlowError("Could not find any product to bargain")
+            log(f"Selected product: {product_url}")
+
             # Step 3: Product detail page
             log("Step 3 — Loading product detail page")
             t0 = time.time()
@@ -504,6 +601,10 @@ def run_happy_flow() -> list[dict]:
 
             # Step 5: Checkout + Razorpay payment gateway check
             _do_checkout_flow(page, results)
+
+            # Step 6: Additional page checks (My Account, My Bargains, Orders, Banners)
+            log("Step 6 — Running additional page checks")
+            _do_page_checks(page, results)
 
             log("Happy flow completed successfully")
 
