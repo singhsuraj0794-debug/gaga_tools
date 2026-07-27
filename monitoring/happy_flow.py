@@ -158,7 +158,7 @@ def _do_bargain_flow(page, results: list):
     _set_pincode(page, sub_steps)
 
     log("Step 4b — Locating Start Bargaining button")
-    btn_info = page.evaluate("""() => {
+    page.evaluate("""() => {
         const vp = document.getElementById('varient-price');
         if (!vp) return null;
         for (const btn of vp.querySelectorAll('button')) {
@@ -166,20 +166,21 @@ def _do_bargain_flow(page, results: list):
                 btn.removeAttribute('disabled');
                 btn.style.pointerEvents = 'auto';
                 btn.style.opacity = '1';
+                btn.style.position = 'relative';
+                btn.style.zIndex = '9999';
                 btn.scrollIntoView({behavior:'instant',block:'center'});
-                const r = btn.getBoundingClientRect();
-                return {x: r.x + r.width/2, y: r.y + r.height/2, found: true};
+                return btn;
             }
         }
-        return {found: false};
+        return null;
     }""")
 
-    if not btn_info or not btn_info.get("found"):
+    bargain_btn = page.locator("#varient-price button:has-text('Start Bargaining')")
+    if bargain_btn.count() == 0:
         _capture_screenshot(page, "bargain_start_not_found")
         raise HappyFlowError("'Start Bargaining' button not found in #varient-price")
     sub_steps.append({"check": "start_bargaining_button", "status": "pass", "detail": "Button found and clicked"})
-
-    page.mouse.click(btn_info["x"], btn_info["y"])
+    bargain_btn.first.click(force=True)
     log("Step 4c — Start Bargaining clicked")
     time.sleep(2)
     _dismiss_overlays(page)
