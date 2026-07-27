@@ -52,30 +52,19 @@ def save_state():
         print("   Check your phone for the SMS")
         otp = input("   Enter the OTP code received: ").strip()
         
-        print("5. Entering OTP...")
-        otp_inputs = page.locator("input[inputmode='numeric'], input[type='text']")
-        # Find the OTP input fields (usually 4-6 separate inputs or one combined)
-        otp_fields = page.locator("input")
-        filled = False
-        for i in range(otp_fields.count()):
-            inp = otp_fields.nth(i)
-            if inp.is_visible() and inp.get_attribute("maxlength") in ["1", "2", "4", "6"]:
-                inp.fill(otp)
-                filled = True
-                break
-        if not filled:
-            # Try filling the first visible text input
-            for i in range(otp_fields.count()):
-                inp = otp_fields.nth(i)
-                if inp.is_visible():
-                    inp.fill(otp)
-                    filled = True
-                    break
+        print("5. Entering OTP digit by digit...")
+        otp_fields = page.locator("input[maxlength='1'][inputmode='numeric']")
+        count = otp_fields.count()
+        print(f"   Found {count} OTP digit inputs")
+        for i, digit in enumerate(otp):
+            if i < count:
+                otp_fields.nth(i).fill(digit)
+                time.sleep(0.1)
         time.sleep(2)
         
         # Check if there's a submit/verify button
         submit = page.locator("button:has-text('Submit'), button:has-text('Verify'), button:has-text('Login')")
-        if submit.count() > 0:
+        if submit.count() > 0 and submit.first.is_enabled():
             submit.first.click()
             time.sleep(3)
         
