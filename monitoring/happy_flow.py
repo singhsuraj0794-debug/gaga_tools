@@ -123,39 +123,38 @@ def _check_page_ready(page, expected_url_substring: str | None = None, expected_
     return info
 
 
+def _set_pincode(page, sub_steps: list):
+    log("Step 4a — Setting delivery pincode")
+    pc_btn = page.locator("button:has-text('Enter pincode'), button:has-text('Pincode'), button:has-text('city')")
+    if pc_btn.count() > 0 and pc_btn.first.is_visible(timeout=2000):
+        pc_btn.first.click()
+        time.sleep(2)
+        page.screenshot(path=str(_SCREENSHOT_DIR / "pincode_modal.png"))
+        for sel in ["input", "input[type='text']", "input[type='tel']"]:
+            inp = page.locator(sel).last
+            if inp.is_visible():
+                ph = inp.get_attribute("placeholder") or ""
+                log(f"Pincode input found: placeholder='{ph}'")
+                inp.fill("400001")
+                time.sleep(0.5)
+                page.locator("button:has-text('Submit'), button:has-text('Apply'), button:has-text('Done'), button[type='submit']").first.click(timeout=3000)
+                time.sleep(1)
+                sub_steps.append({"check": "set_pincode", "status": "pass", "detail": "Pincode 400001 set via modal"})
+                return
+        sub_steps.append({"check": "set_pincode", "status": "degraded", "detail": "Pincode button clicked but no visible input found"})
+    else:
+        body_text = page.evaluate("() => document.body.innerText")
+        if "Add delivery location" in body_text or "Enter pincode" in body_text:
+            sub_steps.append({"check": "set_pincode", "status": "degraded", "detail": "Location prompt visible but pincode button not clickable"})
+        else:
+            sub_steps.append({"check": "set_pincode", "status": "pass", "detail": "Pincode already set or not required"})
+
+
 def _do_bargain_flow(page, results: list):
     t0 = time.time()
     sub_steps = []
 
-    log("Step 4a — Setting delivery pincode")
-    pc_btn = page.locator("button:has-text('pincode'), button:has-text('Pincode'), button:has-text('city')")
-    if pc_btn.count() > 0 and pc_btn.first.is_visible(timeout=2000):
-        pc_btn.first.click()
-        time.sleep(1)
-        pc_input = page.locator("input[type='text']")
-        pincode_set = False
-        for i in range(pc_input.count()):
-            inp = pc_input.nth(i)
-            if inp.is_visible():
-                inp.fill("400001")
-                time.sleep(0.5)
-                page.keyboard.press("Enter")
-                time.sleep(1)
-                pincode_set = True
-                log("Pincode 400001 entered")
-                break
-        sub_steps.append({"check": "set_pincode", "status": "pass" if pincode_set else "degraded", "detail": "Pincode 400001 set" if pincode_set else "No pincode input found"})
-    else:
-        # Check for location text asking to set delivery location
-        location_prompt = page.evaluate("""() => {
-            const body = document.body.innerText;
-            return body.includes('Add delivery location') || body.includes('Enter pincode') || body.includes('delivery location');
-        }""")
-        if location_prompt:
-            log("Location prompt detected but no pincode button visible")
-            sub_steps.append({"check": "set_pincode", "status": "degraded", "detail": "Location prompt visible but pincode button not clickable"})
-        else:
-            sub_steps.append({"check": "set_pincode", "status": "pass", "detail": "Pincode already set or not required")}
+    _set_pincode(page, sub_steps)
 
     log("Step 4b — Locating Start Bargaining button")
     btn_info = page.evaluate("""() => {
