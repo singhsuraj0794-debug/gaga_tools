@@ -183,10 +183,9 @@ def _do_bargain_flow(page, results: list):
         _capture_screenshot(page, "bargain_start_not_found")
         raise HappyFlowError("'Start Bargaining' button not found or could not be clicked")
     sub_steps.append({"check": "start_bargaining_button", "status": "pass", "detail": "Button found and clicked via JS dispatchEvent"})
-    log("Step 4c — Start Bargaining clicked")
-    time.sleep(2)
-    _dismiss_overlays(page)
-    sub_steps.append({"check": "bargain_modal_opened", "status": "pass", "detail": "Overlay dismissed after click"})
+    log("Step 4c — Start Bargaining clicked, waiting for bargain modal")
+    time.sleep(3)
+    sub_steps.append({"check": "bargain_modal_opened", "status": "pass", "detail": "Waiting for bargain modal to render"})
 
     log("Step 4d — Setting offer price via slider")
     slider_result = page.evaluate("""() => {
