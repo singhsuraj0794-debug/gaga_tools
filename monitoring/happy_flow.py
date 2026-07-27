@@ -312,12 +312,11 @@ def _do_checkout_flow(page, results: list):
         else:
             sub_steps.append({"check": "checkout_nav", "status": "fail", "detail": f"No checkout link, direct nav to {page.url}"})
 
-    log("Step 5b — Opening Razorpay payment gateway & selecting UPI")
+    log("Step 5b — Opening Razorpay & entering test card details")
     ss_checkout = _capture_screenshot(page, "checkout_page")
     razorpay_found = False
     pay_clicked = False
-    upi_selected = False
-    qr_appeared = False
+    card_filled = False
 
     pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed'), button:has-text('Submit')")
     if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
@@ -337,62 +336,96 @@ def _do_checkout_flow(page, results: list):
             razorpay_iframe = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
             razorpay_found = True
             sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay checkout opened"})
-            log("Razorpay loaded, selecting UPI mode")
+            log("Razorpay loaded, selecting Card mode")
 
-            # Wait for Razorpay iframe content to load, then find UPI tab
-            upi_clicked = False
-            time.sleep(2)
-            for attempt in range(10):
+            # Wait for Razorpay to load, then find and click Card tab
+            time.sleep(3)
+            card_clicked = False
+            for attempt in range(8):
                 try:
-                    # Check what's in the iframe
                     iframe_text = razorpay_iframe.locator("body").text_content(timeout=2000)
-                    log(f"Razorpay iframe content ({len(iframe_text)} chars)")
-                    if "UPI" in iframe_text or "upi" in iframe_text:
-                        log("UPI found in iframe text")
+                    log(f"Razorpay iframe ({len(iframe_text)} chars)")
                 except Exception:
                     pass
 
-                for sel in ["button:has-text('UPI')", "[class*='UPI']", "[class*='upi']", "label:has-text('UPI')", "div:has-text('UPI')", "span:has-text('UPI')", "[data-method='upi']", "li:has-text('UPI')"]:
+                for sel in ["button:has-text('Card')", "[class*='card']", "label:has-text('Card')", "div:has-text('Card')", "[data-method='card']", "li:has-text('Card')", "a:has-text('Card')"]:
                     try:
                         el = razorpay_iframe.locator(sel).first
                         if el.count() > 0 and el.is_visible(timeout=1000):
                             el.click(force=True)
-                            upi_clicked = True
-                            log(f"UPI clicked via: {sel}")
+                            card_clicked = True
+                            log(f"Card tab clicked via: {sel}")
                             break
                     except Exception:
                         continue
-                if upi_clicked:
+                if card_clicked:
                     break
                 time.sleep(1)
-            sub_steps.append({"check": "upi_selected", "status": "pass" if upi_clicked else "degraded", "detail": "UPI selected" if upi_clicked else "UPI tab not found in Razorpay"})
 
-            # Check for QR code or UPI ID input
-            if upi_clicked:
-                for retry in range(5):
-                    qr = razorpay_iframe.locator("img[src*='qr'], img[class*='qr'], [class*='qr-code'], canvas, [alt*='QR']")
-                    if qr.count() > 0 and qr.first.is_visible(timeout=2000):
-                        qr_appeared = True
-                        log("QR code visible")
-                        break
-                    upi_input = razorpay_iframe.locator("input[type='text'], input[type='tel'], input[placeholder*='UPI'], input[placeholder*='VPA']")
-                    if upi_input.count() > 0 and upi_input.first.is_visible(timeout=2000):
-                        upi_input.first.fill("monitoring@upi")
-                        log("UPI ID entered")
-                        time.sleep(1)
-                        pay_upi = razorpay_iframe.locator("button:has-text('Pay'), button:has-text('Verify')")
-                        if pay_upi.count() > 0:
-                            pay_upi.first.click(force=True)
-                            log("UPI Pay clicked")
-                            time.sleep(2)
-                        break
-                    time.sleep(1)
-                sub_steps.append({"check": "qr_or_upi", "status": "pass" if qr_appeared else "degraded", "detail": "QR code visible" if qr_appeared else "UPI input shown (QR may need payment)"})
+            if card_clicked:
+                time.sleep(2)
+                sub_steps.append({"check": "card_selected", "status": "pass", "detail": "Card payment selected"})
+                # Fill card details in Razorpay iframe
+                try:
+                    # Card number (4529 5666 1500 8376)
+                    card_input = razorpay_iframe.locator("input[placeholder*='card'], input[placeholder*='Card'], input[type='tel']").first
+                    if card_input.count() > 0 and card_input.is_visible(timeout=2000):
+                        card_input.fill("4529566615008376")
+                        log("Card number entered")
+                        time.sleep(0.5)
+                        sub_steps.append({"check": "card_number", "status": "pass", "detail": "Card number entered"})
+                    else:
+                        # Try individual card fields
+                        card_inputs = razorpay_iframe.locator("input[type='text'], input[type='tel']")
+                        if card_inputs.count() >= 4:
+                            card_inputs.nth(0).fill("4529")
+                            card_inputs.nth(1).fill("5666")
+                            card_inputs.nth(2).fill("1500")
+                            card_inputs.nth(3).fill("8376")
+                            log("Card number entered via individual fields")
+                            sub_steps.append({"check": "card_number", "status": "pass", "detail": "Card number entered"})
+
+                    # Expiry 11/30
+                    expiry_input = razorpay_iframe.locator("input[placeholder*='MM'], input[placeholder*='expir'], input[placeholder*='Expir'], input[placeholder*='month']").first
+                    if expiry_input.count() > 0 and expiry_input.is_visible(timeout=2000):
+                        expiry_input.fill("11/30")
+                        log("Expiry entered")
+                        time.sleep(0.3)
+                        sub_steps.append({"check": "card_expiry", "status": "pass", "detail": "Expiry 11/30 entered"})
+
+                    # CVV 994
+                    cvv_input = razorpay_iframe.locator("input[placeholder*='CVV'], input[placeholder*='cvv'], input[maxlength='4']").first
+                    if cvv_input.count() > 0 and cvv_input.is_visible(timeout=2000):
+                        cvv_input.fill("994")
+                        log("CVV entered")
+                        time.sleep(0.3)
+                        sub_steps.append({"check": "card_cvv", "status": "pass", "detail": "CVV entered"})
+
+                    # Cardholder name
+                    name_input = razorpay_iframe.locator("input[placeholder*='name'], input[placeholder*='Name'], input[placeholder*='cardholder']").first
+                    if name_input.count() > 0 and name_input.is_visible(timeout=2000):
+                        name_input.fill("Gracie Ullrich")
+                        log("Cardholder name entered")
+                        sub_steps.append({"check": "card_name", "status": "pass", "detail": "Name entered"})
+
+                    # Click final Pay button inside Razorpay
+                    time.sleep(0.5)
+                    final_pay = razorpay_iframe.locator("button:has-text('Pay'), button[type='submit']").first
+                    if final_pay.count() > 0 and final_pay.is_visible(timeout=2000):
+                        final_pay.click(force=True)
+                        log("Final Pay clicked in Razorpay")
+                        time.sleep(2)
+                        sub_steps.append({"check": "final_pay_clicked", "status": "pass", "detail": "Payment submitted"})
+                        card_filled = True
+                    else:
+                        sub_steps.append({"check": "final_pay_clicked", "status": "degraded", "detail": "Final Pay button not found in Razorpay"})
+                except Exception as e:
+                    sub_steps.append({"check": "card_details", "status": "degraded", "detail": f"Card form error: {str(e)[:80]}"})
             else:
-                sub_steps.append({"check": "qr_or_upi", "status": "degraded", "detail": "Could not select UPI"})
+                sub_steps.append({"check": "card_selected", "status": "degraded", "detail": "Card tab not found in Razorpay"})
         else:
             if pay_clicked:
-                sub_steps.append({"check": "razorpay_loaded", "status": "degraded", "detail": "Pay clicked but no Razorpay iframe appeared"})
+                sub_steps.append({"check": "razorpay_loaded", "status": "degraded", "detail": "Pay clicked but no Razorpay iframe"})
     except Exception as e:
         sub_steps.append({"check": "razorpay_loaded", "status": "degraded", "detail": f"Razorpay error: {str(e)[:80]}"})
 
