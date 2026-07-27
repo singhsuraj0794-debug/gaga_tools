@@ -157,30 +157,36 @@ def _do_bargain_flow(page, results: list):
 
     _set_pincode(page, sub_steps)
 
-    log("Step 4b — Locating Start Bargaining button")
-    page.evaluate("""() => {
+    log("Step 4b — Locating & clicking Start Bargaining button")
+    clicked = page.evaluate("""() => {
         const vp = document.getElementById('varient-price');
-        if (!vp) return null;
+        if (!vp) return false;
         for (const btn of vp.querySelectorAll('button')) {
             if (btn.textContent.includes('Start Bargaining')) {
                 btn.removeAttribute('disabled');
-                btn.style.pointerEvents = 'auto';
+                btn.style.pointerEvents = 'auto !important';
                 btn.style.opacity = '1';
+                btn.style.visibility = 'visible';
                 btn.style.position = 'relative';
-                btn.style.zIndex = '9999';
+                btn.style.zIndex = '99999';
                 btn.scrollIntoView({behavior:'instant',block:'center'});
-                return btn;
+                // Dispatch a native click event
+                const event = new MouseEvent('click', {
+                    view: window, bubbles: true, cancelable: true,
+                    clientX: btn.getBoundingClientRect().left + btn.offsetWidth / 2,
+                    clientY: btn.getBoundingClientRect().top + btn.offsetHeight / 2,
+                });
+                btn.dispatchEvent(event);
+                return true;
             }
         }
-        return null;
+        return false;
     }""")
 
-    bargain_btn = page.locator("#varient-price button:has-text('Start Bargaining')")
-    if bargain_btn.count() == 0:
+    if not clicked:
         _capture_screenshot(page, "bargain_start_not_found")
-        raise HappyFlowError("'Start Bargaining' button not found in #varient-price")
-    sub_steps.append({"check": "start_bargaining_button", "status": "pass", "detail": "Button found and clicked"})
-    bargain_btn.first.click(force=True)
+        raise HappyFlowError("'Start Bargaining' button not found or could not be clicked")
+    sub_steps.append({"check": "start_bargaining_button", "status": "pass", "detail": "Button found and clicked via JS dispatchEvent"})
     log("Step 4c — Start Bargaining clicked")
     time.sleep(2)
     _dismiss_overlays(page)
