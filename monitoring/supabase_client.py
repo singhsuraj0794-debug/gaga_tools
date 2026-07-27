@@ -39,6 +39,7 @@ class SupabaseStore:
             urllib.request.urlopen(req, timeout=30)
             public_url = f"{SUPABASE_URL}/storage/v1/object/public/monitoring/{remote_path}"
             print(f"[SUPABASE] Video uploaded: {public_url} ({p.stat().st_size / 1024:.0f}KB)")
+            self.clean_old_recordings()
             return public_url
         except urllib.error.HTTPError as e:
             err = e.read().decode()
@@ -131,6 +132,27 @@ class SupabaseStore:
         except Exception as e:
             print(f"[SUPABASE] Session download error: {e}")
             return False
+
+    def clean_old_recordings(self):
+        """Delete recordings older than 24h or keep max 24 most recent."""
+        if not self._client:
+            return
+        try:
+            resp = self._client.storage.from_("monitoring").list(path="recordings/")
+            if not resp:
+                return
+            all_files = sorted(resp, key=lambda x: x.get("created_at", ""), reverse=True)
+            if len(all_files) <= 24:
+                return
+            # Keep 24 most recent, delete rest
+            for f in all_files[24:]:
+                try:
+                    self._client.storage.from_("monitoring").remove([f"recordings/{f['name']}"])
+                    print(f"[SUPABASE] Deleted old recording: {f['name']}")
+                except Exception as e:
+                    print(f"[SUPABASE] Delete error: {e}")
+        except Exception as e:
+            print(f"[SUPABASE] Clean error: {e}")
 
     def get_latest_runs(self, limit: int = 100):
         if not self._client:

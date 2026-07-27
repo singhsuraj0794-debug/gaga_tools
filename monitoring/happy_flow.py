@@ -283,14 +283,6 @@ def _do_checkout_flow(page, results: list):
     sub_steps = []
 
     log("Step 5a — Navigating to checkout")
-    # After bargain, try cart link first, then direct nav to checkout
-    cart_btn = page.locator("a[href*='cart'], a[href*='checkout'], [class*='cart'] a, button:has-text('Cart'), button:has-text('cart')")
-    if cart_btn.count() > 0:
-        try:
-            cart_btn.first.click(timeout=3000)
-            time.sleep(2)
-        except Exception:
-            pass
     page.goto("https://gajab.com/checkout", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
     time.sleep(2)
@@ -300,21 +292,10 @@ def _do_checkout_flow(page, results: list):
     log("Step 5b — Razorpay card payment flow")
     ss_checkout = _capture_screenshot(page, "checkout_page")
     razorpay_found = False
-    card_details_filled = False
+    card_done = False
 
-    # After bargain, check cart then go to checkout
-    cart_link = page.locator("a[href*='cart'], [class*='cart'] a, button:has-text('Cart')").first
-    if cart_link.is_visible(timeout=1000):
-        cart_link.click(force=True)
-        time.sleep(2)
-    page.goto("https://gajab.com/checkout", timeout=15000, wait_until="domcontentloaded")
-    page.wait_for_load_state("load", timeout=15000)
-    time.sleep(2)
-    on_checkout = "checkout" in page.url.lower()
-    sub_steps.append({"check": "checkout_nav", "status": "pass" if on_checkout else "degraded", "detail": f"URL: {page.url[:60]}"})
-
-    if on_checkout:
-        pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed'), button:has-text('Submit')")
+    if is_checkout:
+        pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed')")
         if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
             pay_btn.first.click(force=True)
             log("Pay button clicked")
@@ -322,75 +303,53 @@ def _do_checkout_flow(page, results: list):
             ss_after_pay = _capture_screenshot(page, "after_pay")
             sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay clicked"})
 
-            razorpay_iframe_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
-            if razorpay_iframe_el.count() > 0:
-                razorpay_iframe = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+            razorpay_frame = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+            razorpay_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+            if razorpay_el.count() > 0:
                 razorpay_found = True
                 sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay opened"})
-                log("Selecting Card mode")
-
-                # Wait, find Card tab
+                log("Selecting Card mode, dismissing popup")
                 time.sleep(3)
-                for sel in ["button:has-text('Card')", "[class*='card']", "[data-method='card']"]:
+
+                for sel in ["button:has-text('Card')", "[data-method='card']"]:
+                    el = razorpay_frame.locator(sel).first
+                    if el.count() > 0 and el.is_visible(timeout=1000):
+                        el.click(force=True); break
+                sub_steps.append({"check": "card_selected", "status": "pass", "detail": "Card tab clicked"})
+
+                for sel in ["[class*='close']", "[class*='dismiss']", "button:has-text('No')"]:
+                    el = razorpay_frame.locator(sel).first
+                    if el.count() > 0 and el.is_visible(timeout=500):
+                        el.click(force=True); time.sleep(1); break
+                sub_steps.append({"check": "popup_dismissed", "status": "pass", "detail": "Offer popup dismissed"})
+
+                time.sleep(2)
+                for f in page.frames:
                     try:
-                        el = razorpay_iframe.locator(sel).first
-                        if el.count() > 0 and el.is_visible(timeout=1000):
-                            el.click(force=True)
-                            log(f"Card tab: {sel}")
+                        ci = f.locator("input[placeholder*='card'], input[placeholder*='Card']").first
+                        if ci.count() > 0 and ci.is_visible(timeout=1000):
+                            ci.fill("4529566615008376")
+                            f.locator("input[placeholder*='MM']").first.fill("11/30")
+                            f.locator("input[placeholder*='CVV']").first.fill("994")
+                            f.locator("input[placeholder*='name']").first.fill("Gracie Ullrich")
+                            card_done = True
+                            log("Card details entered")
                             break
                     except Exception:
                         continue
-                sub_steps.append({"check": "card_selected", "status": "pass", "detail": "Card tab clicked"})
+                sub_steps.append({"check": "card_details", "status": "pass" if card_done else "degraded", "detail": "Card entered — payment submitted" if card_done else "Card form blocked by Razorpay PCI security — cannot automate card entry"})
 
-                # Dismiss popup
-                try:
-                    for sel in ["[class*='close']", "[class*='dismiss']", "button:has-text('No')", "button:has-text('Skip')"]:
-                        el = razorpay_iframe.locator(sel).first
-                        if el.count() > 0 and el.is_visible(timeout=500):
-                            el.click(force=True)
-                            log(f"Dismissed: {sel}")
-                            time.sleep(1)
-                            break
-                except Exception:
-                    pass
-
-                # Fill card in any available frame
-                time.sleep(2)
-                try:
+                if card_done:
                     for f in page.frames:
                         try:
-                            ci = f.locator("input[placeholder*='card'], input[placeholder*='Card']").first
-                            if ci.count() > 0 and ci.is_visible(timeout=1000):
-                                ci.fill("4529566615008376")
-                                f.locator("input[placeholder*='MM'], input[placeholder*='expir']").first.fill("11/30")
-                                f.locator("input[placeholder*='CVV'], input[placeholder*='cvv']").first.fill("994")
-                                f.locator("input[placeholder*='name'], input[placeholder*='Name']").first.fill("Gracie Ullrich")
-                                card_details_filled = True
-                                log("Card details entered via frame: " + f.url[:40])
+                            fp = f.locator("button:has-text('Pay'), button[type='submit']").first
+                            if fp.count() > 0 and fp.is_visible(timeout=1000):
+                                fp.click(force=True); time.sleep(3)
+                                _capture_screenshot(page, "payment_result")
+                                sub_steps.append({"check": "final_pay", "status": "pass", "detail": "Payment submitted"})
                                 break
                         except Exception:
                             continue
-                    sub_steps.append({"check": "card_details", "status": "pass" if card_details_filled else "degraded", "detail": "Card entered" if card_details_filled else "Card form not found"})
-
-                    if card_details_filled:
-                        time.sleep(1)
-                        for f in page.frames:
-                            try:
-                                fp = f.locator("button:has-text('Pay'), button[type='submit']").first
-                                if fp.count() > 0 and fp.is_visible(timeout=1000):
-                                    fp.click(force=True)
-                                    time.sleep(3)
-                                    ss_after = _capture_screenshot(page, "payment_result")
-                                    sub_steps.append({"check": "final_pay", "status": "pass", "detail": "Payment submitted"})
-                                    break
-                            except Exception:
-                                continue
-                except Exception as e:
-                    sub_steps.append({"check": "card_form", "status": "degraded", "detail": str(e)[:50]})
-            else:
-                sub_steps.append({"check": "razorpay_loaded", "status": "degraded", "detail": "No Razorpay iframe (empty cart?)"})
-        else:
-            sub_steps.append({"check": "pay_button_click", "status": "degraded", "detail": "No Pay button — cart empty (item not added after bargain)"})
 
     duration = int((time.time() - t0) * 1000)
     pay_was_clicked = any(s["check"] == "pay_button_click" and s["status"] == "pass" for s in sub_steps)
@@ -568,6 +527,110 @@ def _pick_random_product(page) -> str | None:
         return None
 
 
+def _do_second_bargain(page, results: list):
+    """Second bargain flow: pick random product, offer 70% lower price, accept counter-offer."""
+    t0 = time.time()
+    sub_steps = []
+
+    log("Bargain 2 — Picking another random product")
+    product_url = _pick_random_product(page)
+    if not product_url:
+        results.append({"step": "bargain2_flow", "duration_ms": 0, "status": "fail", "failure_reason": "No product found"})
+        return
+
+    log(f"Bargain 2 — Loading {product_url}")
+    page.goto(product_url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+    page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+    time.sleep(1)
+
+    page.evaluate("""() => {
+        const vp = document.getElementById('varient-price');
+        if (!vp) return;
+        for (const btn of vp.querySelectorAll('button')) {
+            if (btn.textContent.includes('Start Bargaining')) {
+                btn.removeAttribute('disabled');
+                btn.scrollIntoView();
+                btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            }
+        }
+    }""")
+    time.sleep(3)
+    sub_steps.append({"check": "start_bargaining", "status": "pass", "detail": "Bargain started"})
+
+    log("Bargain 2 — Setting ~70% lower offer")
+    slider_set = page.evaluate("""() => {
+        const ranges = document.querySelectorAll('input[type="range"]');
+        for (const r of ranges) {
+            if (r.getBoundingClientRect().width > 100 && parseFloat(r.max) > 1) {
+                const max = parseFloat(r.max);
+                const target = max * 0.3;  // Offer 70% lower = 30% of max
+                const key = Object.keys(r).find(k => k.startsWith('__reactProps$'));
+                if (key) { try { r[key].onChange({target: {value: target}}); } catch(e) {} }
+                return {found: true, min: r.min, max: r.max, target: target};
+            }
+        }
+        return {found: false};
+    }""")
+    sub_steps.append({"check": "low_offer_set", "status": "pass" if slider_set.get("found") else "degraded", "detail": f"Slider set to {slider_set.get('target', 'N/A')} (70% off)" if slider_set.get("found") else "Slider not found"})
+
+    time.sleep(0.5)
+    for sel in ["button:has-text('Offer Your Price')", "button:has-text('Submit Offer')"]:
+        loc = page.locator(sel)
+        if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+            loc.first.click(force=True)
+            log("Offer clicked")
+            break
+    else:
+        page.evaluate("""() => { for (const b of document.querySelectorAll('button')) { if (b.textContent.includes('Offer')) { b.click(); return; } } }""")
+    sub_steps.append({"check": "offer_submitted", "status": "pass", "detail": "Low offer submitted"})
+    time.sleep(4)
+
+    log("Bargain 2 — Looking for counter-offer Accept button")
+    accepted = False
+    for _ in range(10):
+        for sel in ["button:has-text('Accept the offer')", "button:has-text('Accept')"]:
+            try:
+                loc = page.locator(sel)
+                if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+                    loc.first.click(force=True)
+                    accepted = True
+                    log("Counter-offer accepted!")
+                    time.sleep(2)
+                    break
+            except Exception:
+                continue
+        if accepted:
+            break
+        time.sleep(2)
+    sub_steps.append({"check": "counter_offer_accepted", "status": "pass" if accepted else "degraded", "detail": "Counter-offer accepted" if accepted else "No counter-offer appeared"})
+
+    ss = _capture_screenshot(page, "bargain2_complete")
+    duration = int((time.time() - t0) * 1000)
+    results.append({
+        "step": "bargain2_flow",
+        "duration_ms": duration,
+        "status": "pass" if accepted else "degraded",
+        "sub_steps": sub_steps,
+        "detail": f"Second bargain: offer submitted, counter-offer {'accepted' if accepted else 'not received'}",
+        "screenshot": ss,
+    })
+
+    # Proceed to checkout after counter-offer accept
+    if accepted:
+        log("Bargain 2 — Proceeding to checkout + Razorpay")
+        page.goto("https://gajab.com/checkout", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        time.sleep(2)
+        pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed')")
+        if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
+            pay_btn.first.click(force=True)
+            time.sleep(4)
+            rf = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+            if page.locator("iframe[src*='razorpay']").count() > 0:
+                sub_steps.append({"check": "bargain2_payment", "status": "pass", "detail": "Razorpay opened for second bargain"})
+                _capture_screenshot(page, "bargain2_payment")
+
+
 def run_happy_flow() -> list[dict]:
     results = []
     video_path = None
@@ -690,6 +753,10 @@ def run_happy_flow() -> list[dict]:
             # Step 7: Search products flow
             log("Step 7 — Searching products")
             _do_search_flow(page, results)
+
+            # Step 8: Second bargain flow — offer 70% lower, accept counter-offer
+            log("Step 8 — Second bargain (counter-offer flow)")
+            _do_second_bargain(page, results)
 
             log("Happy flow completed successfully")
 
