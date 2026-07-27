@@ -340,31 +340,45 @@ def _do_checkout_flow(page, results: list):
                         time.sleep(1)
                     sub_steps.append({"check": "card_selected", "status": "pass" if card_clicked else "degraded", "detail": "Card tab clicked" if card_clicked else "Card tab not found"})
 
-                    if card_clicked:
-                        time.sleep(2)
-                        try:
-                            card_input = razorpay_iframe.locator("input[placeholder*='card'], input[placeholder*='Card'], input[type='tel']").first
-                            if card_input.count() > 0:
-                                card_input.fill("4529566615008376")
-                                log("Card number entered")
-                                sub_steps.append({"check": "card_number", "status": "pass", "detail": "Card number entered"})
+                    # Dismiss any Razorpay offer/upsell popup
+                    try:
+                        for sel in ["[class*='close']", "[class*='dismiss']", "[aria-label='Close']", "button:has-text('Skip')", "button:has-text('No')"]:
+                            el = razorpay_iframe.locator(sel).first
+                            if el.count() > 0 and el.is_visible(timeout=1000):
+                                el.click(force=True)
+                                log(f"Dismissed popup: {sel}")
+                                time.sleep(1)
+                                break
+                    except Exception:
+                        pass
 
-                            razorpay_iframe.locator("input[placeholder*='MM'], input[placeholder*='expir']").first.fill("11/30")
-                            razorpay_iframe.locator("input[placeholder*='CVV'], input[placeholder*='cvv']").first.fill("994")
-                            razorpay_iframe.locator("input[placeholder*='name'], input[placeholder*='Name']").first.fill("Gracie Ullrich")
-                            log("Card details entered")
-                            sub_steps.append({"check": "card_details", "status": "pass", "detail": "Card/expiry/CVV/name entered"})
+                    time.sleep(2)
+                    try:
+                        card_input = razorpay_iframe.locator("input[placeholder*='card'], input[placeholder*='Card'], input[type='tel']").first
+                        if card_input.count() > 0:
+                            card_input.fill("4529566615008376")
+                            log("Card number entered")
+                            sub_steps.append({"check": "card_number", "status": "pass", "detail": "Card number entered"})
 
-                            time.sleep(0.5)
-                            final_pay = razorpay_iframe.locator("button:has-text('Pay'), button[type='submit']").first
-                            if final_pay.count() > 0:
-                                final_pay.click(force=True)
-                                log("Final Pay clicked")
-                                time.sleep(2)
-                                sub_steps.append({"check": "final_pay_clicked", "status": "pass", "detail": "Payment submitted"})
-                                card_filled = True
-                        except Exception as e:
-                            sub_steps.append({"check": "card_form", "status": "degraded", "detail": f"Form error: {str(e)[:60]}"})
+                        razorpay_iframe.locator("input[placeholder*='MM'], input[placeholder*='expir']").first.fill("11/30")
+                        razorpay_iframe.locator("input[placeholder*='CVV'], input[placeholder*='cvv']").first.fill("994")
+                        razorpay_iframe.locator("input[placeholder*='name'], input[placeholder*='Name']").first.fill("Gracie Ullrich")
+                        log("Card details entered")
+                        sub_steps.append({"check": "card_details", "status": "pass", "detail": "Card/expiry/CVV/name entered"})
+
+                        time.sleep(1)
+                        final_pay = razorpay_iframe.locator("button:has-text('Pay'), button[type='submit']").first
+                        if final_pay.count() > 0:
+                            final_pay.click(force=True)
+                            log("Final Pay clicked")
+                            time.sleep(3)
+                            ss_after_payment = _capture_screenshot(page, "payment_result")
+                            sub_steps.append({"check": "final_pay_clicked", "status": "pass", "detail": "Payment submitted (expected to fail)"})
+                            card_filled = True
+                        else:
+                            sub_steps.append({"check": "final_pay_clicked", "status": "degraded", "detail": "Final Pay not found"})
+                    except Exception as e:
+                        sub_steps.append({"check": "card_form", "status": "degraded", "detail": f"Form error: {str(e)[:60]}"})
                 else:
                     sub_steps.append({"check": "razorpay_loaded", "status": "degraded", "detail": "Pay clicked but no Razorpay iframe"})
             except Exception as e:
