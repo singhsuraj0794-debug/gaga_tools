@@ -10,6 +10,7 @@ from api_monitor import monitor_apis
 from feature_checks import run_feature_checks
 from supabase_client import SupabaseStore
 from slack_alert import send_alert
+from rca import generate_rca, format_rca_for_slack
 
 
 def main():
@@ -34,8 +35,9 @@ def main():
             duration_ms=r["duration_ms"],
         )
         if r["status"] == "fail":
-            failures.append(f"Server/{r['service']}: {r.get('error', 'unreachable')}")
-            send_alert(f"Server health failed: {r['service']}", f"Status: {r['status']}\n{r.get('error', '')}")
+            rca = generate_rca(f"server_{r['service']}", f"{r['service']}: {r.get('error', 'unreachable')}")
+            failures.append(f"Server/{r['service']}: {r.get('error', 'unreachable')}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
+            send_alert(f"Server health failed: {r['service']}", format_rca_for_slack(rca, f"Server/{r['service']}"))
 
     # ── Part 2: API Monitoring ──
     print("\n--- API Monitoring ---", flush=True)
@@ -77,11 +79,14 @@ def main():
             store.store_result(page_or_flow=page, metric=metric_name, value=metric_value, status=metric_status)
         if violations:
             page_violations = [v for v in violations]
-            failures.append(f"Lighthouse/{page}: {', '.join(page_violations)}")
-            send_alert(
-                f"Lighthouse audit issues: {page}",
-                f"Violations: {', '.join(page_violations)}\nMetrics: {metrics}",
-            )
+            for v in violations:
+                metric_key = v.split("=")[0] if "=" in v else v
+                rca = generate_rca(f"lighthouse_{metric_key}", v)
+                failures.append(f"Lighthouse/{page}: {v}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
+                send_alert(
+                    f"Lighthouse audit issues: {page}",
+                    format_rca_for_slack(rca, f"Lighthouse/{page}"),
+                )
 
     # ── Part 4: Happy-Flow Check ──
     print("\n--- Happy-Flow Check ---", flush=True)
@@ -123,9 +128,10 @@ def main():
         store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details)
         if step_status in ("fail", "degraded"):
             flow_overall = step_status
+            rca = generate_rca(f"happy_flow_{step_name}", error or failure_reason or f"Degraded ({duration}ms)", console_errors)
             msg = f"Step '{step_name}' failed: {error}" if error else f"Step '{step_name}' degraded ({duration}ms)"
-            failures.append(f"HappyFlow/{step_name}: {msg}")
-            send_alert(f"Happy flow {step_status}: {step_name}", msg)
+            failures.append(f"HappyFlow/{step_name}: {msg}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
+            send_alert(f"Happy flow {step_status}: {step_name}", format_rca_for_slack(rca, f"HappyFlow/{step_name}"))
 
     print(f"  happy_flow overall: {flow_overall}", flush=True)
 
@@ -144,10 +150,12 @@ def main():
             details={"check": r["check"], "check_type": r.get("check_type","visible"), "match_count": match_count, "min_expected": r.get("min")},
         )
         if r["status"] == "fail":
-            failures.append(f"Feature/{r['page']}/{r['check']}: {r.get('error', 'missing')}")
+            rca = generate_rca(f"feature_{r['check']}", r.get("error", "missing"))
+            failures.append(f"Feature/{r['page']}/{r['check']}: {r.get('error', 'missing')}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
     failed_features = [r for r in feature_results if r["status"] == "fail"]
     if failed_features:
-        send_alert("Feature checks failed", f"{len(failed_features)} elements failed out of {len(feature_results)}")
+        rca = generate_rca("feature_checks", f"{len(failed_features)} elements failed")
+        send_alert("Feature checks failed", format_rca_for_slack(rca, "Feature Checks"))
 
     # ── Summary ──
     elapsed = int((time.time() - t_start) * 1000)
