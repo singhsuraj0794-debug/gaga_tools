@@ -565,6 +565,23 @@ def _do_second_bargain(page, results: list):
     page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
     time.sleep(1)
 
+    # Dismiss any pincode/location dialog that might block the bargain modal
+    for _ in range(3):
+        try:
+            page.keyboard.press("Escape")
+            time.sleep(0.3)
+        except Exception:
+            pass
+    # Dismiss location overlay if present
+    page.evaluate("""() => {
+        const backdrop = document.querySelector('.fixed.inset-0.bg-\\[\\#080926\\]');
+        if (backdrop) { backdrop.click(); }
+        document.querySelectorAll('[role="dialog"] button, .react-modal-sheet-backdrop').forEach(el => {
+            try { el.click(); } catch(e) {}
+        });
+    }""")
+    time.sleep(1)
+
     page.evaluate("""() => {
         const vp = document.getElementById('varient-price');
         if (!vp) return;
