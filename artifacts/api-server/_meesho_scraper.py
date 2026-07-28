@@ -139,6 +139,13 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
             return resp.text
     except Exception:
         pass
+    try:
+        from curl_cffi import requests as curl_requests
+        resp = curl_requests.get(url, impersonate=impersonate, timeout=15, verify=False)
+        if resp.status_code == 200 and len(resp.text) > 5000 and not _is_bot_page(resp.text):
+            return resp.text
+    except Exception:
+        pass
     return ""
 
 
@@ -264,9 +271,11 @@ def _try_scraperapi(url: str) -> str:
     from urllib.parse import quote
     try:
         import requests
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         api_key = SCRAPERAPI_KEY
         target = f"https://api.scraperapi.com?api_key={api_key}&url={quote(url, safe='')}&country_code=in"
-        resp = requests.get(target, timeout=20)
+        resp = requests.get(target, timeout=20, verify=False)
         if len(resp.text) > 5000:
             return resp.text
     except Exception:
