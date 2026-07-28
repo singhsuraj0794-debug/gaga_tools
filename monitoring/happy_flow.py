@@ -282,10 +282,24 @@ def _do_checkout_flow(page, results: list):
     t0 = time.time()
     sub_steps = []
 
-    log("Step 5a — Navigating to checkout")
+    # First try going to cart, then checkout
+    log("Step 5a — Going to cart then checkout")
     page.goto("https://gajab.com/checkout", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
     time.sleep(2)
+
+    # If redirected away from checkout (empty cart), try navigating via cart
+    if "checkout" not in page.url.lower():
+        log("Checkout redirected — trying cart first")
+        page.goto("https://gajab.com/cart", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        time.sleep(2)
+        # Look for a way to proceed from cart
+        checkout_link = page.locator("a[href*='checkout'], button:has-text('Checkout'), button:has-text('Proceed')").first
+        if checkout_link.count() > 0 and checkout_link.is_visible(timeout=2000):
+            checkout_link.click(force=True)
+            time.sleep(3)
+
     is_checkout = "checkout" in page.url.lower()
     sub_steps.append({"check": "checkout_nav", "status": "pass" if is_checkout else "degraded", "detail": f"URL: {page.url[:80]}"})
 
@@ -295,6 +309,12 @@ def _do_checkout_flow(page, results: list):
     card_done = False
 
     if is_checkout:
+        # Try cart proceed button first
+        proceed_btn = page.locator("button:has-text('Proceed'), button:has-text('Checkout'), a[href*='checkout']").first
+        if proceed_btn.count() > 0 and proceed_btn.is_visible(timeout=1000):
+            proceed_btn.click(force=True)
+            time.sleep(2)
+
         pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed')")
         if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
             pay_btn.first.click(force=True)
