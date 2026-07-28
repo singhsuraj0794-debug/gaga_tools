@@ -6,7 +6,7 @@ import json
 HEALTH_ENDPOINTS = {
     "gajab.com (main)": "https://gajab.com/",
     "gajab.com (category)": "https://gajab.com/product-list/all",
-    "gateway.gajab.com": "https://gatewayservice.gajab.com/customer/api/customer/mobile-send-otp-new",
+    "gatewayservice.gajab.com": "https://gatewayservice.gajab.com/customer/api/customer/mobile-send-otp-new",
     "resize.gajab.com (CDN)": "https://resize.gajab.com/",
 }
 

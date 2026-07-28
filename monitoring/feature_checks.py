@@ -51,11 +51,20 @@ def check_elements(page, checks: list[dict]) -> list[dict]:
             error = str(e)[:100]
 
         duration = int((time.time() - t0) * 1000)
+        match_count = None
+        try:
+            loc = page.locator(check["selector"])
+            match_count = loc.count()
+        except Exception:
+            pass
         results.append({
             "check": check.get("name", check.get("selector", "unknown")),
+            "check_type": check.get("type", "visible"),
             "status": status,
             "duration_ms": duration,
             "error": error,
+            "match_count": match_count,
+            "min": check.get("min"),
         })
     return results
 

@@ -133,13 +133,15 @@ def main():
     print("\n--- Feature Element Checks ---", flush=True)
     feature_results = run_feature_checks()
     for r in feature_results:
+        match_count = r.get("match_count")
         store.store_result(
             page_or_flow=f"feature/{r['page']}",
-            metric=f"element_{r['check']}",
-            value=float(r["duration_ms"]),
+            metric=f"elem_{r['check']}_{r.get('check_type','visible')}",
+            value=1.0 if r["status"] == "pass" else 0.0,
             status=r["status"],
-            step_failed=r.get("error"),
+            step_failed=r.get("error") or (f"Found {match_count}, expected >= {r.get('min',1)}" if match_count is not None and r["status"] != "pass" else None),
             duration_ms=r["duration_ms"],
+            details={"check": r["check"], "check_type": r.get("check_type","visible"), "match_count": match_count, "min_expected": r.get("min")},
         )
         if r["status"] == "fail":
             failures.append(f"Feature/{r['page']}/{r['check']}: {r.get('error', 'missing')}")
