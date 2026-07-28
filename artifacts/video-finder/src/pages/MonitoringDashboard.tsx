@@ -20,6 +20,8 @@ interface Run {
     console_errors?: {type:string;text:string}[];
     sub_steps?: {check:string;status:string;detail:string}[];
     detail?: string; url?: string; product_count?: number;
+    session_recording_url?: string;
+    rca?: { summary?: string; causes?: string[]; actions?: string[] };
   };
 }
 
@@ -143,6 +145,27 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
             {run.details?.failure_reason && (
               <div className="flex items-start gap-1.5 mt-1.5 p-1.5 bg-red-50 rounded text-xs text-red-700">
                 <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" /> {run.details.failure_reason}
+              </div>
+            )}
+            {run.details?.rca?.summary && (
+              <div className="mt-1.5 p-2 bg-orange-50 border border-orange-200 rounded text-xs">
+                <div className="font-medium text-orange-800 mb-0.5">🔍 RCA: {run.details.rca.summary}</div>
+                {run.details.rca.causes && run.details.rca.causes.length > 0 && (
+                  <div className="mt-1 text-orange-700">
+                    <span className="font-medium">Causes:</span>
+                    <ul className="list-disc pl-4 mt-0.5 space-y-0.5">
+                      {run.details.rca.causes.map((c, i) => <li key={i}>{c}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {run.details.rca.actions && run.details.rca.actions.length > 0 && (
+                  <div className="mt-1 text-orange-700">
+                    <span className="font-medium">Actions:</span>
+                    <ul className="list-disc pl-4 mt-0.5 space-y-0.5">
+                      {run.details.rca.actions.map((a, i) => <li key={i}>{a}</li>)}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
             {run.details?.sub_steps && run.details.sub_steps.length > 0 && (

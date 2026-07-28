@@ -133,6 +133,7 @@ def main():
             msg = f"Step '{step_name}' failed: {error}" if error else f"Step '{step_name}' degraded ({duration}ms)"
             failures.append(f"HappyFlow/{step_name}: {msg}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
             send_alert(f"Happy flow {step_status}: {step_name}", format_rca_for_slack(rca, f"HappyFlow/{step_name}"))
+            details["rca"] = {"summary": rca["summary"], "causes": rca["probable_causes"][:3], "actions": rca["actions"][:3]}
 
     print(f"  happy_flow overall: {flow_overall}", flush=True)
 
