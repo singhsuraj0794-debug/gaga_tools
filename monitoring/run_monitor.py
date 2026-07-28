@@ -128,7 +128,8 @@ def main():
         store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details)
         if step_status in ("fail", "degraded"):
             flow_overall = step_status
-            rca = generate_rca(f"happy_flow_{step_name}", error or failure_reason or f"Degraded ({duration}ms)", console_errors)
+            rca_context = error or failure_reason or detail or f"Degraded ({duration}ms)"
+            rca = generate_rca(f"happy_flow_{step_name}", rca_context, console_errors)
             msg = f"Step '{step_name}' failed: {error}" if error else f"Step '{step_name}' degraded ({duration}ms)"
             failures.append(f"HappyFlow/{step_name}: {msg}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
             send_alert(f"Happy flow {step_status}: {step_name}", format_rca_for_slack(rca, f"HappyFlow/{step_name}"))

@@ -574,10 +574,14 @@ def _do_second_bargain(page, results: list):
             pass
     # Dismiss location overlay if present
     page.evaluate("""() => {
-        const backdrop = document.querySelector('.fixed.inset-0.bg-\\[\\#080926\\]');
-        if (backdrop) { backdrop.click(); }
-        document.querySelectorAll('[role="dialog"] button, .react-modal-sheet-backdrop').forEach(el => {
-            try { el.click(); } catch(e) {}
+        const els = document.querySelectorAll('.fixed.inset-0, [role="dialog"], .react-modal-sheet-backdrop');
+        els.forEach(el => {
+            try {
+                if (el.getBoundingClientRect().width > 0) {
+                    el.querySelector('button')?.click();
+                    el.click();
+                }
+            } catch(e) {}
         });
     }""")
     time.sleep(1)

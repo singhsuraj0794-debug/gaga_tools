@@ -7,6 +7,22 @@ from __future__ import annotations
 
 RCA_TEMPLATES: dict[str, dict] = {
     "home_load": {
+        "title missing": {
+            "summary": "Home page loaded without page title — likely a server error (502/503) or redirect issue",
+            "probable_causes": [
+                "Backend server returned HTTP 502/503 Bad Gateway",
+                "CDN failed to serve the page, returning empty response",
+                "JavaScript error prevented React hydration, leaving title empty",
+                "Redirect chain broken or timed out",
+            ],
+            "actions": [
+                "Check server logs for 502/503 errors at the time of failure",
+                "Verify CDN (resize.gajab.com) is healthy — currently returning HTTP 500",
+                "Test the URL directly in a browser to confirm page renders",
+                "Check browser dev tools Network tab for failed requests",
+            ],
+            "severity": "high",
+        },
         "slow": {
             "summary": "Home page took >10s to load (502 error or slow server response)",
             "probable_causes": [
@@ -262,15 +278,27 @@ def generate_rca(check_name: str, failure_detail: str, console_errors: list | No
     }
 
     # Match against known templates
+    combined = f"{check_name.lower()} {failure_detail.lower()}"
     for key, templates in RCA_TEMPLATES.items():
         if key in check_name.lower():
+            best_match = None
             for template_key, template in templates.items():
-                if template_key in failure_detail.lower() or template_key in check_name.lower():
-                    rca["probable_causes"].extend(template.get("probable_causes", []))
-                    rca["actions"].extend(template.get("actions", []))
-                    if template.get("severity") == "high":
-                        rca["severity"] = "high"
+                if template_key in combined:
+                    best_match = template
                     break
+            if best_match:
+                rca["probable_causes"] = best_match.get("probable_causes", [])
+                rca["actions"] = best_match.get("actions", [])
+                rca["severity"] = best_match.get("severity", "medium")
+                rca["summary"] = best_match.get("summary", failure_detail)
+                break
+            # Use first template as default if check name matches but no template_key matches
+            first_key = list(templates.keys())[0]
+            first = templates[first_key]
+            rca["probable_causes"] = first.get("probable_causes", [])
+            rca["actions"] = first.get("actions", [])
+            rca["severity"] = first.get("severity", "medium")
+            rca["summary"] = first.get("summary", failure_detail)
             break
 
     # Add fallback for unmatched
