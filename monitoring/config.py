@@ -21,7 +21,7 @@ DEVICE_SCALE_FACTOR = 2
 GEOLOCATION = {"latitude": 19.4560, "longitude": 72.8054}
 
 URLS = {
-    "home": os.getenv("MONITOR_URL_HOME", "https://gajab.com/"),
+    "home": os.getenv("MONITOR_URL_HOME", "https://gajab.go.link/k9bGV"),
     "category": os.getenv("MONITOR_URL_CATEGORY", "https://gajab.com/product-list/all"),
     "product_detail": os.getenv(
         "MONITOR_URL_PRODUCT_DETAIL",

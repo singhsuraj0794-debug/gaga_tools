@@ -694,7 +694,7 @@ def run_happy_flow() -> list[dict]:
             # Step 1: Home page
             log("Step 1 — Loading home page")
             t0 = time.time()
-            page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+            page.goto("https://gajab.go.link/k9bGV", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
             page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
             duration = int((time.time() - t0) * 1000)
             title = page.title()
