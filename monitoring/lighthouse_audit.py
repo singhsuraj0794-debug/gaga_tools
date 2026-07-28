@@ -70,6 +70,8 @@ def check_thresholds(metrics: dict) -> tuple[str, list[str]]:
         violations.append(f"cls={metrics.get('cls')} > {THRESHOLDS['cls']}")
     if metrics.get("tbt_ms", 0) > THRESHOLDS["tbt_ms"]:
         violations.append(f"tbt_ms={metrics.get('tbt_ms')} > {THRESHOLDS['tbt_ms']}")
+    if metrics.get("si_ms", 0) > THRESHOLDS["si_ms"]:
+        violations.append(f"si_ms={metrics.get('si_ms')} > {THRESHOLDS['si_ms']}")
     status = "fail" if violations else "pass"
     return status, violations
 
