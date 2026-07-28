@@ -188,24 +188,29 @@ def _do_bargain_flow(page, results: list):
     sub_steps.append({"check": "bargain_modal_opened", "status": "pass", "detail": "Waiting for bargain modal to render"})
 
     log("Step 4d — Setting offer price via slider")
-    slider_result = page.evaluate("""() => {
-        const ranges = document.querySelectorAll('input[type="range"]');
-        for (const r of ranges) {
-            const box = r.getBoundingClientRect();
-            if (box.width > 100 && parseFloat(r.max) > 1) {
-                const target = 2.0;
-                const propsKey = Object.keys(r).find(k => k.startsWith('__reactProps$'));
-                if (propsKey) {
-                    const props = r[propsKey];
-                    if (props && props.onChange) {
-                        try { props.onChange({target: {value: target}}); } catch(e) {}
+    slider_result = {"found": False}
+    for retry in range(5):
+        slider_result = page.evaluate("""() => {
+            const ranges = document.querySelectorAll('input[type="range"]');
+            for (const r of ranges) {
+                const box = r.getBoundingClientRect();
+                if (box.width > 50 && parseFloat(r.max) > 1) {
+                    const target = 2.0;
+                    const propsKey = Object.keys(r).find(k => k.startsWith('__reactProps$'));
+                    if (propsKey) {
+                        const props = r[propsKey];
+                        if (props && props.onChange) {
+                            try { props.onChange({target: {value: target}}); } catch(e) {}
+                        }
                     }
+                    return {found: true, old: r.value, min: r.min, max: r.max};
                 }
-                return {found: true, old: r.value, min: r.min, max: r.max};
             }
-        }
-        return {found: false};
-    }""")
+            return {found: false};
+        }""")
+        if slider_result.get("found"):
+            break
+        time.sleep(1)
     if not slider_result.get("found"):
         _capture_screenshot(page, "slider_not_found")
         sub_steps.append({"check": "price_slider", "status": "degraded", "detail": "No slider input found, continuing"})
@@ -575,19 +580,24 @@ def _do_second_bargain(page, results: list):
     sub_steps.append({"check": "start_bargaining", "status": "pass", "detail": "Bargain started"})
 
     log("Bargain 2 — Sliding to extreme lowest (red zone) to trigger counter-offer")
-    slider_set = page.evaluate("""() => {
-        const ranges = document.querySelectorAll('input[type="range"]');
-        for (const r of ranges) {
-            if (r.getBoundingClientRect().width > 100 && parseFloat(r.max) > 1) {
-                const min = parseFloat(r.min);
-                const target = min + 0.01;  // Slide to absolute minimum (red zone)
-                const key = Object.keys(r).find(k => k.startsWith('__reactProps$'));
-                if (key) { try { r[key].onChange({target: {value: target}}); } catch(e) {} }
-                return {found: true, min: r.min, max: r.max, target: target};
+    slider_set = {"found": False}
+    for _ in range(5):
+        slider_set = page.evaluate("""() => {
+            const ranges = document.querySelectorAll('input[type="range"]');
+            for (const r of ranges) {
+                if (r.getBoundingClientRect().width > 50 && parseFloat(r.max) > 1) {
+                    const min = parseFloat(r.min);
+                    const target = min + 0.01;
+                    const key = Object.keys(r).find(k => k.startsWith('__reactProps$'));
+                    if (key) { try { r[key].onChange({target: {value: target}}); } catch(e) {} }
+                    return {found: true, min: r.min, max: r.max, target: target};
+                }
             }
-        }
-        return {found: false};
-    }""")
+            return {found: false};
+        }""")
+        if slider_set.get("found"):
+            break
+        time.sleep(1)
     sub_steps.append({"check": "low_offer_set", "status": "pass" if slider_set.get("found") else "degraded", "detail": f"Slider set to minimum {slider_set.get('target', 'N/A')} (red zone)" if slider_set.get("found") else "Slider not found"})
 
     time.sleep(0.5)
