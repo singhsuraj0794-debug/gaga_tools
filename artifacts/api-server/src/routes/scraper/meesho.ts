@@ -52,9 +52,9 @@ async function callPython(action: string, url: string): Promise<any> {
   const env: Record<string, string> = { ...process.env as Record<string, string> };
   if (process.env.SCRAPE_DO_TOKEN) env.SCRAPE_DO_TOKEN = process.env.SCRAPE_DO_TOKEN;
   if (process.env.SCRAPER_PROXY) env.SCRAPER_PROXY = process.env.SCRAPER_PROXY;
-  if (process.env.SCRAPER_API_KEY) env.SCRAPER_API_KEY = process.env.SCRAPER_API_KEY;
+  if (process.env.SCRAPERAPI_KEY) env.SCRAPERAPI_KEY = process.env.SCRAPERAPI_KEY;
+  else if (process.env.SCRAPER_API_KEY) env.SCRAPERAPI_KEY = process.env.SCRAPER_API_KEY;
   if (process.env.SCRAPING_SERVICE_URL) env.SCRAPING_SERVICE_URL = process.env.SCRAPING_SERVICE_URL;
-  if (process.env.SCRAPPLEY_API_KEY) env.SCRAPPLEY_API_KEY = process.env.SCRAPPLEY_API_KEY;
   const timeout = 900000;
   const maxBuffer = action === "extract" ? 200 * 1024 * 1024 : 50 * 1024 * 1024;
 
