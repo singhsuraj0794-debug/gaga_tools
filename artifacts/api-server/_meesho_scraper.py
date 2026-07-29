@@ -184,7 +184,7 @@ def _ensure_chrome_cdp():
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch via real Chrome profile — uses YOUR browser session, not automation."""
+    """Fetch via real Chrome profile — uses YOUR browser session."""
     try:
         import time, random
 
@@ -195,8 +195,9 @@ def _try_playwright(url: str) -> str:
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.new_page()
 
-        page.goto(url, wait_until="networkidle", timeout=45000)
-        time.sleep(random.uniform(2, 4))
+        # Navigate like a human — use location.href (not page.goto which is detected)
+        page.evaluate('window.location.href = arguments[0]', url)
+        time.sleep(random.uniform(3, 5))
 
         html = page.content()
         page.close()
