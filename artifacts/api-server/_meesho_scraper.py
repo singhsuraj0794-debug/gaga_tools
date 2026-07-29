@@ -156,58 +156,33 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
-_CHROME_CDP_BROWSER = None
-
-def _ensure_chrome_cdp():
-    """Connect to already-running Chrome with remote debugging."""
-    global _CHROME_CDP_BROWSER
-    if _CHROME_CDP_BROWSER:
-        return _CHROME_CDP_BROWSER
-
-    import time
-    from playwright.sync_api import sync_playwright
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp("http://localhost:9222")
-            _CHROME_CDP_BROWSER = browser
-            print("[CDP] Connected to real Chrome", flush=True)
-            return browser
-    except Exception as e:
-        print(f"[CDP] Cannot connect: {e}", flush=True)
-        print("[CDP] Start Chrome manually: open Terminal and run:", flush=True)
-        print('[CDP]   /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\', flush=True)
-        print('[CDP]     --remote-debugging-port=9222 \\', flush=True)
-        print('[CDP]     --user-data-dir=/tmp/chrome-meesho \\', flush=True)
-        print('[CDP]     --no-first-run --no-default-browser-check &', flush=True)
-        return None
-
-
 def _try_playwright(url: str) -> str:
-    """Fetch via real Chrome profile — uses YOUR browser session."""
+    """Fetch via real Chrome profile — fresh sync_playwright context per call."""
     try:
-        import time, random
+        import time, json, urllib.request
+        from playwright.sync_api import sync_playwright
 
-        browser = _ensure_chrome_cdp()
-        if not browser:
-            return ""
+        resp = urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+        ws_endpoint = json.loads(resp.read())["webSocketDebuggerUrl"]
 
-        context = browser.contexts[0] if browser.contexts else browser.new_context()
-        page = context.new_page()
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(ws_endpoint)
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.new_page()
 
-        # Navigate like a human — use location.href
-        page.evaluate("url => { window.location.href = url }", url)
-        # Wait for page to actually load (up to 30s, checking every 2s)
-        for _ in range(15):
-            time.sleep(2)
-            html = page.content()
-            if "__NEXT_DATA__" in html and len(html) > 5000:
-                page.close()
-                return html
+            page.evaluate('window.location.href = "' + url + '"')
+
+            for _ in range(15):
+                time.sleep(2)
+                html = page.content()
+                if "__NEXT_DATA__" in html and len(html) > 5000:
+                    page.close()
+                    return html
+
+            page.close()
     except Exception:
         pass
     return ""
-
 
 def _try_google_cache(url: str) -> str:
     """Fallback: fetch Google cached version of the page."""
