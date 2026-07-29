@@ -195,8 +195,8 @@ def _try_playwright(url: str) -> str:
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.new_page()
 
-        # Navigate like a human — use location.href (not page.goto which is detected)
-        page.evaluate('window.location.href = arguments[0]', url)
+        # Navigate like a human — use location.href
+        page.evaluate("url => { window.location.href = url }", url)
         # Wait for page to actually load (up to 30s, checking every 2s)
         for _ in range(15):
             time.sleep(2)
