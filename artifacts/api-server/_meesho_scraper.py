@@ -182,8 +182,8 @@ def _try_playwright(url: str) -> str:
                 permissions=["geolocation"],
             )
             page = context.new_page()
-        # Apply stealth — hides webdriver, chrome runtime, etc.
-        Stealth().apply_stealth_sync(page)
+            # Apply stealth — hides webdriver, chrome runtime, etc.
+            Stealth().apply_stealth_sync(page)
 
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
             time.sleep(2)
