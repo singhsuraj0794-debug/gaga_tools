@@ -155,50 +155,77 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
     return ""
 
 
-def _try_playwright(url: str) -> str:
-    """Fetch via Playwright with proper Webshare proxy + full stealth — mimics real user session."""
-    try:
-        import time, random
-        from playwright.sync_api import sync_playwright
-        from playwright_stealth import Stealth
-        from urllib.parse import urlparse
+# ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
+_CHROME_CDP_BROWSER = None
+_CHROME_CDP_STARTED = False
 
-        proxy_config = {
-            "server": "http://p.webshare.io:80",
-            "username": "uvuqatrj-in",
-            "password": "fd9sp5s4yg8q",
-        }
+def _ensure_chrome_cdp():
+    """Start or connect to real Chrome with remote debugging."""
+    global _CHROME_CDP_BROWSER, _CHROME_CDP_STARTED
+    if _CHROME_CDP_BROWSER:
+        return _CHROME_CDP_BROWSER
+    if _CHROME_CDP_STARTED:
+        return None  # already tried and failed
+
+    import time, subprocess, os
+    from playwright.sync_api import sync_playwright
+
+    port = 9222
+    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    user_data_dir = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+
+    # Check if Chrome is already running with CDP
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+            _CHROME_CDP_BROWSER = browser
+            print("[CDP] Connected to existing Chrome", flush=True)
+            return browser
+    except Exception:
+        pass
+
+    # Start Chrome with remote debugging
+    try:
+        subprocess.Popen([
+            chrome_path,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3)
+        _CHROME_CDP_STARTED = True
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
-            context = browser.new_context(
-                proxy=proxy_config,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                viewport={"width": 1366, "height": 768},
-                locale="en-IN",
-                timezone_id="Asia/Kolkata",
-                geolocation={"latitude": 19.076, "longitude": 72.8777},
-            )
-            page = context.new_page()
-            Stealth().apply_stealth_sync(page)
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+            _CHROME_CDP_BROWSER = browser
+            print("[CDP] Started new Chrome with real profile", flush=True)
+            return browser
+    except Exception as e:
+        print(f"[CDP] Failed to start Chrome: {e}", flush=True)
+        _CHROME_CDP_STARTED = True  # don't retry
+        return None
 
-            # Step 1: Warm up — visit homepage like a real user
-            page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
-            time.sleep(random.uniform(2, 4))
 
-            # Step 2: Scroll a bit like a real user
-            page.evaluate("window.scrollBy(0, %d)" % random.randint(100, 500))
-            time.sleep(random.uniform(1, 2))
+def _try_playwright(url: str) -> str:
+    """Fetch via real Chrome profile — uses YOUR browser session, not automation."""
+    try:
+        import time, random
 
-            # Step 3: Navigate to product page
-            page.goto(url, wait_until="networkidle", timeout=45000)
-            time.sleep(random.uniform(2, 3))
+        browser = _ensure_chrome_cdp()
+        if not browser:
+            return ""
 
-            html = page.content()
-            browser.close()
+        # Use the default context (has all your cookies and sessions)
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        page = context.new_page()
+
+        # Navigate at human pace
+        page.goto(url, wait_until="networkidle", timeout=45000)
+        time.sleep(random.uniform(2, 4))
+
+        html = page.content()
+        page.close()
 
         if len(html) > 5000 and "__NEXT_DATA__" in html:
             return html
