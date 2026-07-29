@@ -220,7 +220,7 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
 router.get("/scrape/:jobId", (req: Request, res: Response): void => {
   const job = jobs.get(req.params.jobId as string);
   if (!job) {
-    res.status(404).json({ error: "Job not found" });
+    res.json({ status: "failed", total: 0, completed: 0, products: [], error: "Job not found" });
     return;
   }
   res.json({
@@ -229,6 +229,14 @@ router.get("/scrape/:jobId", (req: Request, res: Response): void => {
     completed: job.completed,
     products: job.products,
   });
+});
+
+router.post("/cancel/:jobId", (req: Request, res: Response): void => {
+  const job = jobs.get(req.params.jobId as string);
+  if (job) {
+    job.status = "cancelled";
+  }
+  res.json({ status: "cancelled" });
 });
 
 router.post("/export", async (req: Request, res: Response): Promise<void> => {
