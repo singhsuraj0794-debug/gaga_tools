@@ -135,16 +135,9 @@ def _is_bot_page(html: str) -> bool:
 
 def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
     """Fetch via curl_cffi with browser impersonation — bypasses Akamai."""
-    kwargs = dict(impersonate=impersonate, timeout=60)
+    kwargs = dict(impersonate=impersonate, timeout=30)
     if PROXY:
         kwargs["proxies"] = {"http": PROXY, "https": PROXY}
-    try:
-        from curl_cffi import requests as curl_requests
-        resp = curl_requests.get(url, **kwargs)
-        if resp.status_code == 200 and len(resp.text) > 5000 and not _is_bot_page(resp.text):
-            return resp.text
-    except Exception:
-        pass
     try:
         from curl_cffi import requests as curl_requests
         resp = curl_requests.get(url, **kwargs, verify=False)
@@ -179,8 +172,8 @@ def _try_playwright(url: str) -> str:
                 Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
                 Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
             """)
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_load_state("networkidle", timeout=30000)
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=15000)
             html = page.content()
             browser.close()
         if len(html) > 5000 and not _is_bot_page(html):
