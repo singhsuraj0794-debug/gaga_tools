@@ -121,7 +121,7 @@ def _fetch_product_page(url: str) -> str:
 
 def _is_bot_page(html: str) -> bool:
     """Detect bot/challenge pages — short HTML with JS challenge or access denied."""
-    if len(html) < 5000:
+    if len(html) < 1000:
         return True
     checks = [
         "sec-if-cpt-container" in html,
@@ -141,7 +141,7 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
     try:
         from curl_cffi import requests as curl_requests
         resp = curl_requests.get(url, **kwargs, verify=False)
-        if resp.status_code == 200 and len(resp.text) > 5000 and not _is_bot_page(resp.text):
+        if resp.status_code == 200 and len(resp.text) > 1000 and not _is_bot_page(resp.text):
             return resp.text
     except Exception:
         pass
@@ -176,7 +176,7 @@ def _try_playwright(url: str) -> str:
             page.wait_for_load_state("networkidle", timeout=15000)
             html = page.content()
             browser.close()
-        if len(html) > 5000 and not _is_bot_page(html):
+        if len(html) > 1000 and not _is_bot_page(html):
             return html
     except Exception:
         pass
@@ -192,7 +192,7 @@ def _try_google_cache(url: str) -> str:
         resp = requests.get(cache_url, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         })
-        if resp.status_code == 200 and len(resp.text) > 5000:
+        if resp.status_code == 200 and len(resp.text) > 1000:
             return resp.text
     except Exception:
         pass
@@ -220,7 +220,7 @@ def _try_scrappey(url: str) -> str:
                 data = json.loads(resp.text)
                 solution = data.get("solution", {})
                 html = solution.get("response", "")
-                if len(html) > 5000 and not _is_bot_page(html):
+                if len(html) > 1000 and not _is_bot_page(html):
                     return html
             if attempt < 19:
                 _time.sleep(1 + random.random() * 2)
@@ -260,7 +260,7 @@ def _try_scrape_do(url: str) -> str:
         from urllib.parse import quote
         target = f"http://api.scrape.do?token={SCRAPE_DO_TOKEN}&super=false&url={quote(url, safe='')}"
         resp = requests.get(target, timeout=30)
-        if len(resp.text) > 5000:
+        if len(resp.text) > 1000:
             return resp.text
     except Exception:
         pass
@@ -277,7 +277,7 @@ def _try_scraperapi(url: str) -> str:
         api_key = SCRAPERAPI_KEY
         target = f"https://api.scraperapi.com?api_key={api_key}&url={quote(url, safe='')}&country_code=in"
         resp = requests.get(target, timeout=60, verify=False)
-        if len(resp.text) > 5000:
+        if len(resp.text) > 1000:
             return resp.text
     except Exception:
         pass
