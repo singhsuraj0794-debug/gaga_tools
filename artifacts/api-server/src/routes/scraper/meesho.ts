@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
+import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,6 +69,30 @@ async function callPython(action: string, url: string): Promise<any> {
 }
 
 async function scrapeProduct(url: string): Promise<MeeshoDetailedProduct> {
+  if (hasLocalScraper()) {
+    const localResult = await runLocalScraper(url, "meesho");
+    if (localResult && localResult.status === "success") {
+      return {
+        id: localResult.id || "",
+        title: localResult.title || "Untitled",
+        description: localResult.description || null,
+        meta_description: localResult.meta_description || null,
+        imageUrl: (localResult.images || [])[0] || null,
+        images: localResult.images || [],
+        hsn: localResult.hsn || null,
+        gst: localResult.gst || null,
+        dimensions: localResult.dimensions || null,
+        weight: localResult.weight || null,
+        specifications: localResult.specifications || null,
+        variants: localResult.variants || null,
+        price: localResult.price || null,
+        url,
+        status: "success",
+        error: null,
+      };
+    }
+  }
+
   const result = await callPython("scrape", url).catch(() => null);
   if (result && result.status === "success") {
     return {

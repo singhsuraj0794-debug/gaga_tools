@@ -21,6 +21,7 @@ PORT = 9000
 sys.path.insert(0, ".")
 import _scraper as flipkart_scraper
 import _amazon_scraper as amazon_scraper
+import _meesho_scraper as meesho_scraper
 import _platform_searcher
 
 
@@ -50,6 +51,8 @@ class ScraperHandler(BaseHTTPRequestHandler):
 
             if platform == "amazon":
                 result = amazon_scraper.scrape(url)
+            elif platform == "meesho":
+                result = meesho_scraper.scrape_product(url)
             else:
                 result = flipkart_scraper.scrape(url)
 
