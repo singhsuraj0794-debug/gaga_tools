@@ -135,7 +135,7 @@ def _is_bot_page(html: str) -> bool:
 
 def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
     """Fetch via curl_cffi with browser impersonation — bypasses Akamai."""
-    kwargs = dict(impersonate=impersonate, timeout=15)
+    kwargs = dict(impersonate=impersonate, timeout=30)
     if PROXY:
         kwargs["proxies"] = {"http": PROXY, "https": PROXY}
     try:
@@ -283,7 +283,7 @@ def _try_scraperapi(url: str) -> str:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         api_key = SCRAPERAPI_KEY
         target = f"https://api.scraperapi.com?api_key={api_key}&url={quote(url, safe='')}&country_code=in"
-        resp = requests.get(target, timeout=20, verify=False)
+        resp = requests.get(target, timeout=30, verify=False)
         if len(resp.text) > 5000:
             return resp.text
     except Exception:
