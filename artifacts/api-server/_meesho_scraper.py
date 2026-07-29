@@ -18,7 +18,7 @@ import re
 import sys
 import traceback
 
-PROXY = os.environ.get("SCRAPER_PROXY", "")
+PROXY = os.environ.get("MEESHO_PROXY", "") or os.environ.get("SCRAPER_PROXY", "")
 SCRAPE_DO_TOKEN = os.environ.get("SCRAPE_DO_TOKEN", "")
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "") or f"https://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url="
