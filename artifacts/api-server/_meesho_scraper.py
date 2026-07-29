@@ -157,53 +157,35 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
 _CHROME_CDP_BROWSER = None
-_CHROME_CDP_STARTED = False
 
 def _ensure_chrome_cdp():
-    """Start or connect to real Chrome with remote debugging."""
-    global _CHROME_CDP_BROWSER, _CHROME_CDP_STARTED
+    """Connect to already-running Chrome with remote debugging."""
+    global _CHROME_CDP_BROWSER
     if _CHROME_CDP_BROWSER:
         return _CHROME_CDP_BROWSER
-    if _CHROME_CDP_STARTED:
-        return None  # already tried and failed
 
-    import time, subprocess, os
+    import time
     from playwright.sync_api import sync_playwright
 
-    port = 9222
-    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    user_data_dir = os.path.expanduser("~/Library/Application Support/Google/Chrome")
-
-    # Check if Chrome is already running with CDP
     try:
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            # Warm up: visit Meesho homepage to establish session
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.new_page()
+            page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
+            time.sleep(2)
+            page.close()
             _CHROME_CDP_BROWSER = browser
-            print("[CDP] Connected to existing Chrome", flush=True)
-            return browser
-    except Exception:
-        pass
-
-    # Start Chrome with remote debugging
-    try:
-        subprocess.Popen([
-            chrome_path,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={user_data_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(3)
-        _CHROME_CDP_STARTED = True
-
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
-            _CHROME_CDP_BROWSER = browser
-            print("[CDP] Started new Chrome with real profile", flush=True)
+            print("[CDP] Connected to real Chrome and warmed up Meesho session", flush=True)
             return browser
     except Exception as e:
-        print(f"[CDP] Failed to start Chrome: {e}", flush=True)
-        _CHROME_CDP_STARTED = True  # don't retry
+        print(f"[CDP] Cannot connect: {e}", flush=True)
+        print("[CDP] Start Chrome manually: open Terminal and run:", flush=True)
+        print('[CDP]   /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome \\', flush=True)
+        print('[CDP]     --remote-debugging-port=9222 \\', flush=True)
+        print('[CDP]     --user-data-dir=/tmp/chrome-meesho \\', flush=True)
+        print('[CDP]     --no-first-run --no-default-browser-check &', flush=True)
         return None
 
 
@@ -216,11 +198,9 @@ def _try_playwright(url: str) -> str:
         if not browser:
             return ""
 
-        # Use the default context (has all your cookies and sessions)
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.new_page()
 
-        # Navigate at human pace
         page.goto(url, wait_until="networkidle", timeout=45000)
         time.sleep(random.uniform(2, 4))
 
