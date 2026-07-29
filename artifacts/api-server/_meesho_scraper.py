@@ -170,14 +170,8 @@ def _ensure_chrome_cdp():
     try:
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp("http://localhost:9222")
-            # Warm up: visit Meesho homepage to establish session
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = context.new_page()
-            page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
-            time.sleep(2)
-            page.close()
             _CHROME_CDP_BROWSER = browser
-            print("[CDP] Connected to real Chrome and warmed up Meesho session", flush=True)
+            print("[CDP] Connected to real Chrome", flush=True)
             return browser
     except Exception as e:
         print(f"[CDP] Cannot connect: {e}", flush=True)
