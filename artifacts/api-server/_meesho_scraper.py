@@ -140,8 +140,15 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
         kwargs["proxies"] = {"http": PROXY, "https": PROXY}
     try:
         from curl_cffi import requests as curl_requests
+        resp = curl_requests.get(url, **kwargs)
+        if resp.status_code == 200 and len(resp.text) > 5000 and not _is_bot_page(resp.text):
+            return resp.text
+    except Exception:
+        pass
+    try:
+        from curl_cffi import requests as curl_requests
         resp = curl_requests.get(url, **kwargs, verify=False)
-        if resp.status_code == 200 and len(resp.text) > 1000 and not _is_bot_page(resp.text):
+        if resp.status_code == 200 and len(resp.text) > 5000 and not _is_bot_page(resp.text):
             return resp.text
     except Exception:
         pass
@@ -149,54 +156,32 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch via Playwright with Webshare proxy + stealth — session warm-up to bypass Akamai."""
+    """Fetch via Playwright with stealth."""
     try:
         import time
-        import random
         from playwright.sync_api import sync_playwright
-        from playwright_stealth import Stealth
 
-        # Extract proxy credentials from MEESHO_PROXY env var
-        proxy_server = "http://p.webshare.io:80"
-        proxy_username = "uvuqatrj-in-rotate"
-        proxy_password = "fd9sp5s4yg8q"
-        proxy_config = {
-            "server": proxy_server,
-            "username": proxy_username,
-            "password": proxy_password,
-        }
+        launch_kwargs = dict(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
+        if PROXY:
+            launch_kwargs["proxy"] = {"server": PROXY}
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
-            # Session-per-identity: warm up once, scrape multiple PDPs
+            browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context(
-                proxy=proxy_config,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                viewport={"width": 1366, "height": 768},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
                 locale="en-IN",
-                timezone_id="Asia/Kolkata",
-                geolocation={"latitude": 19.076, "longitude": 72.8777},
+                viewport={"width": 1366, "height": 768},
             )
             page = context.new_page()
-            Stealth().apply_stealth_sync(page)
-
-            # Warm-up: visit homepage first to set cookies & establish trust
             page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
-            time.sleep(random.uniform(2, 4))
-
-            # Navigate to product page
-            resp = page.goto(url, wait_until="networkidle", timeout=45000)
-            time.sleep(random.uniform(1, 2))
-
+            time.sleep(2)
+            page.goto(url, wait_until="networkidle", timeout=45000)
+            time.sleep(2)
             html = page.content()
             browser.close()
 
-            # Verify we got real product HTML (not Akamai challenge)
-            if len(html) > 5000 and "__NEXT_DATA__" in html:
-                return html
+        if len(html) > 5000 and "__NEXT_DATA__" in html:
+            return html
     except Exception:
         pass
     return ""
