@@ -135,7 +135,7 @@ def _is_bot_page(html: str) -> bool:
 
 def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
     """Fetch via curl_cffi with browser impersonation — bypasses Akamai."""
-    kwargs = dict(impersonate=impersonate, timeout=30)
+    kwargs = dict(impersonate=impersonate, timeout=60)
     if PROXY:
         kwargs["proxies"] = {"http": PROXY, "https": PROXY}
     try:
@@ -179,8 +179,8 @@ def _try_playwright(url: str) -> str:
                 Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
                 Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
             """)
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=15000)
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_load_state("networkidle", timeout=30000)
             html = page.content()
             browser.close()
         if len(html) > 5000 and not _is_bot_page(html):
@@ -283,7 +283,7 @@ def _try_scraperapi(url: str) -> str:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         api_key = SCRAPERAPI_KEY
         target = f"https://api.scraperapi.com?api_key={api_key}&url={quote(url, safe='')}&country_code=in"
-        resp = requests.get(target, timeout=30, verify=False)
+        resp = requests.get(target, timeout=60, verify=False)
         if len(resp.text) > 5000:
             return resp.text
     except Exception:
