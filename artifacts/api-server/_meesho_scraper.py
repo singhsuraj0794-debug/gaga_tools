@@ -149,57 +149,54 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch via Playwright-extra with stealth — replicates ScraperAPI's headless Chrome."""
+    """Fetch via Playwright with Webshare proxy + stealth — session warm-up to bypass Akamai."""
     try:
         import time
+        import random
         from playwright.sync_api import sync_playwright
-
-        # Use puppeteer-extra-plugin-stealth to hide automation
         from playwright_stealth import Stealth
 
-        launch_kwargs = dict(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
-            ],
-        )
-        if PROXY:
-            launch_kwargs["proxy"] = {"server": PROXY}
+        # Extract proxy credentials from MEESHO_PROXY env var
+        proxy_server = "http://p.webshare.io:80"
+        proxy_username = "uvuqatrj-in-rotate"
+        proxy_password = "fd9sp5s4yg8q"
+        proxy_config = {
+            "server": proxy_server,
+            "username": proxy_username,
+            "password": proxy_password,
+        }
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(**launch_kwargs)
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            )
+            # Session-per-identity: warm up once, scrape multiple PDPs
             context = browser.new_context(
+                proxy=proxy_config,
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                viewport={"width": 1366, "height": 768},
                 locale="en-IN",
-                viewport={"width": 1920, "height": 1080},
-                device_scale_factor=1,
                 timezone_id="Asia/Kolkata",
                 geolocation={"latitude": 19.076, "longitude": 72.8777},
-                permissions=["geolocation"],
             )
             page = context.new_page()
-            # Apply stealth — hides webdriver, chrome runtime, etc.
             Stealth().apply_stealth_sync(page)
 
-            page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            time.sleep(2)
+            # Warm-up: visit homepage first to set cookies & establish trust
+            page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
+            time.sleep(random.uniform(2, 4))
 
-            # Wait for Akamai challenge to resolve — up to 30s
-            for _ in range(20):
-                content = page.content()
-                if "__NEXT_DATA__" in content and len(content) > 5000:
-                    break
-                time.sleep(1.5)
+            # Navigate to product page
+            resp = page.goto(url, wait_until="networkidle", timeout=45000)
+            time.sleep(random.uniform(1, 2))
 
             html = page.content()
             browser.close()
 
-        if len(html) > 1000 and not _is_bot_page(html):
-            return html
+            # Verify we got real product HTML (not Akamai challenge)
+            if len(html) > 5000 and "__NEXT_DATA__" in html:
+                return html
     except Exception:
         pass
     return ""
