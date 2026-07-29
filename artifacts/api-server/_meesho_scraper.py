@@ -197,13 +197,13 @@ def _try_playwright(url: str) -> str:
 
         # Navigate like a human — use location.href (not page.goto which is detected)
         page.evaluate('window.location.href = arguments[0]', url)
-        time.sleep(random.uniform(3, 5))
-
-        html = page.content()
-        page.close()
-
-        if len(html) > 5000 and "__NEXT_DATA__" in html:
-            return html
+        # Wait for page to actually load (up to 30s, checking every 2s)
+        for _ in range(15):
+            time.sleep(2)
+            html = page.content()
+            if "__NEXT_DATA__" in html and len(html) > 5000:
+                page.close()
+                return html
     except Exception:
         pass
     return ""
