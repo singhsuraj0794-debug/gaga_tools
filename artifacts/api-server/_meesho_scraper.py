@@ -149,37 +149,55 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch via Playwright headless Chromium with stealth — waits for Akamai challenge to resolve."""
+    """Fetch via Playwright-extra with stealth — replicates ScraperAPI's headless Chrome."""
     try:
+        import time
         from playwright.sync_api import sync_playwright
+
+        # Use puppeteer-extra-plugin-stealth to hide automation
+        from playwright_stealth import Stealth
+
         launch_kwargs = dict(
             headless=True,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
         )
         if PROXY:
             launch_kwargs["proxy"] = {"server": PROXY}
+
         with sync_playwright() as p:
             browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 locale="en-IN",
                 viewport={"width": 1920, "height": 1080},
+                device_scale_factor=1,
+                timezone_id="Asia/Kolkata",
+                geolocation={"latitude": 19.076, "longitude": 72.8777},
+                permissions=["geolocation"],
             )
             page = context.new_page()
-            page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                window.chrome = {runtime: {}};
-                Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-                Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
-            """)
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            # Wait for Akamai challenge to resolve — look for product content
+        # Apply stealth — hides webdriver, chrome runtime, etc.
+        Stealth().apply_stealth_sync(page)
+
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            time.sleep(2)
+
+            # Wait for Akamai challenge to resolve — up to 30s
             for _ in range(20):
-                if "__NEXT_DATA__" in page.content():
+                content = page.content()
+                if "__NEXT_DATA__" in content and len(content) > 5000:
                     break
-                page.wait_for_timeout(1500)
+                time.sleep(1.5)
+
             html = page.content()
             browser.close()
+
         if len(html) > 1000 and not _is_bot_page(html):
             return html
     except Exception:
