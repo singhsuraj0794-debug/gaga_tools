@@ -156,27 +156,47 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch via Playwright with stealth."""
+    """Fetch via Playwright with proper Webshare proxy + full stealth — mimics real user session."""
     try:
-        import time
+        import time, random
         from playwright.sync_api import sync_playwright
+        from playwright_stealth import Stealth
+        from urllib.parse import urlparse
 
-        launch_kwargs = dict(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
-        if PROXY:
-            launch_kwargs["proxy"] = {"server": PROXY}
+        proxy_config = {
+            "server": "http://p.webshare.io:80",
+            "username": "uvuqatrj-in",
+            "password": "fd9sp5s4yg8q",
+        }
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(**launch_kwargs)
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            )
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36",
-                locale="en-IN",
+                proxy=proxy_config,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 viewport={"width": 1366, "height": 768},
+                locale="en-IN",
+                timezone_id="Asia/Kolkata",
+                geolocation={"latitude": 19.076, "longitude": 72.8777},
             )
             page = context.new_page()
+            Stealth().apply_stealth_sync(page)
+
+            # Step 1: Warm up — visit homepage like a real user
             page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
-            time.sleep(2)
+            time.sleep(random.uniform(2, 4))
+
+            # Step 2: Scroll a bit like a real user
+            page.evaluate("window.scrollBy(0, %d)" % random.randint(100, 500))
+            time.sleep(random.uniform(1, 2))
+
+            # Step 3: Navigate to product page
             page.goto(url, wait_until="networkidle", timeout=45000)
-            time.sleep(2)
+            time.sleep(random.uniform(2, 3))
+
             html = page.content()
             browser.close()
 
