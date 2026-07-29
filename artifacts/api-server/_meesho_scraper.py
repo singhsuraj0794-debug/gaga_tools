@@ -135,16 +135,19 @@ def _is_bot_page(html: str) -> bool:
 
 def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
     """Fetch via curl_cffi with browser impersonation — bypasses Akamai."""
+    kwargs = dict(impersonate=impersonate, timeout=15)
+    if PROXY:
+        kwargs["proxies"] = {"http": PROXY, "https": PROXY}
     try:
         from curl_cffi import requests as curl_requests
-        resp = curl_requests.get(url, impersonate=impersonate, timeout=15)
+        resp = curl_requests.get(url, **kwargs)
         if resp.status_code == 200 and len(resp.text) > 5000 and not _is_bot_page(resp.text):
             return resp.text
     except Exception:
         pass
     try:
         from curl_cffi import requests as curl_requests
-        resp = curl_requests.get(url, impersonate=impersonate, timeout=15, verify=False)
+        resp = curl_requests.get(url, **kwargs, verify=False)
         if resp.status_code == 200 and len(resp.text) > 5000 and not _is_bot_page(resp.text):
             return resp.text
     except Exception:
@@ -156,12 +159,14 @@ def _try_playwright(url: str) -> str:
     """Fetch via Playwright headless Chromium with stealth."""
     try:
         from playwright.sync_api import sync_playwright
+        launch_kwargs = dict(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"],
+        )
+        if PROXY:
+            launch_kwargs["proxy"] = {"server": PROXY}
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-            ])
+            browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
                 locale="en-IN",
