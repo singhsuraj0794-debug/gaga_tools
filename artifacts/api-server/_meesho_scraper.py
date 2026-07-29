@@ -149,7 +149,7 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch via Playwright headless Chromium with stealth."""
+    """Fetch via Playwright headless Chromium with stealth — waits for Akamai challenge to resolve."""
     try:
         from playwright.sync_api import sync_playwright
         launch_kwargs = dict(
@@ -172,8 +172,12 @@ def _try_playwright(url: str) -> str:
                 Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
                 Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
             """)
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_load_state("networkidle", timeout=15000)
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # Wait for Akamai challenge to resolve — look for product content
+            for _ in range(20):
+                if "__NEXT_DATA__" in page.content():
+                    break
+                page.wait_for_timeout(1500)
             html = page.content()
             browser.close()
         if len(html) > 1000 and not _is_bot_page(html):
