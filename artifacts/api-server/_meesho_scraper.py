@@ -156,49 +156,85 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
-def _try_playwright(url: str) -> str:
-    """Fetch via headless Chrome with Webshare rotating proxy + real session warmup."""
+# ── Persistent Chrome session with Webshare rotating proxy ──
+_CHROME_PORT = 9333
+_CHROME_PID = None
+_CHROME_WARMED = False
+
+def _ensure_chrome():
+    """Start Chrome once and reuse for all products in a batch."""
+    global _CHROME_PID, _CHROME_WARMED
+    import time, os, subprocess, json, urllib.request
+
+    # Check if Chrome is already running
+    if _CHROME_PID:
+        try:
+            urllib.request.urlopen(f"http://localhost:{_CHROME_PORT}/json/version", timeout=3)
+            return _CHROME_PORT
+        except:
+            _CHROME_PID = None
+            _CHROME_WARMED = False
+
+    proxy = "http://uvuqatrj-in-rotate:fd9sp5s4yg8q@p.webshare.io:80"
+    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    user_data = "/tmp/chrome-meesho-proxy"
+
+    subprocess.Popen([
+        chrome_path,
+        f"--remote-debugging-port={_CHROME_PORT}",
+        f"--user-data-dir={user_data}",
+        f"--proxy-server={proxy}",
+        "--headless=new", "--no-first-run", "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3)
+
+    # Verify CDP is reachable
+    for _ in range(10):
+        try:
+            urllib.request.urlopen(f"http://localhost:{_CHROME_PORT}/json/version", timeout=3)
+            return _CHROME_PORT
+        except:
+            time.sleep(1)
+    return None
+
+
+def _warmup_chrome(ws_endpoint):
+    """Visit Meesho homepage once to establish session cookies."""
+    global _CHROME_WARMED
+    if _CHROME_WARMED:
+        return True
+    from playwright.sync_api import sync_playwright
     try:
-        import time, os, subprocess, json, urllib.request
-        from playwright.sync_api import sync_playwright
-
-        # Launch Chrome with Webshare rotating proxy (fresh IP per batch)
-        proxy = "http://uvuqatrj-in-rotate:fd9sp5s4yg8q@p.webshare.io:80"
-        chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        user_data = "/tmp/chrome-meesho-proxy"
-        port = 9333
-
-        # Kill old proxy Chrome instance
-        subprocess.run(["pkill", "-f", f"chrome.*{port}"], capture_output=True)
-        time.sleep(1)
-
-        # Launch Chrome with proxy
-        subprocess.Popen([
-            chrome_path,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={user_data}",
-            f"--proxy-server={proxy}",
-            "--headless=new",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-blink-features=AutomationControlled",
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(3)
-
-        # Connect via CDP
-        resp = urllib.request.urlopen(f"http://localhost:{port}/json/version", timeout=10)
-        ws_endpoint = json.loads(resp.read())["webSocketDebuggerUrl"]
-
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(ws_endpoint)
-            context = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = context.new_page()
-
-            # Warm up at Meesho homepage first (establishes session through proxy)
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = ctx.new_page()
             page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
-            time.sleep(3)
+            page.close()
+        _CHROME_WARMED = True
+    except:
+        pass
 
-            # Navigate to product page
+
+def _try_playwright(url: str) -> str:
+    """Fetch via persistent Chrome with Webshare rotating proxy."""
+    try:
+        import time, json, urllib.request
+        from playwright.sync_api import sync_playwright
+
+        port = _ensure_chrome()
+        if not port:
+            return ""
+
+        resp = urllib.request.urlopen(f"http://localhost:{port}/json/version", timeout=5)
+        ws = json.loads(resp.read())["webSocketDebuggerUrl"]
+        _warmup_chrome(ws)
+
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(ws)
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = ctx.new_page()
             page.evaluate('window.location.href = "' + url + '"')
 
             for _ in range(15):
@@ -207,7 +243,6 @@ def _try_playwright(url: str) -> str:
                 if "__NEXT_DATA__" in html and len(html) > 5000:
                     page.close()
                     return html
-
             page.close()
     except Exception:
         pass
