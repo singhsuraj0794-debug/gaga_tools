@@ -271,14 +271,24 @@ async function searchYouTubeWithApi(
 function isShortsDuration(duration: string): boolean {
   const parts = duration.split(":");
   if (parts.length === 2) {
-    // MM:SS format
     return parseInt(parts[0]) === 0 && parseInt(parts[1]) <= 60;
   }
   if (parts.length === 3) {
-    // HH:MM:SS format
     return parseInt(parts[0]) === 0 && parseInt(parts[1]) === 0 && parseInt(parts[2]) <= 60;
   }
-  return true; // If we can't parse, include it
+  return true;
+}
+
+/** Check if a YouTube duration string (e.g. "0:45" or "4:20") is under 60s. */
+function isDurationShort(duration: string): boolean {
+  if (!duration) return false;
+  const parts = duration.split(":");
+  if (parts.length === 2) {
+    const mins = parseInt(parts[0]);
+    const secs = parseInt(parts[1]);
+    return mins === 0 && secs <= 60;
+  }
+  return false; // Longer formats are definitely not Shorts
 }
 
 // ─── YouTube scrape fallback (no API key needed) ───────────────────────────
@@ -320,7 +330,35 @@ async function searchYouTubeScrape(
       for (const section of contents) {
         const items = section?.itemSectionRenderer?.contents || [];
         for (const item of items) {
-          // Only collect Shorts from reelShelfRenderer — skip regular videoRenderer
+          // Check regular video — include only if under 60s (likely a Short)
+          const vr = item?.videoRenderer;
+          if (vr?.videoId && !seenIds.has(vr.videoId)) {
+            const duration = vr.lengthText?.simpleText || "";
+            // Shorts are under 60s
+            const isShort = isDurationShort(duration);
+            if (isShort) {
+              seenIds.add(vr.videoId);
+              const videoId: string = vr.videoId;
+              const title: string = vr.title?.runs?.[0]?.text || productName;
+              const thumbnail = vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+                `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+              const channelName = vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || null;
+              const viewText = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.[0]?.text || "";
+              const viewMatch = viewText.match(/([\d,]+)/);
+              const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
+              const video: VideoResult = {
+                id: `yt-${videoId}`, platform: "youtube", title,
+                url: `https://www.youtube.com/shorts/${videoId}`,
+                embedUrl: buildYouTubeEmbedUrl(videoId),
+                thumbnailUrl: thumbnail, channelName, duration, viewCount,
+                productId, productName,
+              };
+              video.relevanceScore = calculateRelevanceScore(video, productName);
+              videos.push(video);
+              if (videos.length >= 10) break;
+            }
+          }
+          // Also collect from reelShelf (always Shorts)
           const reelShelf = item?.reelShelfRenderer;
           if (reelShelf?.items) {
             for (const reelItem of reelShelf.items) {
