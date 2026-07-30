@@ -182,7 +182,7 @@ function buildSearchQuery(productName: string, includeKeywords: boolean = true):
   
   // Add relevant keywords to improve search
   if (includeKeywords) {
-    query = `${query} product demo`;
+    query = `${query} shorts product`;
   }
   
   return query.trim();
@@ -339,17 +339,17 @@ async function searchYouTubeScrape(
               \`https://img.youtube.com/vi/\${videoId}/hqdefault.jpg\`;
 
             const isShort = duration && isDurationShort(duration);
+            if (!isShort) continue; // Only Shorts
             const video: VideoResult = {
-              id: \`yt-\${videoId}\`, platform: "youtube", title,
-              url: isShort ? \`https://www.youtube.com/shorts/\${videoId}\` : \`https://www.youtube.com/watch?v=\${videoId}\`,
+              id: `yt-${videoId}`, platform: "youtube", title,
+              url: `https://www.youtube.com/shorts/${videoId}`,
               embedUrl: buildYouTubeEmbedUrl(videoId),
               thumbnailUrl: thumbnail, channelName, duration, viewCount,
               productId, productName,
             };
-            video.relevanceScore = calculateRelevanceScore(video, productName) + (isShort ? 10 : 0);
+            video.relevanceScore = calculateRelevanceScore(video, productName);
             videos.push(video);
             if (videos.length >= 20) break;
-          }
           const reelShelf = item?.reelShelfRenderer;
           if (reelShelf?.items) {
             for (const reelItem of reelShelf.items) {
