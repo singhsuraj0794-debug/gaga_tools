@@ -162,23 +162,30 @@ def _try_playwright(url: str) -> str:
         import time, json, urllib.request
         from playwright.sync_api import sync_playwright
 
-        # Quick check if CDP is available
-        urllib.request.urlopen("http://localhost:9222/json/version", timeout=3)
+        print("[PW] Starting...", flush=True)
+        urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+        print("[PW] CDP available", flush=True)
 
         with sync_playwright() as p:
+            print("[PW] Connecting to CDP...", flush=True)
             browser = p.chromium.connect_over_cdp("http://localhost:9222")
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.new_page()
-            page.evaluate('window.location.href = "' + url + '"')
+            print("[PW] Navigating...", flush=True)
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            print("[PW] Navigated, waiting for data...", flush=True)
 
             for _ in range(15):
                 time.sleep(2)
                 html = page.content()
                 if "__NEXT_DATA__" in html and len(html) > 5000:
+                    print("[PW] Got data!", flush=True)
                     page.close()
                     return html
+            print("[PW] Timeout waiting for data", flush=True)
             page.close()
-    except Exception:
+    except Exception as e:
+        print(f"[PW] Error: {e}", flush=True)
         pass
     return ""
 
