@@ -397,7 +397,7 @@ export default function Dashboard() {
       {
         data: {
           products: selectedProducts.map((p) => ({ id: p.id, name: p.name })),
-          platforms: ["youtube", "instagram", "tiktok"],
+          platforms: ["youtube", "facebook", "tiktok"],
         },
       },
       {

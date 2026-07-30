@@ -180,9 +180,9 @@ function buildSearchQuery(productName: string, includeKeywords: boolean = true):
     query = words.slice(0, 4).join(" ");
   }
   
-  // Add relevant keywords
+  // Add relevant keywords to improve search
   if (includeKeywords) {
-    query = `${query} shorts`;
+    query = `${query} product demo`;
   }
   
   return query.trim();
