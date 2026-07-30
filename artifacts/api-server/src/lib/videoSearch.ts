@@ -275,14 +275,16 @@ function isShortsDuration(duration: string): boolean {
 }
 
 /** Check if a YouTube duration string (e.g. "0:45" or "4:20") is under 60s. */
-function isDurationShort(duration: string): boolean {
-  if (!duration) return false;
+function isDurationShort(duration: string | null | undefined): boolean {
+  if (!duration) return true; // No duration = likely a Short (e.g. reelShelf)
   const parts = duration.split(":");
   if (parts.length === 2) {
     const mins = parseInt(parts[0]);
     const secs = parseInt(parts[1]);
     return mins === 0 && secs <= 60;
   }
+  return false;
+}
   return false; // Longer formats are definitely not Shorts
 }
 
@@ -378,9 +380,9 @@ async function searchYouTubeScrape(
     } catch { continue; }
   }
 
-  // Prioritize Shorts (duration < 60s), include regular if few Shorts
-  const shortsResults = videos.filter(v => v.duration && isDurationShort(v.duration));
-  const regularResults = videos.filter(v => !v.duration || !isDurationShort(v.duration));
+  // Prioritize Shorts (duration < 60s or null/reelShelf), include regular if few Shorts
+  const shortsResults = videos.filter(v => !v.duration || isDurationShort(v.duration));
+  const regularResults = videos.filter(v => v.duration && !isDurationShort(v.duration));
   
   shortsResults.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
   regularResults.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
