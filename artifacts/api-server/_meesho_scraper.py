@@ -156,52 +156,28 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
-# ── Connect to YOUR real Chrome (port 9222) — has Meesho login ──
-_CDP_PLAYWRIGHT = None
-_CDP_BROWSER = None
-_CDP_CONTEXT = None
-
-def _get_cdp():
-    """Get or create CDP connection to user's real Chrome."""
-    global _CDP_PLAYWRIGHT, _CDP_BROWSER, _CDP_CONTEXT
-    if _CDP_BROWSER:
-        return _CDP_BROWSER, _CDP_CONTEXT
-
-    import json, urllib.request
-    from playwright.sync_api import sync_playwright
-
-    try:
-        # Check if Chrome CDP is available
-        urllib.request.urlopen("http://localhost:9222/json/version", timeout=3)
-    except:
-        return None, None
-
-    _CDP_PLAYWRIGHT = sync_playwright()
-    _CDP_PLAYWRIGHT.__enter__()
-    _CDP_BROWSER = _CDP_PLAYWRIGHT.__enter__().chromium.connect_over_cdp("http://localhost:9222")
-    _CDP_CONTEXT = _CDP_BROWSER.contexts[0] if _CDP_BROWSER.contexts else _CDP_BROWSER.new_context()
-    return _CDP_BROWSER, _CDP_CONTEXT
-
-
 def _try_playwright(url: str) -> str:
-    """Fetch via YOUR real Chrome — uses your Meesho login session."""
+    """Fetch via YOUR real Chrome (CDP port 9222)."""
     try:
-        import time
+        import time, json, urllib.request
+        from playwright.sync_api import sync_playwright
 
-        browser, context = _get_cdp()
-        if not browser:
-            return ""
+        # Quick check if CDP is available
+        urllib.request.urlopen("http://localhost:9222/json/version", timeout=3)
 
-        page = context.new_page()
-        page.evaluate('window.location.href = "' + url + '"')
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = ctx.new_page()
+            page.evaluate('window.location.href = "' + url + '"')
 
-        for _ in range(15):
-            time.sleep(2)
-            html = page.content()
-            if "__NEXT_DATA__" in html and len(html) > 5000:
-                page.close()
-                return html
-        page.close()
+            for _ in range(15):
+                time.sleep(2)
+                html = page.content()
+                if "__NEXT_DATA__" in html and len(html) > 5000:
+                    page.close()
+                    return html
+            page.close()
     except Exception:
         pass
     return ""
