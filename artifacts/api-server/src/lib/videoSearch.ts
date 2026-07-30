@@ -378,19 +378,16 @@ async function searchYouTubeScrape(
     } catch { continue; }
   }
 
-  // Prioritize Shorts, but include regular videos as fallback
-  const shortsResults = videos.filter(v => v.url && v.url.includes('/shorts/'));
-  const regularResults = videos.filter(v => !v.url || !v.url.includes('/shorts/'));
+  // Prioritize Shorts (duration < 60s), include regular if few Shorts
+  const shortsResults = videos.filter(v => v.duration && isDurationShort(v.duration));
+  const regularResults = videos.filter(v => !v.duration || !isDurationShort(v.duration));
   
-  // Sort each group by relevance
   shortsResults.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
   regularResults.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
   
-  // If enough Shorts (3+), return only Shorts. Otherwise mix in regular videos.
   if (shortsResults.length >= 3) {
     return shortsResults.slice(0, 10);
   }
-  // Mix: Shorts first, then regular videos
   return [...shortsResults, ...regularResults].slice(0, 10);
 }
 
