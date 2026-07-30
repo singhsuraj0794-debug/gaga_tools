@@ -157,36 +157,103 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
 def _try_playwright(url: str) -> str:
-    """Fetch via YOUR real Chrome (CDP port 9222)."""
+    """Fetch via persistent Chrome with Webshare rotating proxy."""
     try:
         import time, json, urllib.request
         from playwright.sync_api import sync_playwright
 
-        print("[PW] Starting...", flush=True)
-        urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
-        print("[PW] CDP available", flush=True)
+        port = _ensure_chrome()
+        if not port:
+            return ""
+
+        if _CHROME_PRODUCT_COUNT == 1:
+            _warmup_chrome()
 
         with sync_playwright() as p:
-            print("[PW] Connecting to CDP...", flush=True)
-            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.new_page()
-            print("[PW] Navigating...", flush=True)
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            print("[PW] Navigated, waiting for data...", flush=True)
 
             for _ in range(15):
                 time.sleep(2)
                 html = page.content()
                 if "__NEXT_DATA__" in html and len(html) > 5000:
-                    print("[PW] Got data!", flush=True)
                     page.close()
                     return html
-            print("[PW] Timeout waiting for data", flush=True)
             page.close()
-    except Exception as e:
-        print(f"[PW] Error: {e}", flush=True)
+            _kill_chrome()
+    except Exception:
         pass
+    return ""
+
+
+_CHROME_PORT = 9333
+_CHROME_PROCESS = None
+_CHROME_PRODUCT_COUNT = 0
+_MAX_PRODUCTS_PER_SESSION = 40
+
+def _start_chrome():
+    """Launch headless Chrome with Webshare rotating proxy."""
+    global _CHROME_PROCESS, _CHROME_PRODUCT_COUNT
+    import subprocess, time
+    _kill_chrome()
+    proxy = "http://uvuqatrj-in-rotate:fd9sp5s4yg8q@p.webshare.io:80"
+    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    user_data = "/tmp/chrome-meesho-proxy"
+    _CHROME_PROCESS = subprocess.Popen([
+        chrome_path,
+        f"--remote-debugging-port={_CHROME_PORT}",
+        f"--user-data-dir={user_data}",
+        f"--proxy-server={proxy}",
+        "--headless=new", "--no-first-run", "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3)
+    for _ in range(10):
+        try:
+            urllib.request.urlopen(f"http://localhost:{_CHROME_PORT}/json/version", timeout=3)
+            _CHROME_PRODUCT_COUNT = 0
+            return True
+        except:
+            time.sleep(1)
+    return False
+
+def _kill_chrome():
+    global _CHROME_PROCESS
+    import subprocess
+    subprocess.run(["pkill", "-f", f"chrome.*{_CHROME_PORT}"], capture_output=True)
+    _CHROME_PROCESS = None
+
+def _ensure_chrome():
+    global _CHROME_PRODUCT_COUNT
+    import json, urllib.request
+    if _CHROME_PROCESS:
+        try:
+            urllib.request.urlopen(f"http://localhost:{_CHROME_PORT}/json/version", timeout=3)
+        except:
+            _CHROME_PROCESS = None
+    if not _CHROME_PROCESS or _CHROME_PRODUCT_COUNT >= _MAX_PRODUCTS_PER_SESSION:
+        if not _start_chrome():
+            return None
+    _CHROME_PRODUCT_COUNT += 1
+    return _CHROME_PORT
+
+def _warmup_chrome():
+    from playwright.sync_api import sync_playwright
+    import time
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{_CHROME_PORT}")
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = ctx.new_page()
+            page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
+            time.sleep(2)
+            page.close()
+    except:
+        pass
+
+
     return ""
 
 def _try_google_cache(url: str) -> str:
