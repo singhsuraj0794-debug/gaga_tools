@@ -238,28 +238,47 @@ async function searchYouTubeWithApi(
     logger.warn({ e }, "Failed to fetch YouTube video details");
   }
 
-  return items.map((item: any): VideoResult => {
+  return items.map((item: any): VideoResult | null => {
     const videoId = item.id.videoId;
     const detail = detailMap[videoId];
+    const duration = detail ? formatDuration(detail.contentDetails?.duration || "") : null;
+    
+    // Filter to Shorts only (duration under 60s or unknown)
+    if (duration && !isShortsDuration(duration)) return null;
+
     const video: VideoResult = {
       id: `yt-${videoId}`,
       platform: "youtube",
       title: item.snippet.title,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
+      url: `https://www.youtube.com/shorts/${videoId}`,
       embedUrl: buildYouTubeEmbedUrl(videoId),
       thumbnailUrl:
         item.snippet.thumbnails?.high?.url ||
         item.snippet.thumbnails?.default?.url ||
         `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
       channelName: item.snippet.channelTitle || null,
-      duration: detail ? formatDuration(detail.contentDetails?.duration || "") : null,
+      duration: duration,
       viewCount: detail ? parseInt(detail.statistics?.viewCount || "0", 10) : null,
       productId,
       productName,
     };
     video.relevanceScore = calculateRelevanceScore(video, productName);
     return video;
-  });
+  }).filter((v): v is VideoResult => v !== null);
+}
+
+/** Check if a duration string (e.g. "2:30" or "0:45") is under 60 seconds (Shorts). */
+function isShortsDuration(duration: string): boolean {
+  const parts = duration.split(":");
+  if (parts.length === 2) {
+    // MM:SS format
+    return parseInt(parts[0]) === 0 && parseInt(parts[1]) <= 60;
+  }
+  if (parts.length === 3) {
+    // HH:MM:SS format
+    return parseInt(parts[0]) === 0 && parseInt(parts[1]) === 0 && parseInt(parts[2]) <= 60;
+  }
+  return true; // If we can't parse, include it
 }
 
 // ─── YouTube scrape fallback (no API key needed) ───────────────────────────
@@ -301,38 +320,7 @@ async function searchYouTubeScrape(
       for (const section of contents) {
         const items = section?.itemSectionRenderer?.contents || [];
         for (const item of items) {
-          const vr = item?.videoRenderer;
-          if (vr?.videoId && !seenIds.has(vr.videoId)) {
-            seenIds.add(vr.videoId);
-            const videoId: string = vr.videoId;
-            const title: string = vr.title?.runs?.[0]?.text || productName;
-            const channelName: string =
-              vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || null;
-            const viewText: string = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.[0]?.text || "";
-            const viewMatch = viewText.match(/([\d,]+)/);
-            const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
-            const duration: string = vr.lengthText?.simpleText || null;
-            const thumbnail =
-              vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
-              `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-
-            const video: VideoResult = {
-              id: `yt-${videoId}`,
-              platform: "youtube",
-              title,
-              url: `https://www.youtube.com/watch?v=${videoId}`,
-              embedUrl: buildYouTubeEmbedUrl(videoId),
-              thumbnailUrl: thumbnail,
-              channelName,
-              duration,
-              viewCount,
-              productId,
-              productName,
-            };
-            video.relevanceScore = calculateRelevanceScore(video, productName);
-            videos.push(video);
-            if (videos.length >= 10) break;
-          }
+          // Only collect Shorts from reelShelfRenderer — skip regular videoRenderer
           const reelShelf = item?.reelShelfRenderer;
           if (reelShelf?.items) {
             for (const reelItem of reelShelf.items) {
