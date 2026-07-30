@@ -157,12 +157,36 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
 def _try_playwright(url: str) -> str:
-    """Fetch via real Chrome profile — fresh sync_playwright context per call."""
+    """Fetch via headless Chrome with Webshare rotating proxy + real session warmup."""
     try:
-        import time, json, urllib.request
+        import time, os, subprocess, json, urllib.request
         from playwright.sync_api import sync_playwright
 
-        resp = urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+        # Launch Chrome with Webshare rotating proxy (fresh IP per batch)
+        proxy = "http://uvuqatrj-in-rotate:fd9sp5s4yg8q@p.webshare.io:80"
+        chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        user_data = "/tmp/chrome-meesho-proxy"
+        port = 9333
+
+        # Kill old proxy Chrome instance
+        subprocess.run(["pkill", "-f", f"chrome.*{port}"], capture_output=True)
+        time.sleep(1)
+
+        # Launch Chrome with proxy
+        subprocess.Popen([
+            chrome_path,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data}",
+            f"--proxy-server={proxy}",
+            "--headless=new",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-blink-features=AutomationControlled",
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(3)
+
+        # Connect via CDP
+        resp = urllib.request.urlopen(f"http://localhost:{port}/json/version", timeout=10)
         ws_endpoint = json.loads(resp.read())["webSocketDebuggerUrl"]
 
         with sync_playwright() as p:
@@ -170,6 +194,11 @@ def _try_playwright(url: str) -> str:
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             page = context.new_page()
 
+            # Warm up at Meesho homepage first (establishes session through proxy)
+            page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
+            time.sleep(3)
+
+            # Navigate to product page
             page.evaluate('window.location.href = "' + url + '"')
 
             for _ in range(15):
