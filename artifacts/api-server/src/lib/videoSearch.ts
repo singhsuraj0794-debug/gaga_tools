@@ -301,10 +301,10 @@ async function searchYouTubeScrape(
   const seenIds = new Set<string>();
 
   for (const rawQuery of queries.slice(0, 3)) {
-    if (videos.length >= 10) break;
+    if (videos.length >= 20) break;
     try {
       const query = encodeURIComponent(rawQuery);
-      const resp = await axios.get(`https://www.youtube.com/results?search_query=${query}`, {
+      const resp = await axios.get(\`https://www.youtube.com/results?search_query=\${query}\`, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -325,35 +325,31 @@ async function searchYouTubeScrape(
       for (const section of contents) {
         const items = section?.itemSectionRenderer?.contents || [];
         for (const item of items) {
-          // Check regular video — include only if under 60s (likely a Short)
           const vr = item?.videoRenderer;
           if (vr?.videoId && !seenIds.has(vr.videoId)) {
-            const duration = vr.lengthText?.simpleText || "";
-            // Shorts are under 60s
-            const isShort = isDurationShort(duration);
-            if (isShort) {
-              seenIds.add(vr.videoId);
-              const videoId: string = vr.videoId;
-              const title: string = vr.title?.runs?.[0]?.text || productName;
-              const thumbnail = vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
-                `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-              const channelName = vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || null;
-              const viewText = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.[0]?.text || "";
-              const viewMatch = viewText.match(/([\d,]+)/);
-              const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
-              const video: VideoResult = {
-                id: `yt-${videoId}`, platform: "youtube", title,
-                url: `https://www.youtube.com/shorts/${videoId}`,
-                embedUrl: buildYouTubeEmbedUrl(videoId),
-                thumbnailUrl: thumbnail, channelName, duration, viewCount,
-                productId, productName,
-              };
-              video.relevanceScore = calculateRelevanceScore(video, productName);
-              videos.push(video);
-              if (videos.length >= 10) break;
-            }
+            seenIds.add(vr.videoId);
+            const videoId: string = vr.videoId;
+            const title: string = vr.title?.runs?.[0]?.text || productName;
+            const channelName = vr.ownerText?.runs?.[0]?.text || vr.shortBylineText?.runs?.[0]?.text || null;
+            const viewText = vr.viewCountText?.simpleText || vr.viewCountText?.runs?.[0]?.text || "";
+            const viewMatch = viewText.match(/([\\d,]+)/);
+            const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
+            const duration: string = vr.lengthText?.simpleText || null;
+            const thumbnail = vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+              \`https://img.youtube.com/vi/\${videoId}/hqdefault.jpg\`;
+
+            const isShort = duration && isDurationShort(duration);
+            const video: VideoResult = {
+              id: \`yt-\${videoId}\`, platform: "youtube", title,
+              url: isShort ? \`https://www.youtube.com/shorts/\${videoId}\` : \`https://www.youtube.com/watch?v=\${videoId}\`,
+              embedUrl: buildYouTubeEmbedUrl(videoId),
+              thumbnailUrl: thumbnail, channelName, duration, viewCount,
+              productId, productName,
+            };
+            video.relevanceScore = calculateRelevanceScore(video, productName) + (isShort ? 10 : 0);
+            videos.push(video);
+            if (videos.length >= 20) break;
           }
-          // Also collect from reelShelf (always Shorts)
           const reelShelf = item?.reelShelfRenderer;
           if (reelShelf?.items) {
             for (const reelItem of reelShelf.items) {
@@ -362,36 +358,28 @@ async function searchYouTubeScrape(
               seenIds.add(reel.videoId);
               const videoId: string = reel.videoId;
               const title: string = reel.headline?.simpleText || reel.videoTitle || productName;
-              const thumbnail =
-                reel.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
-                `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+              const thumbnail = reel.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
+                \`https://img.youtube.com/vi/\${videoId}/hqdefault.jpg\`;
               const video: VideoResult = {
-                id: `yt-${videoId}`,
-                platform: "youtube",
-                title,
-                url: `https://www.youtube.com/shorts/${videoId}`,
-                embedUrl: `https://www.youtube.com/embed/${videoId}`,
-                thumbnailUrl: thumbnail,
-                channelName: null,
-                duration: null,
-                viewCount: null,
-                productId,
-                productName,
+                id: \`yt-\${videoId}\`, platform: "youtube", title,
+                url: \`https://www.youtube.com/shorts/\${videoId}\`,
+                embedUrl: \`https://www.youtube.com/embed/\${videoId}\`,
+                thumbnailUrl: thumbnail, channelName: null, duration: null, viewCount: null,
+                productId, productName,
               };
-              video.relevanceScore = calculateRelevanceScore(video, productName);
+              video.relevanceScore = calculateRelevanceScore(video, productName) + 15;
               videos.push(video);
-              if (videos.length >= 10) break;
+              if (videos.length >= 20) break;
             }
           }
         }
-        if (videos.length >= 10) break;
+        if (videos.length >= 20) break;
       }
-    } catch {
-      // This query failed, try next
-    }
+    } catch { continue; }
   }
 
-  return videos;
+  videos.sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+  return videos.slice(0, 15);
 }
 
 async function searchYouTube(
