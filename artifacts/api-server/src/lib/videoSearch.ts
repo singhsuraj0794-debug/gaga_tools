@@ -182,7 +182,7 @@ function buildSearchQuery(productName: string, includeKeywords: boolean = true):
   
   // Add relevant keywords to improve search
   if (includeKeywords) {
-    query = `${query} shorts product`;
+    query = query;
   }
   
   return query.trim();
