@@ -156,94 +156,52 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
-# ── Persistent Chrome session with Webshare rotating proxy ──
-_CHROME_PORT = 9333
-_CHROME_PID = None
-_CHROME_WARMED = False
+# ── Connect to YOUR real Chrome (port 9222) — has Meesho login ──
+_CDP_PLAYWRIGHT = None
+_CDP_BROWSER = None
+_CDP_CONTEXT = None
 
-def _ensure_chrome():
-    """Start Chrome once and reuse for all products in a batch."""
-    global _CHROME_PID, _CHROME_WARMED
-    import time, os, subprocess, json, urllib.request
+def _get_cdp():
+    """Get or create CDP connection to user's real Chrome."""
+    global _CDP_PLAYWRIGHT, _CDP_BROWSER, _CDP_CONTEXT
+    if _CDP_BROWSER:
+        return _CDP_BROWSER, _CDP_CONTEXT
 
-    # Check if Chrome is already running
-    if _CHROME_PID:
-        try:
-            urllib.request.urlopen(f"http://localhost:{_CHROME_PORT}/json/version", timeout=3)
-            return _CHROME_PORT
-        except:
-            _CHROME_PID = None
-            _CHROME_WARMED = False
-
-    proxy = "http://uvuqatrj-in-rotate:fd9sp5s4yg8q@p.webshare.io:80"
-    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    user_data = "/tmp/chrome-meesho-proxy"
-
-    subprocess.Popen([
-        chrome_path,
-        f"--remote-debugging-port={_CHROME_PORT}",
-        f"--user-data-dir={user_data}",
-        f"--proxy-server={proxy}",
-        "--headless=new", "--no-first-run", "--no-default-browser-check",
-        "--disable-blink-features=AutomationControlled",
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(3)
-
-    # Verify CDP is reachable
-    for _ in range(10):
-        try:
-            urllib.request.urlopen(f"http://localhost:{_CHROME_PORT}/json/version", timeout=3)
-            return _CHROME_PORT
-        except:
-            time.sleep(1)
-    return None
-
-
-def _warmup_chrome(ws_endpoint):
-    """Visit Meesho homepage once to establish session cookies."""
-    global _CHROME_WARMED
-    if _CHROME_WARMED:
-        return True
+    import json, urllib.request
     from playwright.sync_api import sync_playwright
+
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(ws_endpoint)
-            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = ctx.new_page()
-            page.goto("https://www.meesho.com/", wait_until="networkidle", timeout=30000)
-            page.close()
-        _CHROME_WARMED = True
+        # Check if Chrome CDP is available
+        urllib.request.urlopen("http://localhost:9222/json/version", timeout=3)
     except:
-        pass
+        return None, None
+
+    _CDP_PLAYWRIGHT = sync_playwright()
+    _CDP_PLAYWRIGHT.__enter__()
+    _CDP_BROWSER = _CDP_PLAYWRIGHT.__enter__().chromium.connect_over_cdp("http://localhost:9222")
+    _CDP_CONTEXT = _CDP_BROWSER.contexts[0] if _CDP_BROWSER.contexts else _CDP_BROWSER.new_context()
+    return _CDP_BROWSER, _CDP_CONTEXT
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch via persistent Chrome with Webshare rotating proxy."""
+    """Fetch via YOUR real Chrome — uses your Meesho login session."""
     try:
-        import time, json, urllib.request
-        from playwright.sync_api import sync_playwright
+        import time
 
-        port = _ensure_chrome()
-        if not port:
+        browser, context = _get_cdp()
+        if not browser:
             return ""
 
-        resp = urllib.request.urlopen(f"http://localhost:{port}/json/version", timeout=5)
-        ws = json.loads(resp.read())["webSocketDebuggerUrl"]
-        _warmup_chrome(ws)
+        page = context.new_page()
+        page.evaluate('window.location.href = "' + url + '"')
 
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(ws)
-            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = ctx.new_page()
-            page.evaluate('window.location.href = "' + url + '"')
-
-            for _ in range(15):
-                time.sleep(2)
-                html = page.content()
-                if "__NEXT_DATA__" in html and len(html) > 5000:
-                    page.close()
-                    return html
-            page.close()
+        for _ in range(15):
+            time.sleep(2)
+            html = page.content()
+            if "__NEXT_DATA__" in html and len(html) > 5000:
+                page.close()
+                return html
+        page.close()
     except Exception:
         pass
     return ""
