@@ -163,31 +163,26 @@ function deduplicateVideos(videos: VideoResult[]): VideoResult[] {
 function buildSearchQuery(productName: string, includeKeywords: boolean = true): string {
   let query = productName;
   
-  // Strip size/color variants in parentheses
+  // Strip size/color variants in parentheses or after dash
   query = query.replace(/\s*\([^)]+\)\s*/g, " ");
+  query = query.replace(/\s*[-–—]\s*[A-Z0-9-]+\s*$/g, " "); // Remove trailing codes like "- UB-163"
   
-  // Remove common filler words that make search too specific
+  // Remove common filler words
   const fillerWords = /\b(for|indoor|outdoor|living\s*room|bedroom|kitchen|pack\s*of\s*\d+|set\s*of\s*\d+|piece|pieces|with|and|the|a|an|in|on|at|to|of|from|by|as|is|it|this|that|these|those|new|old|best|top|high|quality|premium|standard|generic|multi|color|colour|size|large|small|medium|big|little|mini|mega|super|ultra|pro|plus|extra)\b/gi;
   query = query.replace(fillerWords, " ");
   
-  // Remove brand names if they're at the start (keep product type words)
-  // e.g., "India Craft House Brothers Metal Floor Flower Planter" -> "Flower Planter"
-  query = query.replace(/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(?:Brothers?|Co|Company|Inc|Ltd|LLC|Store|Shop|House|Hub|World|Mart|Bazaar|Empire|Palace|Kingdom|Emporium)\s+/i, "");
-  
-  // Collapse multiple spaces
+  // Collapse spaces
   query = query.replace(/\s+/g, " ").trim();
   
-  // If query is still very long, take only the last few meaningful words
-  // (product type is usually at the end: "Flower Planter", "Toy Car", etc.)
+  // Take the core product name (first 3-4 meaningful words)
   const words = query.split(/\s+/);
-  if (words.length > 6) {
-    // Take last 4-5 words which usually contain the product type
-    query = words.slice(-5).join(" ");
+  if (words.length > 4) {
+    query = words.slice(0, 4).join(" ");
   }
   
-  // Add relevant keywords to improve search if requested
+  // Add relevant keywords
   if (includeKeywords) {
-    query = `${query} product review unboxing`;
+    query = `${query} shorts`;
   }
   
   return query.trim();
@@ -405,22 +400,20 @@ async function searchYouTube(
   apiKey: string | undefined,
   generatedQueries?: VideoQuery[],
 ): Promise<VideoResult[]> {
+  // Try scrape first (no API key needed, Shorts-focused)
+  try {
+    const scrapeResults = await searchYouTubeScrape(productName, productId, generatedQueries);
+    if (scrapeResults.length > 0) return scrapeResults;
+  } catch { /* fall through to API */ }
+  // Fall back to API if scrape returns nothing
   if (apiKey) {
     try {
-      const results = await searchYouTubeWithApi(productName, productId, apiKey, generatedQueries);
-      if (results.length > 0) return results;
-      // API returned empty — fall through to scrape
-      logger.info({ productName }, "YouTube API returned no results, trying scrape fallback");
-    } catch (err: any) {
-      logger.warn({ err: err?.message, productName }, "YouTube API search failed, trying scrape");
+      return await searchYouTubeWithApi(productName, productId, apiKey, generatedQueries);
+    } catch {
+      return [];
     }
   }
-  try {
-    return await searchYouTubeScrape(productName, productId, generatedQueries);
-  } catch (err: any) {
-    logger.warn({ err: err?.message, productName }, "YouTube scrape also failed");
-    return [];
-  }
+  return [];
 }
 
 // ─── TikTok via tiktok-api23 (RapidAPI) ──────────────────────────────────
