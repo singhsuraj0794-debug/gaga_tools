@@ -183,8 +183,8 @@ def _try_playwright(url: str) -> str:
                     return html
             page.close()
             _kill_chrome()
-    except Exception:
-        pass
+    except Exception as e:
+        import traceback; traceback.print_exc()
     return ""
 
 
