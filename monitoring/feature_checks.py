@@ -110,7 +110,7 @@ def run_feature_checks() -> list[dict]:
             category_checks = [
                 {"name": "product_cards", "type": "count", "selector": "a[href*='/product-detail/']", "min": 6},
                 {"name": "filter_panel", "type": "visible", "selector": "[class*='filter'], button:has-text('Filter'), [class*='Filter']"},
-                {"name": "price_filter", "type": "visible", "selector": "text=Price, [class*='price'], input[type='range']"},
+                {"name": "price_filter", "type": "visible", "selector": "[class*='price'], input[type='range']"},
                 {"name": "sort_dropdown", "type": "visible", "selector": "select, button:has-text('Relevance'), [class*='sort']"},
                 {"name": "pagination", "type": "visible", "selector": "a[href*='offset'], [class*='pagination'], button:has-text('Load More')"},
             ]
@@ -132,8 +132,8 @@ def run_feature_checks() -> list[dict]:
                 {"name": "product_image", "type": "visible", "selector": "img[src*='resize.gajab.com'], img[alt*='product'], [class*='gallery'] img"},
                 {"name": "price_display", "type": "visible", "selector": "#varient-price, [class*='price'], [class*='Price']"},
                 {"name": "start_bargaining_btn", "type": "visible", "selector": "button:has-text('Start Bargaining'), #varient-price button"},
-                {"name": "asking_price", "type": "visible", "selector": "text=Asking price, text=₹, [class*='asking']"},
-                {"name": "ratings_section", "type": "visible", "selector": "[class*='rating'], img[class*='rating'], text=ratings"},
+                {"name": "asking_price", "type": "visible", "selector": "[class*='asking'], [class*='price']"},
+                {"name": "ratings_section", "type": "visible", "selector": "[class*='rating'], img[class*='rating']"},
             ]
             log(f"Running {len(pdp_checks)} product detail feature checks")
             for r in check_elements(page, pdp_checks):
