@@ -155,6 +155,13 @@ def _do_bargain_flow(page, results: list):
     t0 = time.time()
     sub_steps = []
 
+    # Scroll #varient-price into view so the bargain button is accessible
+    try:
+        page.locator("#varient-price").scroll_into_view_if_needed(timeout=5000)
+        time.sleep(0.5)
+    except Exception:
+        pass
+
     _set_pincode(page, sub_steps)
 
     log("Step 4b — Locating & clicking Start Bargaining button")
@@ -806,7 +813,13 @@ def run_happy_flow() -> list[dict]:
             })
             _check_budget("product_detail_load", duration, results)
 
-            # Step 4: Bargain flow — continue even if product detail was degraded
+            # Step 4: Bargain flow — scroll #varient-price into view first
+            try:
+                page.locator("#varient-price").scroll_into_view_if_needed(timeout=5000)
+                time.sleep(1)
+            except Exception:
+                pass
+
             try:
                 _do_bargain_flow(page, results)
             except Exception as e:
