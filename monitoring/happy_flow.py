@@ -753,7 +753,14 @@ def run_happy_flow() -> list[dict]:
             except PWTimeout:
                 pass
             varient_price = page.locator("#varient-price")
-            has_varient = varient_price.count() > 0 and varient_price.first.is_visible(timeout=8000)
+            # Check element EXISTS and has content (don't require visibility — it may be below fold)
+            has_varient = False
+            if varient_price.count() > 0:
+                try:
+                    text = varient_price.first.inner_text(timeout=5000)
+                    has_varient = bool(text and text.strip())
+                except Exception:
+                    has_varient = False
             ss_pdp = _capture_screenshot(page, "product_detail")
             failure_reason = None
             if not has_varient:
