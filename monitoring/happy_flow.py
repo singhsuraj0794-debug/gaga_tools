@@ -708,6 +708,35 @@ def run_happy_flow() -> list[dict]:
             })
             _check_budget("home_page_load", duration, results)
 
+            # Step 1b: Scroll homepage and measure product population time
+            log("Step 1b — Scrolling homepage to measure product population")
+            pop_t0 = time.time()
+            pop_duration_ms = 0
+            product_count = 0
+            # Scroll down incrementally and watch for product links to appear
+            for _ in range(10):
+                page.mouse.wheel(0, 600)
+                time.sleep(0.8)
+                product_links = page.locator("a[href*='/product-detail/']")
+                product_count = product_links.count()
+                if product_count >= 4:
+                    pop_duration_ms = int((time.time() - pop_t0) * 1000)
+                    break
+            if product_count < 4:
+                pop_duration_ms = int((time.time() - pop_t0) * 1000)
+            ss_pop = _capture_screenshot(page, "home_products")
+            pop_status = "pass" if product_count >= 4 else "fail"
+            results.append({
+                "step": "home_products_populate",
+                "duration_ms": pop_duration_ms,
+                "status": pop_status,
+                "detail": f"Products populated in {pop_duration_ms}ms ({product_count} product links found)",
+                "product_count": product_count,
+                "screenshot": ss_pop,
+                "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                "failure_reason": None if product_count >= 4 else f"Only {product_count} products after scrolling",
+            })
+
             # Step 2: Category page
             log("Step 2 — Loading category page")
             t0 = time.time()
