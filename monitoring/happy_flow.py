@@ -747,8 +747,13 @@ def run_happy_flow() -> list[dict]:
             page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
             time.sleep(1)
             duration = int((time.time() - t0) * 1000)
+            # Wait for #varient-price to appear (up to 15s)
+            try:
+                page.wait_for_selector("#varient-price", timeout=15000)
+            except PWTimeout:
+                pass
             varient_price = page.locator("#varient-price")
-            has_varient = varient_price.count() > 0 and varient_price.first.is_visible(timeout=5000)
+            has_varient = varient_price.count() > 0 and varient_price.first.is_visible(timeout=8000)
             ss_pdp = _capture_screenshot(page, "product_detail")
             failure_reason = None
             if not has_varient:

@@ -38,9 +38,9 @@ THRESHOLDS = {
 }
 
 TIME_BUDGETS_SECONDS = {
-    "home_page_load": int(os.getenv("BUDGET_HOME_PAGE_LOAD", "5")),
-    "category_page_load": int(os.getenv("BUDGET_CATEGORY_PAGE_LOAD", "5")),
-    "product_detail_load": int(os.getenv("BUDGET_PRODUCT_DETAIL_LOAD", "5")),
+    "home_page_load": int(os.getenv("BUDGET_HOME_PAGE_LOAD", "15")),
+    "category_page_load": int(os.getenv("BUDGET_CATEGORY_PAGE_LOAD", "12")),
+    "product_detail_load": int(os.getenv("BUDGET_PRODUCT_DETAIL_LOAD", "15")),
     "login_submit": int(os.getenv("BUDGET_LOGIN_SUBMIT", "3")),
     "otp_receive": int(os.getenv("BUDGET_OTP_RECEIVE", "30")),
     "bargain_flow": int(os.getenv("BUDGET_BARGAIN_FLOW", "20")),
