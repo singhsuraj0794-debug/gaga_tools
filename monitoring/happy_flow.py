@@ -770,15 +770,33 @@ def run_happy_flow() -> list[dict]:
             })
             _check_budget("product_detail_load", duration, results)
 
-            if not has_varient:
-                _capture_screenshot(page, "pdp_missing_varient")
-                raise HappyFlowError("Product detail page missing #varient-price element")
-
-            # Step 4: Bargain flow
-            _do_bargain_flow(page, results)
+            # Step 4: Bargain flow — continue even if product detail was degraded
+            try:
+                _do_bargain_flow(page, results)
+            except Exception as e:
+                log(f"Bargain flow error (continuing): {e}")
+                results.append({
+                    "step": "bargain_flow",
+                    "duration_ms": 0,
+                    "status": "fail",
+                    "detail": f"Bargain flow failed: {e}",
+                    "failure_reason": str(e)[:200],
+                    "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                })
 
             # Step 5: Checkout + Razorpay payment gateway check
-            _do_checkout_flow(page, results)
+            try:
+                _do_checkout_flow(page, results)
+            except Exception as e:
+                log(f"Checkout flow error (continuing): {e}")
+                results.append({
+                    "step": "checkout_flow",
+                    "duration_ms": 0,
+                    "status": "fail",
+                    "detail": f"Checkout flow failed: {e}",
+                    "failure_reason": str(e)[:200],
+                    "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                })
 
             # Step 6: Additional page checks (My Account, My Bargains, Orders, Banners)
             log("Step 6 — Running additional page checks")
