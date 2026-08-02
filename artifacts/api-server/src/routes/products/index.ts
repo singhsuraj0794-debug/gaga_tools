@@ -366,21 +366,25 @@ router.post("/products/sync-and-clean", async (req, res): Promise<void> => {
       }
     }
 
-    // Enrich only newly imported products inline
-    let enriched = 0;
-    if (enrichedUrls.length > 0) {
-      enriched = await enrichProducts(supabase, enrichedUrls);
-    }
-
+    // Upsert is complete — respond immediately, enrich in background
+    // (enrichment is slow; running it before responding exceeds the
+    //  5-minute HTTP timeout and aborts the whole sync)
     res.json({
       gajab_active: sitemapIds.size,
       supabase_before: allSupabaseProducts.length,
       supabase_after: allSupabaseProducts.length + imported,
       deleted: 0,
       imported,
-      enriched,
-      message: `Synced: ${imported} imported, ${enriched} enriched; 0 removed`,
+      enriched: 0,
+      message: `Synced: ${imported} imported; enrichment running in background`,
     });
+
+    // Enrich newly imported products in the background (fire-and-forget)
+    if (enrichedUrls.length > 0) {
+      enrichProducts(supabase, enrichedUrls).catch((err: any) => {
+        req.log.error({ err, count: enrichedUrls.length }, "Background enrichment failed");
+      });
+    }
   } catch (err: any) {
     req.log.error({ err }, "Failed to sync and clean products");
     res.status(500).json({ error: err.message });
