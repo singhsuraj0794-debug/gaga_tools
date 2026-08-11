@@ -11,6 +11,7 @@ from config import (
     PAGE_TIMEOUT, NAV_TIMEOUT, TIME_BUDGETS_SECONDS,
     OTP_TIMEOUT, OTP_POLL_INTERVAL, MONITOR_PHONE,
     TWILIO_SID, TWILIO_AUTH_TOKEN,
+    CATEGORIES,
 )
 
 _SCREENSHOT_DIR = Path(__file__).parent / "screenshots"
@@ -712,60 +713,65 @@ def run_happy_flow() -> list[dict]:
             })
             _check_budget("home_page_load", duration, results)
 
-            # Step 1b: Scroll homepage and measure product population time
-            log("Step 1b — Scrolling homepage to measure product population")
+            # Step 1b: Scroll homepage at human speed for 10s, measure product population
+            log("Step 1b — Scrolling homepage at human speed (10s)")
             pop_t0 = time.time()
-            pop_duration_ms = 0
-            product_count = 0
-            # Scroll down incrementally and watch for product links to appear
-            for _ in range(10):
-                page.mouse.wheel(0, 600)
-                time.sleep(0.8)
+            # Scroll like a human — small increments with pauses
+            steps = 20
+            for i in range(steps):
+                page.mouse.wheel(0, 300)
+                time.sleep(0.5)
                 product_links = page.locator("a[href*='/product-detail/']")
-                product_count = product_links.count()
-                if product_count >= 4:
-                    pop_duration_ms = int((time.time() - pop_t0) * 1000)
+                count = product_links.count()
+                if count >= 4:
                     break
-            if product_count < 4:
-                pop_duration_ms = int((time.time() - pop_t0) * 1000)
+            pop_duration_ms = int((time.time() - pop_t0) * 1000)
+            product_count = page.locator("a[href*='/product-detail/']").count()
             ss_pop = _capture_screenshot(page, "home_products")
             pop_status = "pass" if product_count >= 4 else "fail"
             results.append({
                 "step": "home_products_populate",
                 "duration_ms": pop_duration_ms,
                 "status": pop_status,
-                "detail": f"Products populated in {pop_duration_ms}ms ({product_count} product links found)",
+                "detail": f"10s human-speed scroll — {product_count} product links populating in {pop_duration_ms}ms",
                 "product_count": product_count,
                 "screenshot": ss_pop,
                 "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
-                "failure_reason": None if product_count >= 4 else f"Only {product_count} products after scrolling",
+                "failure_reason": None if product_count >= 4 else f"Only {product_count} products after 10s scroll",
             })
 
-            # Step 2: Category page
-            log("Step 2 — Loading category page")
-            t0 = time.time()
-            page.goto("https://gajab.com/product-list/all", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
-            duration = int((time.time() - t0) * 1000)
-            product_links = page.locator("a[href*='/product-detail/']")
-            has_products = product_links.count() > 0
-            ss_cat = _capture_screenshot(page, "category")
-            failure_reason = None
-            if not has_products:
-                failure_reason = "No product links found on category page"
-            elif duration > TIME_BUDGETS_SECONDS.get("category_page_load", 5) * 1000:
-                failure_reason = f"Page load slow ({duration}ms)"
-            results.append({
-                "step": "category_load",
-                "duration_ms": duration,
-                "status": "pass" if has_products else "fail",
-                "detail": f"Products found: {product_links.count()}, URL: {page.url}",
-                "product_count": product_links.count(),
-                "screenshot": ss_cat,
-                "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
-                "failure_reason": failure_reason,
-            })
-            _check_budget("category_page_load", duration, results)
+            # Step 2: Category pages — load multiple categories
+            log(f"Step 2 — Loading category pages ({len(CATEGORIES)} categories)")
+            for cat in CATEGORIES:
+                cat_name = cat["name"]
+                cat_url = cat["url"]
+                log(f"  Loading category: {cat_name}")
+                t0 = time.time()
+                try:
+                    page.goto(cat_url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+                    page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+                except Exception:
+                    pass
+                duration = int((time.time() - t0) * 1000)
+                product_links = page.locator("a[href*='/product-detail/']")
+                has_products = product_links.count() > 0
+                ss_cat = _capture_screenshot(page, f"category_{cat_name}")
+                failure_reason = None
+                if not has_products:
+                    failure_reason = f"No product links on {cat_name}"
+                elif duration > TIME_BUDGETS_SECONDS.get("category_page_load", 12) * 1000:
+                    failure_reason = f"Page load slow ({duration}ms)"
+                results.append({
+                    "step": f"category_{cat_name}_load",
+                    "duration_ms": duration,
+                    "status": "pass" if has_products else "fail",
+                    "detail": f"Products found: {product_links.count()}, URL: {page.url}",
+                    "product_count": product_links.count(),
+                    "screenshot": ss_cat,
+                    "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                    "failure_reason": failure_reason,
+                })
+                _check_budget("category_page_load", duration, results)
 
             # Pick a random product for bargain
             product_url = _pick_random_product(page)

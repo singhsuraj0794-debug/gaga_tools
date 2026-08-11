@@ -29,6 +29,13 @@ URLS = {
     ),
 }
 
+CATEGORIES = [
+    {"name": "all", "url": "https://gajab.com/product-list/all"},
+    {"name": "women", "url": "https://gajab.com/product-list/women"},
+    {"name": "men", "url": "https://gajab.com/product-list/men"},
+    {"name": "electronics", "url": "https://gajab.com/product-list/electronics"},
+]
+
 THRESHOLDS = {
     "performance_score": float(os.getenv("THRESHOLD_PERFORMANCE_SCORE", "0.5")),
     "lcp_ms": int(os.getenv("THRESHOLD_LCP_MS", "2500")),
