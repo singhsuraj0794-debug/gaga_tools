@@ -11,11 +11,16 @@ Usage:
 """
 
 import json
+import os
 import sys
 import traceback
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = 9000
+
+# Always use Webshare proxy for Meesho curl_cffi (rotating IPs, prevents blocks)
+if "MEESHO_PROXY" not in os.environ:
+    os.environ["MEESHO_PROXY"] = "http://uvuqatrj-in-rotate:fd9sp5s4yg8q@p.webshare.io:80"
 
 # Import scrapers from the same directory
 sys.path.insert(0, ".")

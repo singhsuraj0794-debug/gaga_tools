@@ -109,10 +109,15 @@ def _fetch(url: str) -> str:
     html = _try_direct(url)
 
 def _fetch_product_page(url: str) -> str:
-    """Fetch a product page — Safari impersonation (free), then Playwright, then ScraperAPI."""
+    """Fetch product page — proxy curl_cffi first (rotating IPs), real Chrome last resort."""
+    # Try with proxy first (rotating IPs, won't get blocked)
     html = _try_curl_cffi(url, impersonate="safari15_5")
     if html:
         return html
+    html = _try_curl_cffi(url, impersonate="chrome110")
+    if html:
+        return html
+    # Last resort: your real Chrome (use sparingly to avoid IP block)
     html = _try_playwright(url)
     if html:
         return html
@@ -157,12 +162,11 @@ def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
 def _try_playwright(url: str) -> str:
-    """Fetch via YOUR real Chrome (port 9222) — has your Meesho session."""
+    """Fetch via YOUR real Chrome (port 9222) — used as last resort when proxy fails."""
     try:
-        import time, json, urllib.request
+        import time, urllib.request
         from playwright.sync_api import sync_playwright
 
-        # Check if your Chrome CDP is available
         urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
 
         with sync_playwright() as p:
@@ -178,8 +182,8 @@ def _try_playwright(url: str) -> str:
                     page.close()
                     return html
             page.close()
-    except Exception as e:
-        import traceback; traceback.print_exc()
+    except Exception:
+        pass
     return ""
 
 def _try_google_cache(url: str) -> str:
