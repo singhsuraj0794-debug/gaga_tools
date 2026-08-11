@@ -770,7 +770,22 @@ def run_happy_flow() -> list[dict]:
             # Pick a random product for bargain
             product_url = _pick_random_product(page)
             if not product_url:
-                raise HappyFlowError("Could not find any product to bargain")
+                # No bargainable product — likely session expired, mark remaining steps as skipped
+                log("No bargainable product found — session may be expired")
+                results.append({
+                    "step": "product_detail_load", "duration_ms": 0, "status": "fail",
+                    "detail": "No product found with bargain button", "failure_reason": "Session expired or no bargainable products",
+                    "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                })
+                results.append({
+                    "step": "bargain_flow", "duration_ms": 0, "status": "fail",
+                    "detail": "Skipped — no bargainable product", "failure_reason": "No product with Start Bargaining button",
+                })
+                results.append({
+                    "step": "checkout_flow", "duration_ms": 0, "status": "fail",
+                    "detail": "Skipped — flow aborted", "failure_reason": "No bargainable product",
+                })
+                return results
             log(f"Selected product: {product_url}")
 
             # Step 3: Product detail page

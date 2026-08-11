@@ -109,15 +109,10 @@ def _fetch(url: str) -> str:
     html = _try_direct(url)
 
 def _fetch_product_page(url: str) -> str:
-    """Fetch product page — proxy curl_cffi first (rotating IPs), real Chrome last resort."""
-    # Try with proxy first (rotating IPs, won't get blocked)
+    """Fetch a product page — Safari impersonation (free), then Playwright, then ScraperAPI."""
     html = _try_curl_cffi(url, impersonate="safari15_5")
     if html:
         return html
-    html = _try_curl_cffi(url, impersonate="chrome110")
-    if html:
-        return html
-    # Last resort: your real Chrome (use sparingly to avoid IP block)
     html = _try_playwright(url)
     if html:
         return html
