@@ -739,6 +739,7 @@ def run_happy_flow() -> list[dict]:
                 "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 "failure_reason": None if product_count >= 4 else f"Only {product_count} products after 10s scroll",
             })
+            _check_budget("home_products_populate", pop_duration_ms, results)
 
             # Step 2: Category pages — load multiple categories
             log(f"Step 2 — Loading category pages ({len(CATEGORIES)} categories)")

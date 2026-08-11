@@ -46,6 +46,7 @@ THRESHOLDS = {
 
 TIME_BUDGETS_SECONDS = {
     "home_page_load": int(os.getenv("BUDGET_HOME_PAGE_LOAD", "15")),
+    "home_products_populate": int(os.getenv("BUDGET_HOME_PRODUCTS_POPULATE", "5")),
     "category_page_load": int(os.getenv("BUDGET_CATEGORY_PAGE_LOAD", "12")),
     "product_detail_load": int(os.getenv("BUDGET_PRODUCT_DETAIL_LOAD", "15")),
     "login_submit": int(os.getenv("BUDGET_LOGIN_SUBMIT", "3")),
