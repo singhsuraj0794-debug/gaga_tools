@@ -398,7 +398,7 @@ export default function MonitoringDashboard() {
                         platform === "mweb" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
                       }`}
                     >
-                      <Smartphone className="h-3.5 w-3.5" /> Mobile
+                      <Smartphone className="h-3.5 w-3.5" /> Mweb
                     </button>
                     <button
                       onClick={() => setPlatform("web")}
