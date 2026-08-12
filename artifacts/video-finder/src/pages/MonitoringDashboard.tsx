@@ -17,7 +17,7 @@ interface Run {
   value: number | null; status: "pass" | "fail" | "degraded";
   step_failed: string | null; duration_ms: number | null;
   details?: {
-    screenshot_base64?: string; failure_reason?: string;
+    screenshot_base64?: string; screenshot_url?: string; failure_reason?: string;
     console_errors?: {type:string;text:string}[];
     sub_steps?: {check:string;status:string;detail:string}[];
     detail?: string; url?: string; product_count?: number;
@@ -99,15 +99,16 @@ function VideoPlayer({ url, label }: { url?: string; label: string }) {
   );
 }
 
-function Screenshot({ base64, label }: { base64?: string; label: string }) {
+function Screenshot({ base64, url, label }: { base64?: string; url?: string; label: string }) {
   const [open, setOpen] = useState(false);
-  if (!base64) return null;
+  const src = url || base64;
+  if (!src) return null;
   return (
     <div className="mt-1.5">
       <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700">
         <Camera className="h-3 w-3" /> {open ? "Hide" : "View"} screenshot
       </button>
-      {open && <img src={base64} alt={label} className="mt-1.5 rounded border max-w-full max-h-48 object-contain bg-white" />}
+      {open && <img src={src} alt={label} className="mt-1.5 rounded border max-w-full max-h-48 object-contain bg-white" loading="lazy" />}
     </div>
   );
 }
@@ -187,7 +188,7 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
                 <span className="flex items-center gap-1"><Bug className="h-3 w-3" /> {run.details.console_errors.length} console error(s)</span>
               </div>
             )}
-            <Screenshot base64={run.details?.screenshot_base64} label={stepName} />
+            <Screenshot base64={run.details?.screenshot_base64} url={run.details?.screenshot_url} label={stepName} />
             <VideoPlayer url={run.details?.session_recording_url} label={stepName} />
           </div>
         </div>

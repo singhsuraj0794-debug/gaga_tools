@@ -119,7 +119,6 @@ def main():
         console_errors = step.get("console_errors", [])
         sub_steps = step.get("sub_steps", [])
         details = {
-            "screenshot_base64": screenshot.get("base64"),
             "failure_reason": failure_reason or error,
             "console_errors": console_errors,
             "sub_steps": sub_steps,
@@ -127,8 +126,12 @@ def main():
             "url": step.get("url"),
             "product_count": step.get("product_count"),
         }
-        if screenshot.get("path"):
-            details["screenshot_path"] = screenshot["path"]
+        # Upload screenshot to Supabase Storage
+        ss_path = screenshot.get("path")
+        if ss_path:
+            ss_url = store.upload_screenshot(ss_path)
+            if ss_url:
+                details["screenshot_url"] = ss_url
         if session_video_url:
             details["session_recording_url"] = session_video_url
         store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details)

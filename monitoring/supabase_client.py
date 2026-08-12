@@ -49,6 +49,39 @@ class SupabaseStore:
             print(f"[SUPABASE] Video upload error: {e}")
             return None
 
+    def upload_screenshot(self, screenshot_path: str) -> str | None:
+        if not self._client or not screenshot_path:
+            return None
+        try:
+            p = Path(screenshot_path)
+            if not p.exists():
+                print(f"[SUPABASE] Screenshot not found: {screenshot_path}")
+                return None
+            ts = self._run_at.replace(":", "-").replace(".", "-")
+            fname = p.name
+            remote_path = f"screenshots/{ts}_{fname}"
+            url = f"{SUPABASE_URL}/storage/v1/object/monitoring/{remote_path}"
+            headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "image/png",
+            }
+            import urllib.request
+            with open(p, "rb") as f:
+                data = f.read()
+            req = urllib.request.Request(url, data=data, headers=headers, method="PUT")
+            urllib.request.urlopen(req, timeout=15)
+            public_url = f"{SUPABASE_URL}/storage/v1/object/public/monitoring/{remote_path}"
+            print(f"[SUPABASE] Screenshot uploaded: {public_url} ({len(data) / 1024:.0f}KB)")
+            return public_url
+        except urllib.error.HTTPError as e:
+            err = e.read().decode()
+            print(f"[SUPABASE] Screenshot upload failed: HTTP {e.code} {err[:200]}")
+            return None
+        except Exception as e:
+            print(f"[SUPABASE] Screenshot upload error: {e}")
+            return None
+
     def store_result(self, page_or_flow: str, metric: str, value: float, status: str, step_failed: str | None = None, duration_ms: int | None = None, details: dict | None = None):
         if not self._client:
             print(f"[SUPABASE] Would store: {page_or_flow}/{metric}={value} status={status}")

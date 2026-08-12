@@ -938,6 +938,12 @@ def _run_platform_flow(platform: str) -> list[dict]:
 
         finally:
             try:
+                # Close context first — Playwright finalizes video on context close
+                context.close()
+                browser.close()
+            except Exception:
+                pass
+            try:
                 if page.video:
                     vpath = page.video.path()
                     if vpath and Path(vpath).exists():
@@ -954,8 +960,6 @@ def _run_platform_flow(platform: str) -> list[dict]:
                         })
             except Exception as e:
                 log(f"Video save error: {e}")
-            context.close()
-            browser.close()
 
     # Generate a readable summary
     log("=" * 50)
