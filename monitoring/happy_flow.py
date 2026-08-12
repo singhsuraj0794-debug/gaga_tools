@@ -294,72 +294,141 @@ def _do_bargain_flow(page, results: list):
 
 
 def _do_checkout_flow(page, results: list):
+    """Correct checkout flow: My Bargains → item with timer → Pay → Razorpay."""
     t0 = time.time()
     sub_steps = []
 
-    log("Step 5a — Navigating to checkout")
-    page.goto("https://gajab.com/checkout", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+    # Step 5a: Go to My Bargains
+    log("Step 5a — Navigating to My Bargains")
+    page.goto("https://gajab.com/my-bargains", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
     time.sleep(2)
-    is_checkout = "checkout" in page.url.lower()
-    sub_steps.append({"check": "checkout_nav", "status": "pass" if is_checkout else "degraded", "detail": f"URL: {page.url[:80]}"})
+    ss_bargains = _capture_screenshot(page, f"{_STEP_PREFIX}my_bargains_page")
+    is_bargains = "bargain" in page.url.lower()
+    sub_steps.append({"check": "my_bargains_nav", "status": "pass" if is_bargains else "degraded", "detail": f"URL: {page.url[:80]}"})
 
-    log("Step 5b — Razorpay card payment flow")
-    ss_checkout = _capture_screenshot(page, f"{_STEP_PREFIX}checkout_page")
-    razorpay_found = False
-    card_done = False
+    # Step 5b: Find a bargained item with timer / Pay button
+    log("Step 5b — Looking for bargained item with timer")
+    pay_btn = None
+    timer_found = False
 
-    if is_checkout:
-        pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed')")
-        if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
-            pay_btn.first.click(force=True)
-            log("Pay button clicked")
-            time.sleep(4)
-            ss_after_pay = _capture_screenshot(page, f"{_STEP_PREFIX}after_pay")
-            sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay clicked"})
+    # Look for timer elements (countdown)
+    timer_els = page.locator("[class*='timer'], [class*='countdown'], [class*='Timer'], [class*='Countdown'], span:has-text(':')")
+    if timer_els.count() > 0:
+        timer_found = True
+        sub_steps.append({"check": "timer_found", "status": "pass", "detail": f"Timer elements: {timer_els.count()}"})
+        log(f"  Timer found: {timer_els.count()} elements")
 
-            razorpay_frame = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
-            razorpay_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
-            if razorpay_el.count() > 0:
-                razorpay_found = True
-                sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay opened"})
-                log("Selecting Card mode, dismissing popup")
-                time.sleep(3)
+    # Look for Pay button on the bargained item
+    pay_selectors = [
+        "button:has-text('Pay')",
+        "button:has-text('Pay Now')",
+        "a:has-text('Pay')",
+        "[class*='bargain'] button:has-text('Pay')",
+    ]
+    for sel in pay_selectors:
+        loc = page.locator(sel)
+        if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+            pay_btn = loc.first
+            log(f"  Pay button found: {sel}")
+            break
 
-                for sel in ["button:has-text('Card')", "[data-method='card']"]:
-                    el = razorpay_frame.locator(sel).first
-                    if el.count() > 0 and el.is_visible(timeout=1000): el.click(force=True); break
-                sub_steps.append({"check": "card_selected", "status": "pass", "detail": "Card tab clicked"})
-
-                for sel in ["[class*='close']", "[class*='dismiss']", "button:has-text('No')"]:
-                    el = razorpay_frame.locator(sel).first
-                    if el.count() > 0 and el.is_visible(timeout=500): el.click(force=True); time.sleep(1); break
-                sub_steps.append({"check": "popup_dismissed", "status": "pass", "detail": "Offer popup dismissed"})
-
+    if not pay_btn:
+        # Try clicking on the first bargained item card to open it
+        log("  No Pay button visible — clicking on bargained item card")
+        card_selectors = [
+            "a[href*='bargain']",
+            "[class*='bargain-card']",
+            "[class*='bargainCard']",
+            "[class*='bargain'] a",
+            ".bargain-item",
+        ]
+        for sel in card_selectors:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                loc.first.click(force=True)
                 time.sleep(2)
+                log(f"  Clicked card: {sel}")
+                # Now look for Pay button on the detail page
+                for psel in pay_selectors:
+                    ploc = page.locator(psel)
+                    if ploc.count() > 0 and ploc.first.is_visible(timeout=2000):
+                        pay_btn = ploc.first
+                        log(f"  Pay button found after card click: {psel}")
+                        break
+                break
+
+    ss_before_pay = _capture_screenshot(page, f"{_STEP_PREFIX}bargains_with_item")
+
+    # Step 5c: Click Pay
+    razorpay_found = False
+    if pay_btn:
+        log("Step 5c — Clicking Pay button")
+        pay_btn.click(force=True)
+        time.sleep(4)
+        sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay button clicked from My Bargains"})
+        ss_after_pay = _capture_screenshot(page, f"{_STEP_PREFIX}after_pay")
+
+        # Check for Razorpay iframe
+        razorpay_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+        if razorpay_el.count() > 0:
+            razorpay_found = True
+            sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay payment gateway opened"})
+            log("Razorpay iframe detected")
+
+            # Step 5d: Select Card mode in Razorpay
+            log("Step 5d — Selecting Card mode in Razorpay")
+            razorpay_frame = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+            time.sleep(3)
+            for sel in ["button:has-text('Card')", "[data-method='card']"]:
+                el = razorpay_frame.locator(sel).first
+                if el.count() > 0 and el.is_visible(timeout=1000):
+                    el.click(force=True)
+                    break
+            sub_steps.append({"check": "card_selected", "status": "pass", "detail": "Card tab clicked"})
+
+            # Dismiss any offer popup
+            for sel in ["[class*='close']", "[class*='dismiss']", "button:has-text('No')"]:
+                el = razorpay_frame.locator(sel).first
+                if el.count() > 0 and el.is_visible(timeout=500):
+                    el.click(force=True)
+                    time.sleep(1)
+                    break
+            sub_steps.append({"check": "popup_dismissed", "status": "pass", "detail": "Offer popup dismissed"})
+
+            # Step 5e: Enter card details
+            log("Step 5e — Entering card details")
+            card_done = False
+            time.sleep(2)
+            for f in page.frames:
+                try:
+                    ci = f.locator("input[placeholder*='card'], input[placeholder*='Card']").first
+                    if ci.count() > 0 and ci.is_visible(timeout=1000):
+                        ci.fill("4529566615008376")
+                        f.locator("input[placeholder*='MM']").first.fill("11/30")
+                        f.locator("input[placeholder*='CVV']").first.fill("994")
+                        f.locator("input[placeholder*='name']").first.fill("Gracie Ullrich")
+                        card_done = True
+                        log("Card details entered")
+                        break
+                except Exception:
+                    continue
+            sub_steps.append({"check": "card_details", "status": "pass" if card_done else "degraded", "detail": "Card entered" if card_done else "PCI-DSS prevents automated card entry"})
+
+            if card_done:
                 for f in page.frames:
                     try:
-                        ci = f.locator("input[placeholder*='card'], input[placeholder*='Card']").first
-                        if ci.count() > 0 and ci.is_visible(timeout=1000):
-                            ci.fill("4529566615008376")
-                            f.locator("input[placeholder*='MM']").first.fill("11/30")
-                            f.locator("input[placeholder*='CVV']").first.fill("994")
-                            f.locator("input[placeholder*='name']").first.fill("Gracie Ullrich")
-                            card_done = True
-                            log("Card details entered")
+                        fp = f.locator("button:has-text('Pay'), button[type='submit']").first
+                        if fp.count() > 0 and fp.is_visible(timeout=1000):
+                            fp.click(force=True)
+                            time.sleep(3)
+                            _capture_screenshot(page, f"{_STEP_PREFIX}payment_result")
+                            sub_steps.append({"check": "final_pay", "status": "pass", "detail": "Payment submitted"})
                             break
-                    except Exception: continue
-                sub_steps.append({"check": "card_details", "status": "pass" if card_done or razorpay_found else "degraded", "detail": "PCI-DSS prevents automated card entry — Razorpay checkout reached"})
-
-                if card_done:
-                    for f in page.frames:
-                        try:
-                            fp = f.locator("button:has-text('Pay'), button[type='submit']").first
-                            if fp.count() > 0 and fp.is_visible(timeout=1000):
-                                fp.click(force=True); time.sleep(3); _capture_screenshot(page, f"{_STEP_PREFIX}payment_result")
-                                sub_steps.append({"check": "final_pay", "status": "pass", "detail": "Payment submitted"})
-                                break
-                        except Exception: continue
+                    except Exception:
+                        continue
+    else:
+        sub_steps.append({"check": "pay_button_click", "status": "fail", "detail": "No Pay button found in My Bargains"})
 
     duration = int((time.time() - t0) * 1000)
     pay_was_clicked = any(s["check"] == "pay_button_click" and s["status"] == "pass" for s in sub_steps)
@@ -368,9 +437,9 @@ def _do_checkout_flow(page, results: list):
         "duration_ms": duration,
         "status": "pass" if razorpay_found and pay_was_clicked else "degraded" if razorpay_found or pay_was_clicked else "fail",
         "sub_steps": sub_steps,
-        "detail": f"Checkout: Pay={pay_was_clicked}, Razorpay={'found' if razorpay_found else 'not found'}",
-        "screenshot": ss_checkout,
-        "failure_reason": None if razorpay_found else "Payment gateway did not appear",
+        "detail": f"Checkout: timer={timer_found}, Pay={pay_was_clicked}, Razorpay={'found' if razorpay_found else 'not found'}",
+        "screenshot": ss_bargains,
+        "failure_reason": None if razorpay_found else "Payment gateway did not appear — item may not be in My Bargains yet",
     })
     _check_budget("checkout_nav", duration, results)
 
@@ -651,20 +720,46 @@ def _do_second_bargain(page, results: list):
         "screenshot": ss,
     })
 
-    # Proceed to checkout after counter-offer accept
+    # Proceed to checkout via My Bargains after counter-offer accept
     if accepted:
-        log("Bargain 2 — Proceeding to checkout + Razorpay")
-        page.goto("https://gajab.com/checkout", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+        log("Bargain 2 — Navigating to My Bargains for payment")
+        page.goto("https://gajab.com/my-bargains", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
         time.sleep(2)
-        pay_btn = page.locator("button:has-text('Pay'), button:has-text('Place Order'), button:has-text('Proceed')")
-        if pay_btn.count() > 0 and pay_btn.first.is_visible(timeout=2000):
-            pay_btn.first.click(force=True)
+        _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_my_bargains")
+
+        # Find Pay button
+        pay_btn = None
+        for sel in ["button:has-text('Pay')", "button:has-text('Pay Now')", "a:has-text('Pay')"]:
+            loc = page.locator(sel)
+            if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+                pay_btn = loc.first
+                break
+
+        if not pay_btn:
+            # Click on bargained item card first
+            for sel in ["a[href*='bargain']", "[class*='bargain'] a"]:
+                loc = page.locator(sel)
+                if loc.count() > 0:
+                    loc.first.click(force=True)
+                    time.sleep(2)
+                    for psel in ["button:has-text('Pay')", "button:has-text('Pay Now')"]:
+                        ploc = page.locator(psel)
+                        if ploc.count() > 0 and ploc.first.is_visible(timeout=2000):
+                            pay_btn = ploc.first
+                            break
+                    break
+
+        if pay_btn:
+            pay_btn.click(force=True)
             time.sleep(4)
-            rf = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
-            if page.locator("iframe[src*='razorpay']").count() > 0:
-                sub_steps.append({"check": "bargain2_payment", "status": "pass", "detail": "Razorpay opened for second bargain"})
+            if page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']").count() > 0:
+                sub_steps.append({"check": "bargain2_payment", "status": "pass", "detail": "Razorpay opened for second bargain via My Bargains"})
                 _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_payment")
+            else:
+                sub_steps.append({"check": "bargain2_payment", "status": "degraded", "detail": "Pay clicked but Razorpay not detected"})
+        else:
+            sub_steps.append({"check": "bargain2_payment", "status": "fail", "detail": "No Pay button found in My Bargains"})
 
 
 def run_happy_flow() -> list[dict]:
