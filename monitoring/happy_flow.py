@@ -713,27 +713,29 @@ def run_happy_flow() -> list[dict]:
             })
             _check_budget("home_page_load", duration, results)
 
-            # Step 1b: Scroll homepage at human speed for 10s, measure product population
-            log("Step 1b — Scrolling homepage at human speed (10s)")
+            # Step 1b: Smooth human-speed scroll for 10s, track when products first populate
+            log("Step 1b — Scrolling homepage smoothly (10s human-speed)")
             pop_t0 = time.time()
-            # Scroll like a human — small increments with pauses
-            steps = 20
-            for i in range(steps):
-                page.mouse.wheel(0, 300)
-                time.sleep(0.5)
+            first_product_at = None
+            # Smooth scroll: 40 increments of 150px over ~10s (150ms per step)
+            for i in range(40):
+                page.evaluate("window.scrollBy(0, 150)")
+                time.sleep(0.15)
                 product_links = page.locator("a[href*='/product-detail/']")
                 count = product_links.count()
-                if count >= 4:
-                    break
-            pop_duration_ms = int((time.time() - pop_t0) * 1000)
+                if count >= 1 and first_product_at is None:
+                    first_product_at = int((time.time() - pop_t0) * 1000)
+                    log(f"  First product appeared at {first_product_at}ms (scroll step {i+1})")
+            pop_duration_ms = first_product_at or int((time.time() - pop_t0) * 1000)
             product_count = page.locator("a[href*='/product-detail/']").count()
+            log(f"  Final: {product_count} product links visible after 10s scroll")
             ss_pop = _capture_screenshot(page, "home_products")
             pop_status = "pass" if product_count >= 4 else "fail"
             results.append({
                 "step": "home_products_populate",
                 "duration_ms": pop_duration_ms,
                 "status": pop_status,
-                "detail": f"10s human-speed scroll — {product_count} product links populating in {pop_duration_ms}ms",
+                "detail": f"First product at {first_product_at}ms, {product_count} total after 10s scroll",
                 "product_count": product_count,
                 "screenshot": ss_pop,
                 "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
