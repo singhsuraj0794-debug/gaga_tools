@@ -5,6 +5,7 @@ import {
   Activity, ArrowLeft, BarChart3, Loader2, AlertTriangle,
   CheckCircle, MinusCircle, Clock, Camera, Info, Globe,
   Bug, Search, Image, DollarSign, Server, Cpu, ShoppingCart,
+  Smartphone, Monitor,
 } from "lucide-react";
 
 const _SUPABASE_URL = "https://okxyskmjsmtykblrtmyi.supabase.co";
@@ -237,6 +238,7 @@ function GroupMetrics({ runs, title, icon }: { runs: Run[]; title: string; icon:
 export default function MonitoringDashboard() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
+  const [platform, setPlatform] = useState<"mweb" | "web">("mweb");
 
   async function fetchRuns() {
     const url = import.meta.env.VITE_SUPABASE_URL || _SUPABASE_URL;
@@ -388,17 +390,32 @@ export default function MonitoringDashboard() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               <div>
                 <SectionCard title="Happy Flow" icon={<Activity className="h-3.5 w-3.5" />}>
-                  {PLATFORMS.map(platform => (
-                    <div key={platform} className="mb-3 last:mb-0">
-                      <div className="text-xs font-semibold text-slate-500 uppercase mb-1.5">{platform === "mweb" ? "Mobile Web" : "Desktop"}</div>
-                      {HAPPY_STEPS.map(({ key: stepKey, label }) => {
-                        const metric = `step_${platform}_${stepKey}`;
-                        const run = latestHappy.get(metric);
-                        if (!run) return <div key={metric} className="text-xs text-slate-400 py-1.5 pl-2">No data for {label.toLowerCase()}</div>;
-                        return <StepCard key={metric} run={run} stepName={label} icon={<Activity className="h-4 w-4" />} />;
-                      })}
-                    </div>
-                  ))}
+                  {/* Platform tabs */}
+                  <div className="flex gap-1 mb-3 p-0.5 bg-slate-100 rounded-lg">
+                    <button
+                      onClick={() => setPlatform("mweb")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        platform === "mweb" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      <Smartphone className="h-3.5 w-3.5" /> Mobile
+                    </button>
+                    <button
+                      onClick={() => setPlatform("web")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        platform === "web" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      <Monitor className="h-3.5 w-3.5" /> Desktop
+                    </button>
+                  </div>
+                  {/* Steps for selected platform */}
+                  {HAPPY_STEPS.map(({ key: stepKey, label }) => {
+                    const metric = `step_${platform}_${stepKey}`;
+                    const run = latestHappy.get(metric);
+                    if (!run) return <div key={metric} className="text-xs text-slate-400 py-1.5 pl-1">No data for {label.toLowerCase()}</div>;
+                    return <StepCard key={metric} run={run} stepName={label} icon={<Activity className="h-4 w-4" />} />;
+                  })}
                 </SectionCard>
               </div>
 
