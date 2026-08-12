@@ -870,32 +870,71 @@ def _run_platform_flow(platform: str) -> list[dict]:
             })
             _check_budget("home_products_populate", pop_duration_ms, results)
 
-            # Step 2: Category pages — load multiple categories
-            log(f"Step 2 — Loading category pages ({len(CATEGORIES)} categories)")
+            # Step 2: Category pages — click through navigation (URL filtering doesn't work)
+            log(f"Step 2 — Loading category pages via nav clicks ({len(CATEGORIES)} categories)")
             for cat in CATEGORIES:
                 cat_name = cat["name"]
-                cat_url = cat["url"]
-                log(f"  Loading category: {cat_name}")
+                nav_text = cat["nav_text"]
+                log(f"  Loading category: {cat_name} (clicking '{nav_text}')")
                 t0 = time.time()
+
+                # First go to home page to access nav
                 try:
-                    page.goto(cat_url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+                    page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
                     page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+                    time.sleep(1)
                 except Exception:
                     pass
+
+                # Click the category in navigation
+                clicked = False
+                nav_selectors = [
+                    f"a:has-text('{nav_text}')",
+                    f"[href*='{cat['url'].split('/')[-1]}']",
+                    f"nav a:has-text('{nav_text}')",
+                ]
+                for sel in nav_selectors:
+                    loc = page.locator(sel)
+                    if loc.count() > 0:
+                        try:
+                            loc.first.click(timeout=5000)
+                            clicked = True
+                            log(f"  Clicked: {sel}")
+                            break
+                        except Exception:
+                            continue
+
+                if not clicked:
+                    # Fallback: navigate directly (may show all products)
+                    log(f"  Nav click failed, falling back to URL: {cat['url']}")
+                    try:
+                        page.goto(cat["url"], timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+                        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+                    except Exception:
+                        pass
+
+                time.sleep(2)
                 duration = int((time.time() - t0) * 1000)
                 product_links = page.locator("a[href*='/product-detail/']")
                 has_products = product_links.count() > 0
+
+                # Verify the correct category is active/selected
+                page_text = page.evaluate("() => document.body.innerText")
+                category_visible = nav_text.lower() in page_text.lower() if nav_text else True
+
                 ss_cat = _capture_screenshot(page, f"{_STEP_PREFIX}category_{cat_name}")
                 failure_reason = None
                 if not has_products:
                     failure_reason = f"No product links on {cat_name}"
+                elif not clicked:
+                    failure_reason = f"Nav click failed for {nav_text}"
                 elif duration > TIME_BUDGETS_SECONDS.get("category_page_load", 12) * 1000:
                     failure_reason = f"Page load slow ({duration}ms)"
                 results.append({
                     "step": _STEP_PREFIX + f"category_{cat_name}_load",
                     "duration_ms": duration,
-                    "status": "pass" if has_products else "fail",
-                    "detail": f"Products found: {product_links.count()}, URL: {page.url}",
+                    "status": "pass" if has_products and clicked else "fail",
+                    "detail": f"Products: {product_links.count()}, clicked: {clicked}, URL: {page.url}",
                     "product_count": product_links.count(),
                     "screenshot": ss_cat,
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
@@ -1032,29 +1071,37 @@ def _run_platform_flow(platform: str) -> list[dict]:
             })
 
         finally:
-            try:
-                # Close context first — Playwright finalizes video on context close
-                context.close()
-                browser.close()
-            except Exception:
-                pass
+            # Get video path BEFORE closing context (Playwright needs it open)
             try:
                 if page.video:
                     vpath = page.video.path()
-                    if vpath and Path(vpath).exists():
+                    if vpath:
                         video_path = str(vpath)
-                        size_kb = Path(vpath).stat().st_size / 1024
-                        log(f"Session recording saved: {video_path} ({size_kb:.0f}KB)")
-                        results.append({
-                            "step": _STEP_PREFIX + "session_recording",
-                            "duration_ms": 0,
-                            "status": "pass",
-                            "detail": f"Recording saved ({size_kb:.0f}KB)",
-                            "screenshot": None,
-                            "video_path": video_path,
-                        })
+                        log(f"Video path captured: {video_path}")
             except Exception as e:
-                log(f"Video save error: {e}")
+                log(f"Video path capture error: {e}")
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
+            # Check if video file exists and record it
+            if video_path and Path(video_path).exists():
+                size_kb = Path(video_path).stat().st_size / 1024
+                log(f"Session recording saved: {video_path} ({size_kb:.0f}KB)")
+                results.append({
+                    "step": _STEP_PREFIX + "session_recording",
+                    "duration_ms": 0,
+                    "status": "pass",
+                    "detail": f"Recording saved ({size_kb:.0f}KB)",
+                    "screenshot": None,
+                    "video_path": video_path,
+                })
+            else:
+                log(f"No video file found (path={video_path})")
 
     # Generate a readable summary
     log("=" * 50)
