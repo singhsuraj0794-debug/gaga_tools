@@ -422,7 +422,7 @@ def _do_page_checks(page, results: list):
             has_content = page.evaluate("(sel) => document.querySelector(sel) !== null", expected)
             title = page.title()
             results.append({
-                "step": f"page_{name}",
+                "step": _STEP_PREFIX + f"page_{name}",
                 "duration_ms": duration,
                 "status": "pass" if has_content else "degraded",
                 "detail": f"{url} — title='{title[:50]}', has_content={has_content}",
@@ -431,7 +431,7 @@ def _do_page_checks(page, results: list):
         except Exception as e:
             duration = int((time.time() - t0) * 1000)
             results.append({
-                "step": f"page_{name}", "duration_ms": duration, "status": "fail",
+                "step": _STEP_PREFIX + f"page_{name}", "duration_ms": duration, "status": "fail",
                 "error": str(e)[:100], "failure_reason": f"Failed to load {url}",
             })
 
@@ -727,7 +727,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
             # Step 1: Home page
             log("Step 1 — Loading home page")
             t0 = time.time()
-            page.goto("https://gajab.go.link/k9bGV", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+            page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
             page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
             duration = int((time.time() - t0) * 1000)
             title = page.title()
@@ -797,7 +797,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
                 elif duration > TIME_BUDGETS_SECONDS.get("category_page_load", 12) * 1000:
                     failure_reason = f"Page load slow ({duration}ms)"
                 results.append({
-                    "step": f"category_{cat_name}_load",
+                    "step": _STEP_PREFIX + f"category_{cat_name}_load",
                     "duration_ms": duration,
                     "status": "pass" if has_products else "fail",
                     "detail": f"Products found: {product_links.count()}, URL: {page.url}",
