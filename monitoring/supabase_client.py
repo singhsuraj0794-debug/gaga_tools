@@ -16,7 +16,7 @@ class SupabaseStore:
             return
         self._client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    def upload_video(self, video_path: str) -> str | None:
+    def upload_video(self, video_path: str, platform: str = "") -> str | None:
         if not self._client:
             return None
         try:
@@ -25,7 +25,8 @@ class SupabaseStore:
                 print(f"[SUPABASE] Video not found: {video_path}")
                 return None
             ts = self._run_at.replace(":", "-").replace(".", "-")
-            remote_path = f"recordings/{ts}.webm"
+            suffix = f"_{platform}" if platform else ""
+            remote_path = f"recordings/{ts}{suffix}.webm"
             url = f"{SUPABASE_URL}/storage/v1/object/monitoring/{remote_path}"
             headers = {
                 "apikey": SUPABASE_KEY,
@@ -49,7 +50,7 @@ class SupabaseStore:
             print(f"[SUPABASE] Video upload error: {e}")
             return None
 
-    def upload_screenshot(self, screenshot_path: str) -> str | None:
+    def upload_screenshot(self, screenshot_path: str, platform: str = "") -> str | None:
         if not self._client or not screenshot_path:
             return None
         try:
@@ -59,7 +60,8 @@ class SupabaseStore:
                 return None
             ts = self._run_at.replace(":", "-").replace(".", "-")
             fname = p.name
-            remote_path = f"screenshots/{ts}_{fname}"
+            suffix = f"_{platform}" if platform else ""
+            remote_path = f"screenshots/{ts}{suffix}_{fname}"
             url = f"{SUPABASE_URL}/storage/v1/object/monitoring/{remote_path}"
             headers = {
                 "apikey": SUPABASE_KEY,

@@ -105,7 +105,7 @@ def main():
             step_name = step["step"]
             platform = "mweb" if step_name.startswith("mweb_") else "web" if step_name.startswith("web_") else "unknown"
             if platform not in video_urls:
-                video_urls[platform] = store.upload_video(step["video_path"])
+                video_urls[platform] = store.upload_video(step["video_path"], platform=platform)
                 print(f"[MONITOR] Video uploaded for {platform}: {video_urls[platform]}", flush=True)
 
     # Second pass: store all steps with video URL attached
@@ -134,7 +134,7 @@ def main():
         # Upload screenshot to Supabase Storage
         ss_path = screenshot.get("path")
         if ss_path:
-            ss_url = store.upload_screenshot(ss_path)
+            ss_url = store.upload_screenshot(ss_path, platform=platform or "")
             if ss_url:
                 details["screenshot_url"] = ss_url
         # Attach the correct platform's video URL
