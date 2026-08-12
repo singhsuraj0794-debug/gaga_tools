@@ -7,15 +7,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from config import (
-    VIEWPORT, DEVICE_SCALE_FACTOR, GEOLOCATION,
+    VIEWPORT, VIEWPORT_DESKTOP, DEVICE_SCALE_FACTOR, GEOLOCATION,
     PAGE_TIMEOUT, NAV_TIMEOUT, TIME_BUDGETS_SECONDS,
     OTP_TIMEOUT, OTP_POLL_INTERVAL, MONITOR_PHONE,
     TWILIO_SID, TWILIO_AUTH_TOKEN,
-    CATEGORIES,
+    CATEGORIES, PLATFORMS,
 )
 
 _SCREENSHOT_DIR = Path(__file__).parent / "screenshots"
 _SCREENSHOT_DIR.mkdir(exist_ok=True)
+
+_STEP_PREFIX = ""  # set dynamically by _run_platform_flow()
 
 
 class OTPDeliveryError(Exception):
@@ -188,7 +190,7 @@ def _do_bargain_flow(page, results: list):
     }""")
 
     if not clicked:
-        _capture_screenshot(page, "bargain_start_not_found")
+        _capture_screenshot(page, f"{_STEP_PREFIX}bargain_start_not_found")
         raise HappyFlowError("'Start Bargaining' button not found or could not be clicked")
     sub_steps.append({"check": "start_bargaining_button", "status": "pass", "detail": "Button found and clicked via JS dispatchEvent"})
     log("Step 4c — Start Bargaining clicked, waiting for bargain modal")
@@ -220,7 +222,7 @@ def _do_bargain_flow(page, results: list):
             break
         time.sleep(1)
     if not slider_result.get("found"):
-        _capture_screenshot(page, "slider_not_found")
+        _capture_screenshot(page, f"{_STEP_PREFIX}slider_not_found")
         sub_steps.append({"check": "price_slider", "status": "degraded", "detail": "No slider input found, continuing"})
     else:
         sub_steps.append({"check": "price_slider", "status": "pass", "detail": f"Slider set (min={slider_result['min']}, max={slider_result['max']})"})
@@ -247,7 +249,7 @@ def _do_bargain_flow(page, results: list):
             continue
     if not offered:
         log("Offer button not found via selectors — trying JS fallback")
-        _capture_screenshot(page, "offer_button_fallback")
+        _capture_screenshot(page, f"{_STEP_PREFIX}offer_button_fallback")
         clicked = page.evaluate("""() => {
             for (const btn of document.querySelectorAll('button')) {
                 const t = (btn.textContent||'').trim();
@@ -279,9 +281,9 @@ def _do_bargain_flow(page, results: list):
         sub_steps.append({"check": "accept_offer", "status": "pass", "detail": "Offer sent to seller — awaiting manual acceptance"})
 
     bargain_duration = int((time.time() - t0) * 1000)
-    ss_bargain = _capture_screenshot(page, "bargain_complete")
+    ss_bargain = _capture_screenshot(page, f"{_STEP_PREFIX}bargain_complete")
     results.append({
-        "step": "bargain_flow",
+        "step": _STEP_PREFIX + "bargain_flow",
         "duration_ms": bargain_duration,
         "status": "pass",
         "sub_steps": sub_steps,
@@ -303,7 +305,7 @@ def _do_checkout_flow(page, results: list):
     sub_steps.append({"check": "checkout_nav", "status": "pass" if is_checkout else "degraded", "detail": f"URL: {page.url[:80]}"})
 
     log("Step 5b — Razorpay card payment flow")
-    ss_checkout = _capture_screenshot(page, "checkout_page")
+    ss_checkout = _capture_screenshot(page, f"{_STEP_PREFIX}checkout_page")
     razorpay_found = False
     card_done = False
 
@@ -313,7 +315,7 @@ def _do_checkout_flow(page, results: list):
             pay_btn.first.click(force=True)
             log("Pay button clicked")
             time.sleep(4)
-            ss_after_pay = _capture_screenshot(page, "after_pay")
+            ss_after_pay = _capture_screenshot(page, f"{_STEP_PREFIX}after_pay")
             sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay clicked"})
 
             razorpay_frame = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
@@ -354,7 +356,7 @@ def _do_checkout_flow(page, results: list):
                         try:
                             fp = f.locator("button:has-text('Pay'), button[type='submit']").first
                             if fp.count() > 0 and fp.is_visible(timeout=1000):
-                                fp.click(force=True); time.sleep(3); _capture_screenshot(page, "payment_result")
+                                fp.click(force=True); time.sleep(3); _capture_screenshot(page, f"{_STEP_PREFIX}payment_result")
                                 sub_steps.append({"check": "final_pay", "status": "pass", "detail": "Payment submitted"})
                                 break
                         except Exception: continue
@@ -362,7 +364,7 @@ def _do_checkout_flow(page, results: list):
     duration = int((time.time() - t0) * 1000)
     pay_was_clicked = any(s["check"] == "pay_button_click" and s["status"] == "pass" for s in sub_steps)
     results.append({
-        "step": "checkout_flow",
+        "step": _STEP_PREFIX + "checkout_flow",
         "duration_ms": duration,
         "status": "pass" if razorpay_found and pay_was_clicked else "degraded" if razorpay_found or pay_was_clicked else "fail",
         "sub_steps": sub_steps,
@@ -398,10 +400,10 @@ def _do_search_flow(page, results: list):
 
     duration = int((time.time() - t0) * 1000)
     results.append({
-        "step": "search_products", "duration_ms": duration,
+        "step": _STEP_PREFIX + "search_products", "duration_ms": duration,
         "status": "pass" if all(s["status"] == "pass" for s in sub_steps) else "degraded",
         "sub_steps": sub_steps, "detail": f"Search flow: {duration}ms",
-        "screenshot": _capture_screenshot(page, "search_results"),
+        "screenshot": _capture_screenshot(page, f"{_STEP_PREFIX}search_results"),
     })
 
 
@@ -424,7 +426,7 @@ def _do_page_checks(page, results: list):
                 "duration_ms": duration,
                 "status": "pass" if has_content else "degraded",
                 "detail": f"{url} — title='{title[:50]}', has_content={has_content}",
-                "screenshot": _capture_screenshot(page, name),
+                "screenshot": _capture_screenshot(page, f"{_STEP_PREFIX}{name}"),
             })
         except Exception as e:
             duration = int((time.time() - t0) * 1000)
@@ -446,14 +448,14 @@ def _do_page_checks(page, results: list):
             if "resize.gajab.com" not in src and "banner" not in src.lower():
                 banner_images_loaded = False
         results.append({
-            "step": "banners_check",
+            "step": _STEP_PREFIX + "banners_check",
             "duration_ms": 0,
             "status": "pass" if banner_count >= 2 and banner_images_loaded else "degraded",
             "detail": f"Banners found: {banner_count}, images from CDN: {banner_images_loaded}",
-            "screenshot": _capture_screenshot(page, "banners"),
+            "screenshot": _capture_screenshot(page, f"{_STEP_PREFIX}banners"),
         })
     except Exception as e:
-        results.append({"step": "banners_check", "duration_ms": 0, "status": "fail", "error": str(e)[:100]})
+        results.append({"step": _STEP_PREFIX + "banners_check", "duration_ms": 0, "status": "fail", "error": str(e)[:100]})
 
 
 def _check_budget(budget_key: str, duration_ms: int, results: list):
@@ -537,7 +539,7 @@ def _do_second_bargain(page, results: list):
     log("Bargain 2 — Picking another random product")
     product_url = _pick_random_product(page)
     if not product_url:
-        results.append({"step": "bargain2_flow", "duration_ms": 0, "status": "fail", "failure_reason": "No product found"})
+        results.append({"step": _STEP_PREFIX + "bargain2_flow", "duration_ms": 0, "status": "fail", "failure_reason": "No product found"})
         return
 
     log(f"Bargain 2 — Loading {product_url}")
@@ -638,10 +640,10 @@ def _do_second_bargain(page, results: list):
         time.sleep(2)
     sub_steps.append({"check": "counter_offer_accepted", "status": "pass" if accepted else "degraded", "detail": "Counter-offer accepted" if accepted else "No counter-offer appeared within 30s"})
 
-    ss = _capture_screenshot(page, "bargain2_complete")
+    ss = _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_complete")
     duration = int((time.time() - t0) * 1000)
     results.append({
-        "step": "bargain2_flow",
+        "step": _STEP_PREFIX + "bargain2_flow",
         "duration_ms": duration,
         "status": "pass" if accepted else "degraded",
         "sub_steps": sub_steps,
@@ -662,23 +664,53 @@ def _do_second_bargain(page, results: list):
             rf = page.frame_locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
             if page.locator("iframe[src*='razorpay']").count() > 0:
                 sub_steps.append({"check": "bargain2_payment", "status": "pass", "detail": "Razorpay opened for second bargain"})
-                _capture_screenshot(page, "bargain2_payment")
+                _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_payment")
 
 
 def run_happy_flow() -> list[dict]:
     results = []
+
+    for platform in PLATFORMS:
+        log(f"--- Running happy flow for: {platform} ---")
+        pf = _run_platform_flow(platform)
+        results.extend(pf)
+
+    return results
+
+
+def _run_platform_flow(platform: str) -> list[dict]:
+    results = []
+    global _STEP_PREFIX; _STEP_PREFIX = f"{platform}_"
+    step_prefix = _STEP_PREFIX
+    
+    # Platform-specific config
+    if platform == "mweb":
+        viewport = VIEWPORT
+        scale = DEVICE_SCALE_FACTOR
+        is_mobile = True
+        has_touch = True
+        ua = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    else:  # web
+        viewport = VIEWPORT_DESKTOP
+        scale = 1
+        is_mobile = False
+        has_touch = False
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+    import random
     video_path = None
 
-    log("Starting happy-flow check")
+    log(f"Starting {platform} happy-flow check")
 
     session_state = _load_session()
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(
-            viewport=VIEWPORT,
-            device_scale_factor=DEVICE_SCALE_FACTOR,
-            is_mobile=True,
-            has_touch=True,
+            viewport=viewport,
+            device_scale_factor=scale,
+            is_mobile=is_mobile,
+            has_touch=has_touch,
+            user_agent=ua,
             geolocation=GEOLOCATION,
             permissions=["geolocation"],
             locale="en-IN",
@@ -700,9 +732,9 @@ def run_happy_flow() -> list[dict]:
             duration = int((time.time() - t0) * 1000)
             title = page.title()
             has_gajab = "Gajab" in title or "gajab" in title.lower()
-            ss_home = _capture_screenshot(page, "home")
+            ss_home = _capture_screenshot(page, f"{_STEP_PREFIX}home")
             results.append({
-                "step": "home_load",
+                "step": _STEP_PREFIX + "home_load",
                 "duration_ms": duration,
                 "status": "pass" if has_gajab else "fail",
                 "detail": f"Title: '{title}', URL: {page.url}",
@@ -729,10 +761,10 @@ def run_happy_flow() -> list[dict]:
             pop_duration_ms = first_product_at or int((time.time() - pop_t0) * 1000)
             product_count = page.locator("a[href*='/product-detail/']").count()
             log(f"  Final: {product_count} product links visible after 10s scroll")
-            ss_pop = _capture_screenshot(page, "home_products")
+            ss_pop = _capture_screenshot(page, f"{_STEP_PREFIX}home_products")
             pop_status = "pass" if product_count >= 4 else "fail"
             results.append({
-                "step": "home_products_populate",
+                "step": _STEP_PREFIX + "home_products_populate",
                 "duration_ms": pop_duration_ms,
                 "status": pop_status,
                 "detail": f"First product at {first_product_at}ms, {product_count} total after 10s scroll",
@@ -758,7 +790,7 @@ def run_happy_flow() -> list[dict]:
                 duration = int((time.time() - t0) * 1000)
                 product_links = page.locator("a[href*='/product-detail/']")
                 has_products = product_links.count() > 0
-                ss_cat = _capture_screenshot(page, f"category_{cat_name}")
+                ss_cat = _capture_screenshot(page, f"{_STEP_PREFIX}category_{cat_name}")
                 failure_reason = None
                 if not has_products:
                     failure_reason = f"No product links on {cat_name}"
@@ -782,16 +814,16 @@ def run_happy_flow() -> list[dict]:
                 # No bargainable product — likely session expired, mark remaining steps as skipped
                 log("No bargainable product found — session may be expired")
                 results.append({
-                    "step": "product_detail_load", "duration_ms": 0, "status": "fail",
+                    "step": _STEP_PREFIX + "product_detail_load", "duration_ms": 0, "status": "fail",
                     "detail": "No product found with bargain button", "failure_reason": "Session expired or no bargainable products",
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 })
                 results.append({
-                    "step": "bargain_flow", "duration_ms": 0, "status": "fail",
+                    "step": _STEP_PREFIX + "bargain_flow", "duration_ms": 0, "status": "fail",
                     "detail": "Skipped — no bargainable product", "failure_reason": "No product with Start Bargaining button",
                 })
                 results.append({
-                    "step": "checkout_flow", "duration_ms": 0, "status": "fail",
+                    "step": _STEP_PREFIX + "checkout_flow", "duration_ms": 0, "status": "fail",
                     "detail": "Skipped — flow aborted", "failure_reason": "No bargainable product",
                 })
                 return results
@@ -818,12 +850,12 @@ def run_happy_flow() -> list[dict]:
                     has_varient = bool(text and text.strip())
                 except Exception:
                     has_varient = False
-            ss_pdp = _capture_screenshot(page, "product_detail")
+            ss_pdp = _capture_screenshot(page, f"{_STEP_PREFIX}product_detail")
             failure_reason = None
             if not has_varient:
                 failure_reason = "#varient-price element not found"
             results.append({
-                "step": "product_detail_load",
+                "step": _STEP_PREFIX + "product_detail_load",
                 "duration_ms": duration,
                 "status": "pass" if has_varient else "fail",
                 "detail": f"#varient-price visible: {has_varient}, title: {page.title()[:60]}",
@@ -845,9 +877,9 @@ def run_happy_flow() -> list[dict]:
                 _do_bargain_flow(page, results)
             except Exception as e:
                 log(f"Bargain flow error (continuing): {e}")
-                ss = _capture_screenshot(page, "bargain_failed")
+                ss = _capture_screenshot(page, f"{_STEP_PREFIX}bargain_failed")
                 results.append({
-                    "step": "bargain_flow",
+                    "step": _STEP_PREFIX + "bargain_flow",
                     "duration_ms": 0,
                     "status": "fail",
                     "detail": f"Bargain flow failed: {e}",
@@ -861,9 +893,9 @@ def run_happy_flow() -> list[dict]:
                 _do_checkout_flow(page, results)
             except Exception as e:
                 log(f"Checkout flow error (continuing): {e}")
-                ss = _capture_screenshot(page, "checkout_failed")
+                ss = _capture_screenshot(page, f"{_STEP_PREFIX}checkout_failed")
                 results.append({
-                    "step": "checkout_flow",
+                    "step": _STEP_PREFIX + "checkout_flow",
                     "duration_ms": 0,
                     "status": "fail",
                     "detail": f"Checkout flow failed: {e}",
@@ -890,7 +922,7 @@ def run_happy_flow() -> list[dict]:
             step_name = results[-1]["step"] if results else "unknown"
             log(f"HAPPY FLOW FAILED at step '{step_name}': {e}")
             try:
-                ss = _capture_screenshot(page, f"failure_{step_name}")
+                ss = _capture_screenshot(page, f"{_STEP_PREFIX}failure_{step_name}")
             except Exception:
                 ss = {"path": None, "base64": None}
             results.append({
@@ -912,7 +944,7 @@ def run_happy_flow() -> list[dict]:
                         size_kb = Path(vpath).stat().st_size / 1024
                         log(f"Session recording saved: {video_path} ({size_kb:.0f}KB)")
                         results.append({
-                            "step": "session_recording",
+                            "step": _STEP_PREFIX + "session_recording",
                             "duration_ms": 0,
                             "status": "pass",
                             "detail": f"Recording saved ({size_kb:.0f}KB)",

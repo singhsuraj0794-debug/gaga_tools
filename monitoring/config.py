@@ -17,8 +17,11 @@ OTP_TIMEOUT = int(os.getenv("MONITOR_OTP_TIMEOUT", "30"))
 OTP_POLL_INTERVAL = int(os.getenv("MONITOR_OTP_POLL_INTERVAL", "3"))
 
 VIEWPORT = {"width": 430, "height": 932}
+VIEWPORT_DESKTOP = {"width": 1440, "height": 900}
 DEVICE_SCALE_FACTOR = 2
 GEOLOCATION = {"latitude": 19.4560, "longitude": 72.8054}
+
+PLATFORMS = ["mweb", "web"]  # mweb = mobile, web = desktop
 
 URLS = {
     "home": os.getenv("MONITOR_URL_HOME", "https://gajab.go.link/k9bGV"),
