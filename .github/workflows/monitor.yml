@@ -30,7 +30,9 @@ jobs:
           npm install lighthouse
 
       - name: Install Playwright browsers
-        run: playwright install chromium
+        run: |
+          playwright install-deps chromium
+          playwright install chromium
 
       - name: Download saved session from Supabase
         run: |

@@ -919,8 +919,9 @@ def _run_platform_flow(platform: str) -> list[dict]:
             log("Happy flow completed successfully")
 
         except (AssertionError, PWTimeout, HappyFlowError, Exception) as e:
-            step_name = results[-1]["step"] if results else "unknown"
+            step_name = results[-1]["step"] if results else f"{_STEP_PREFIX}unknown"
             log(f"HAPPY FLOW FAILED at step '{step_name}': {e}")
+            import traceback; traceback.print_exc()
             try:
                 ss = _capture_screenshot(page, f"{_STEP_PREFIX}failure_{step_name}")
             except Exception:

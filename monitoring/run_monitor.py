@@ -90,7 +90,13 @@ def main():
 
     # ── Part 4: Happy-Flow Check ──
     print("\n--- Happy-Flow Check ---", flush=True)
-    flow_results = run_happy_flow()
+    print(f"[MONITOR] happy_flow version: 2026-08-12-fix", flush=True)
+    try:
+        flow_results = run_happy_flow()
+    except Exception as e:
+        print(f"[MONITOR] HAPPY FLOW CRASHED: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        flow_results = []
     flow_overall = "pass"
     # First pass: upload video
     session_video_url = None
