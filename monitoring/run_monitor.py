@@ -101,8 +101,9 @@ def main():
     # First pass: upload video
     session_video_url = None
     for step in flow_results:
-        if step.get("step") == "session_recording" and step.get("video_path"):
+        if step.get("step", "").endswith("session_recording") and step.get("video_path"):
             session_video_url = store.upload_video(step["video_path"])
+            print(f"[MONITOR] Video uploaded: {session_video_url}", flush=True)
             break
 
     # Second pass: store all steps with video URL attached
