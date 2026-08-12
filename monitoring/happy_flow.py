@@ -845,12 +845,14 @@ def run_happy_flow() -> list[dict]:
                 _do_bargain_flow(page, results)
             except Exception as e:
                 log(f"Bargain flow error (continuing): {e}")
+                ss = _capture_screenshot(page, "bargain_failed")
                 results.append({
                     "step": "bargain_flow",
                     "duration_ms": 0,
                     "status": "fail",
                     "detail": f"Bargain flow failed: {e}",
                     "failure_reason": str(e)[:200],
+                    "screenshot": ss,
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 })
 
@@ -859,12 +861,14 @@ def run_happy_flow() -> list[dict]:
                 _do_checkout_flow(page, results)
             except Exception as e:
                 log(f"Checkout flow error (continuing): {e}")
+                ss = _capture_screenshot(page, "checkout_failed")
                 results.append({
                     "step": "checkout_flow",
                     "duration_ms": 0,
                     "status": "fail",
                     "detail": f"Checkout flow failed: {e}",
                     "failure_reason": str(e)[:200],
+                    "screenshot": ss,
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 })
 

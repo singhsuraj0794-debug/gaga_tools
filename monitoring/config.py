@@ -53,7 +53,7 @@ TIME_BUDGETS_SECONDS = {
     "otp_receive": int(os.getenv("BUDGET_OTP_RECEIVE", "30")),
     "bargain_flow": int(os.getenv("BUDGET_BARGAIN_FLOW", "20")),
     "add_to_cart": int(os.getenv("BUDGET_ADD_TO_CART", "5")),
-    "checkout_nav": int(os.getenv("BUDGET_CHECKOUT_NAV", "10")),
+    "checkout_nav": int(os.getenv("BUDGET_CHECKOUT_NAV", "20")),
 }
 
 MONITOR_PHONE = os.getenv("MONITOR_PHONE", "")
