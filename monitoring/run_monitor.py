@@ -98,13 +98,15 @@ def main():
         import traceback; traceback.print_exc()
         flow_results = []
     flow_overall = "pass"
-    # First pass: upload video
-    session_video_url = None
+    # First pass: upload videos for each platform
+    video_urls = {}  # {"mweb": url, "web": url}
     for step in flow_results:
         if step.get("step", "").endswith("session_recording") and step.get("video_path"):
-            session_video_url = store.upload_video(step["video_path"])
-            print(f"[MONITOR] Video uploaded: {session_video_url}", flush=True)
-            break
+            step_name = step["step"]
+            platform = "mweb" if step_name.startswith("mweb_") else "web" if step_name.startswith("web_") else "unknown"
+            if platform not in video_urls:
+                video_urls[platform] = store.upload_video(step["video_path"])
+                print(f"[MONITOR] Video uploaded for {platform}: {video_urls[platform]}", flush=True)
 
     # Second pass: store all steps with video URL attached
     for step in flow_results:
@@ -119,6 +121,8 @@ def main():
         failure_reason = step.get("failure_reason")
         console_errors = step.get("console_errors", [])
         sub_steps = step.get("sub_steps", [])
+        # Determine which platform this step belongs to
+        platform = "mweb" if step_name.startswith("mweb_") else "web" if step_name.startswith("web_") else None
         details = {
             "failure_reason": failure_reason or error,
             "console_errors": console_errors,
@@ -133,8 +137,9 @@ def main():
             ss_url = store.upload_screenshot(ss_path)
             if ss_url:
                 details["screenshot_url"] = ss_url
-        if session_video_url:
-            details["session_recording_url"] = session_video_url
+        # Attach the correct platform's video URL
+        if platform and platform in video_urls and video_urls[platform]:
+            details["session_recording_url"] = video_urls[platform]
         store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details)
         if step_status in ("fail", "degraded"):
             flow_overall = step_status

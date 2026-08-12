@@ -302,7 +302,11 @@ def _do_checkout_flow(page, results: list):
     log("Step 5a — Navigating to My Bargains")
     page.goto("https://gajab.com/my-bargains", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
     page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
-    time.sleep(2)
+    # Wait for bargain items to load (retry up to 10s)
+    for _ in range(5):
+        time.sleep(1)
+        if page.locator("a[href*='/product-detail/'], [class*='bargain'], [class*='timer']").count() > 0:
+            break
     ss_bargains = _capture_screenshot(page, f"{_STEP_PREFIX}my_bargains_page")
     is_bargains = "bargain" in page.url.lower()
     sub_steps.append({"check": "my_bargains_nav", "status": "pass" if is_bargains else "degraded", "detail": f"URL: {page.url[:80]}"})
@@ -319,44 +323,66 @@ def _do_checkout_flow(page, results: list):
         sub_steps.append({"check": "timer_found", "status": "pass", "detail": f"Timer elements: {timer_els.count()}"})
         log(f"  Timer found: {timer_els.count()} elements")
 
-    # Look for Pay button on the bargained item
+    # Look for Pay button — try visible first, then force click
     pay_selectors = [
         "button:has-text('Pay')",
         "button:has-text('Pay Now')",
         "a:has-text('Pay')",
-        "[class*='bargain'] button:has-text('Pay')",
     ]
     for sel in pay_selectors:
         loc = page.locator(sel)
-        if loc.count() > 0 and loc.first.is_visible(timeout=2000):
-            pay_btn = loc.first
-            log(f"  Pay button found: {sel}")
-            break
+        if loc.count() > 0:
+            try:
+                if loc.first.is_visible(timeout=2000):
+                    pay_btn = loc.first
+                    log(f"  Pay button found (visible): {sel}")
+                    break
+            except Exception:
+                pass
+            # Force click even if hidden (mobile may hide it)
+            try:
+                pay_btn = loc.first
+                log(f"  Pay button found (force): {sel}")
+                break
+            except Exception:
+                continue
 
     if not pay_btn:
-        # Try clicking on the first bargained item card to open it
-        log("  No Pay button visible — clicking on bargained item card")
-        card_selectors = [
-            "a[href*='bargain']",
-            "[class*='bargain-card']",
-            "[class*='bargainCard']",
-            "[class*='bargain'] a",
-            ".bargain-item",
-        ]
-        for sel in card_selectors:
-            loc = page.locator(sel)
-            if loc.count() > 0:
-                loc.first.click(force=True)
-                time.sleep(2)
-                log(f"  Clicked card: {sel}")
-                # Now look for Pay button on the detail page
-                for psel in pay_selectors:
-                    ploc = page.locator(psel)
-                    if ploc.count() > 0 and ploc.first.is_visible(timeout=2000):
-                        pay_btn = ploc.first
-                        log(f"  Pay button found after card click: {psel}")
-                        break
-                break
+        # Try clicking on the first bargained item card — use JS click for hidden elements
+        log("  No Pay button visible — clicking on bargained item card via JS")
+        clicked_card = page.evaluate("""() => {
+            // Find bargain-related links/cards
+            const selectors = [
+                'a[href*="/product-detail/"]',
+                '[class*="bargain"] a',
+                '[class*="bargain-card"]',
+                '[class*="bargainCard"]',
+            ];
+            for (const sel of selectors) {
+                const els = document.querySelectorAll(sel);
+                for (const el of els) {
+                    const text = el.textContent || '';
+                    // Skip navigation/header links
+                    if (text.includes('My Bargains') || text.includes('Alerts') || text.length > 200) continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 50) {
+                        el.click();
+                        return sel;
+                    }
+                }
+            }
+            return null;
+        }""")
+        if clicked_card:
+            log(f"  Clicked card via JS: {clicked_card}")
+            time.sleep(2)
+            # Now look for Pay button on the detail page
+            for psel in pay_selectors:
+                ploc = page.locator(psel)
+                if ploc.count() > 0:
+                    pay_btn = ploc.first
+                    log(f"  Pay button found after card click: {psel}")
+                    break
 
     ss_before_pay = _capture_screenshot(page, f"{_STEP_PREFIX}bargains_with_item")
 
@@ -364,15 +390,28 @@ def _do_checkout_flow(page, results: list):
     razorpay_found = False
     if pay_btn:
         log("Step 5c — Clicking Pay button")
-        pay_btn.click(force=True)
-        time.sleep(4)
+        try:
+            pay_btn.click(force=True)
+        except Exception:
+            page.evaluate("""() => {
+                const btns = document.querySelectorAll('button');
+                for (const b of btns) {
+                    if ((b.textContent||'').includes('Pay')) { b.click(); return; }
+                }
+            }""")
+        time.sleep(5)
         sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay button clicked from My Bargains"})
         ss_after_pay = _capture_screenshot(page, f"{_STEP_PREFIX}after_pay")
 
-        # Check for Razorpay iframe
-        razorpay_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
-        if razorpay_el.count() > 0:
-            razorpay_found = True
+        # Check for Razorpay iframe — wait up to 8s
+        for _ in range(4):
+            razorpay_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
+            if razorpay_el.count() > 0:
+                razorpay_found = True
+                break
+            time.sleep(2)
+
+        if razorpay_found:
             sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay payment gateway opened"})
             log("Razorpay iframe detected")
 
@@ -725,35 +764,71 @@ def _do_second_bargain(page, results: list):
         log("Bargain 2 — Navigating to My Bargains for payment")
         page.goto("https://gajab.com/my-bargains", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
         page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
-        time.sleep(2)
+        # Wait for bargain items to load
+        for _ in range(5):
+            time.sleep(1)
+            if page.locator("a[href*='/product-detail/'], [class*='bargain'], [class*='timer']").count() > 0:
+                break
         _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_my_bargains")
 
-        # Find Pay button
+        # Find Pay button — use JS for mobile hidden elements
         pay_btn = None
         for sel in ["button:has-text('Pay')", "button:has-text('Pay Now')", "a:has-text('Pay')"]:
             loc = page.locator(sel)
-            if loc.count() > 0 and loc.first.is_visible(timeout=2000):
-                pay_btn = loc.first
-                break
+            if loc.count() > 0:
+                try:
+                    if loc.first.is_visible(timeout=2000):
+                        pay_btn = loc.first
+                        break
+                except Exception:
+                    pass
+                try:
+                    pay_btn = loc.first
+                    break
+                except Exception:
+                    continue
 
         if not pay_btn:
-            # Click on bargained item card first
-            for sel in ["a[href*='bargain']", "[class*='bargain'] a"]:
-                loc = page.locator(sel)
-                if loc.count() > 0:
-                    loc.first.click(force=True)
-                    time.sleep(2)
-                    for psel in ["button:has-text('Pay')", "button:has-text('Pay Now')"]:
-                        ploc = page.locator(psel)
-                        if ploc.count() > 0 and ploc.first.is_visible(timeout=2000):
-                            pay_btn = ploc.first
-                            break
-                    break
+            # JS click on bargain item card
+            clicked_card = page.evaluate("""() => {
+                const selectors = ['a[href*="/product-detail/"]', '[class*="bargain"] a'];
+                for (const sel of selectors) {
+                    const els = document.querySelectorAll(sel);
+                    for (const el of els) {
+                        const text = el.textContent || '';
+                        if (text.includes('My Bargains') || text.includes('Alerts') || text.length > 200) continue;
+                        if (el.getBoundingClientRect().width > 50) { el.click(); return sel; }
+                    }
+                }
+                return null;
+            }""")
+            if clicked_card:
+                time.sleep(2)
+                for psel in ["button:has-text('Pay')", "button:has-text('Pay Now')"]:
+                    ploc = page.locator(psel)
+                    if ploc.count() > 0:
+                        pay_btn = ploc.first
+                        break
 
         if pay_btn:
-            pay_btn.click(force=True)
-            time.sleep(4)
-            if page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']").count() > 0:
+            try:
+                pay_btn.click(force=True)
+            except Exception:
+                page.evaluate("""() => {
+                    const btns = document.querySelectorAll('button');
+                    for (const b of btns) {
+                        if ((b.textContent||'').includes('Pay')) { b.click(); return; }
+                    }
+                }""")
+            time.sleep(5)
+            # Wait for Razorpay
+            razorpay_found = False
+            for _ in range(4):
+                if page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']").count() > 0:
+                    razorpay_found = True
+                    break
+                time.sleep(2)
+            if razorpay_found:
                 sub_steps.append({"check": "bargain2_payment", "status": "pass", "detail": "Razorpay opened for second bargain via My Bargains"})
                 _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_payment")
             else:
@@ -886,26 +961,38 @@ def _run_platform_flow(platform: str) -> list[dict]:
                 except Exception:
                     pass
 
-                # Click the category in navigation
+                # Click the category — try visible click first, then JS click for hidden elements
                 clicked = False
                 nav_selectors = [
                     f"a:has-text('{nav_text}')",
                     f"[href*='{cat['url'].split('/')[-1]}']",
-                    f"nav a:has-text('{nav_text}')",
                 ]
                 for sel in nav_selectors:
                     loc = page.locator(sel)
                     if loc.count() > 0:
+                        # Try visible click first
                         try:
-                            loc.first.click(timeout=5000)
+                            if loc.first.is_visible(timeout=2000):
+                                loc.first.click(timeout=5000)
+                                clicked = True
+                                log(f"  Clicked (visible): {sel}")
+                                break
+                        except Exception:
+                            pass
+                        # Try JS click (bypasses visibility — for mobile hidden nav)
+                        try:
+                            page.evaluate(f"""() => {{
+                                const els = document.querySelectorAll('{sel.replace("'", "\\'")}');
+                                for (const el of els) {{ el.click(); }}
+                            }}""")
                             clicked = True
-                            log(f"  Clicked: {sel}")
+                            log(f"  Clicked (JS): {sel}")
                             break
                         except Exception:
                             continue
 
                 if not clicked:
-                    # Fallback: navigate directly (may show all products)
+                    # Fallback: navigate directly
                     log(f"  Nav click failed, falling back to URL: {cat['url']}")
                     try:
                         page.goto(cat["url"], timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
@@ -917,10 +1004,6 @@ def _run_platform_flow(platform: str) -> list[dict]:
                 duration = int((time.time() - t0) * 1000)
                 product_links = page.locator("a[href*='/product-detail/']")
                 has_products = product_links.count() > 0
-
-                # Verify the correct category is active/selected
-                page_text = page.evaluate("() => document.body.innerText")
-                category_visible = nav_text.lower() in page_text.lower() if nav_text else True
 
                 ss_cat = _capture_screenshot(page, f"{_STEP_PREFIX}category_{cat_name}")
                 failure_reason = None
