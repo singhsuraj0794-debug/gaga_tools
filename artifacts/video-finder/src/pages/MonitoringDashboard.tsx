@@ -293,18 +293,44 @@ export default function MonitoringDashboard() {
 
   const STEP_ICONS: Record<string, React.ReactNode> = {
     step_home_load: <Globe className="h-4 w-4" />,
+    step_home_products_populate: <Clock className="h-4 w-4" />,
     step_category_load: <Search className="h-4 w-4" />,
     step_product_detail_load: <Image className="h-4 w-4" />,
     step_bargain_flow: <DollarSign className="h-4 w-4" />,
     step_checkout_flow: <ShoppingCart className="h-4 w-4" />,
+    step_search_products: <Search className="h-4 w-4" />,
+    step_banners_check: <Image className="h-4 w-4" />,
+    step_bargain2_flow: <DollarSign className="h-4 w-4" />,
   };
   const STEP_LABELS: Record<string, string> = {
     step_home_load: "Home Page Load",
+    step_home_products_populate: "Products Populate Time",
     step_category_load: "Category Page Load",
     step_product_detail_load: "Product Detail Load",
     step_bargain_flow: "Bargain Flow",
     step_checkout_flow: "Checkout + Razorpay",
+    step_search_products: "Search Products",
+    step_banners_check: "Banners Check",
+    step_bargain2_flow: "2nd Bargain",
   };
+
+  // Base step keys matched to labels/names
+  const HAPPY_STEPS = [
+    { key: "home_load", label: "Home Page" },
+    { key: "home_products_populate", label: "Product Populate" },
+    { key: "category_all_load", label: "Category All" },
+    { key: "category_women_load", label: "Category Women" },
+    { key: "category_men_load", label: "Category Men" },
+    { key: "category_electronics_load", label: "Category Electronics" },
+    { key: "product_detail_load", label: "Product Detail" },
+    { key: "bargain_flow", label: "Bargain" },
+    { key: "checkout_flow", label: "Checkout" },
+    { key: "search_products", label: "Search" },
+    { key: "banners_check", label: "Banners" },
+    { key: "bargain2_flow", label: "Bargain 2" },
+  ];
+
+  const PLATFORMS = ["mweb", "web"];
 
   function pagePage(page: string) {
     if (page === "home" || page === "lighthouse/home") return "home";
@@ -362,11 +388,17 @@ export default function MonitoringDashboard() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               <div>
                 <SectionCard title="Happy Flow" icon={<Activity className="h-3.5 w-3.5" />}>
-                  {["step_home_load", "step_category_load", "step_product_detail_load", "step_bargain_flow", "step_checkout_flow"].map(key => {
-                    const run = latestHappy.get(key);
-                    if (!run) return <div key={key} className="text-xs text-slate-400 py-2">No data for {key.replace("step_", "")}</div>;
-                    return <StepCard key={key} run={run} stepName={STEP_LABELS[key] || key.replace("step_", "").replace(/_/g, " ")} icon={STEP_ICONS[key] || <Activity className="h-4 w-4" />} />;
-                  })}
+                  {PLATFORMS.map(platform => (
+                    <div key={platform} className="mb-3 last:mb-0">
+                      <div className="text-xs font-semibold text-slate-500 uppercase mb-1.5">{platform === "mweb" ? "Mobile Web" : "Desktop"}</div>
+                      {HAPPY_STEPS.map(({ key: stepKey, label }) => {
+                        const metric = `step_${platform}_${stepKey}`;
+                        const run = latestHappy.get(metric);
+                        if (!run) return <div key={metric} className="text-xs text-slate-400 py-1.5 pl-2">No data for {label.toLowerCase()}</div>;
+                        return <StepCard key={metric} run={run} stepName={label} icon={<Activity className="h-4 w-4" />} />;
+                      })}
+                    </div>
+                  ))}
                 </SectionCard>
               </div>
 
