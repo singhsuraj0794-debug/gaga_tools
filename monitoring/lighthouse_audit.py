@@ -28,6 +28,9 @@ def run_lighthouse(url: str) -> dict | None:
         "--chrome-flags=--headless --no-sandbox --disable-gpu",
         "--preset=desktop",
         "--quiet",
+        # Disable simulated throttling — use real network conditions
+        "--throttling-method=provided",
+        "--throttling.cpuSlowdownMultiplier=1",
     ]
     print(f"[LIGHTHOUSE] Running audit on {url}")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

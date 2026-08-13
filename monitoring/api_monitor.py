@@ -30,7 +30,7 @@ API_ENDPOINTS = [
     {
         "name": "Image CDN (resize.gajab.com)",
         "method": "GET",
-        "url": "https://resize.gajab.com/favicon.ico",
+        "url": "https://resize.gajab.com/storeLogo/Gajab_og_banner_1770188098122.jpeg",
     },
 ]
 
