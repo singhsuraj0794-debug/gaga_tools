@@ -4,10 +4,19 @@ on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner to use'
+        required: false
+        default: 'self-hosted'
+        type: choice
+        options:
+          - self-hosted
+          - ubuntu-latest
 
 jobs:
   monitor:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.runner || 'self-hosted' }}
     steps:
       - uses: actions/checkout@v5
 
