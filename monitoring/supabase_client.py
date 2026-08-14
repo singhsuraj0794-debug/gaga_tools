@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import urllib.request
 from urllib.error import HTTPError
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from config import SUPABASE_URL, SUPABASE_KEY
 class SupabaseStore:
     def __init__(self):
         self._run_at = datetime.now(timezone.utc).isoformat()
+        # Shared run id so split jobs (india + browser) group as one run in the dashboard.
+        self._run_id = os.environ.get("MONITOR_RUN_ID") or self._run_at
         if not SUPABASE_URL or not SUPABASE_KEY:
             print("[SUPABASE] Skipping — missing SUPABASE_URL or SUPABASE_KEY")
             self._client = None
@@ -90,6 +93,7 @@ class SupabaseStore:
             return
         row = {
             "run_at": self._run_at,
+            "run_id": self._run_id,
             "page": page_or_flow,
             "metric": metric,
             "value": value,

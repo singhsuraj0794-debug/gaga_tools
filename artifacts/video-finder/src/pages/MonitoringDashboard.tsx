@@ -14,6 +14,7 @@ const REFRESH_INTERVAL = 30000;
 
 interface Run {
   id: string; run_at: string; page: string; metric: string;
+  run_id?: string | null;
   value: number | null; status: "pass" | "fail" | "degraded";
   step_failed: string | null; duration_ms: number | null;
   details?: {
@@ -25,6 +26,8 @@ interface Run {
     rca?: { summary?: string; causes?: string[]; actions?: string[] };
   };
 }
+
+function runKey(r: Run): string { return r.run_id || r.run_at; }
 
 const METRIC_INFO: Record<string, string> = {
   performance_score: "Lighthouse Performance score (0-100). Measures page load speed.",
@@ -213,8 +216,8 @@ function SectionCard({ title, icon, children }: { title: string; icon: React.Rea
 }
 
 function GroupMetrics({ runs, title, icon }: { runs: Run[]; title: string; icon: React.ReactNode }) {
-  const latestRun = runs[0]?.run_at;
-  const latest = runs.filter(r => r.run_at === latestRun);
+  const latestRun = runs[0] ? runKey(runs[0]) : undefined;
+  const latest = runs.filter(r => runKey(r) === latestRun);
   const pageStatus = latest.some(r => r.status === "fail") ? "fail" : latest.some(r => r.status === "degraded") ? "degraded" : "pass";
 
   const seen = new Set<string>();
@@ -273,21 +276,20 @@ export default function MonitoringDashboard() {
 
   function getLatestRunTime(): string | null {
     if (runs.length === 0) return null;
-    const times = [...new Set(runs.map(r => r.run_at))];
-    return times.sort().reverse()[0] || runs[0].run_at;
+    return runKey(runs[0]);
   }
   const latestRun = getLatestRunTime();
-  const latestAll = runs.filter(r => r.run_at === latestRun);
+  const latestAll = runs.filter(r => runKey(r) === latestRun);
   const pCount = latestAll.filter(r => r.status === "pass").length;
   const fCount = latestAll.filter(r => r.status === "fail").length;
   const dCount = latestAll.filter(r => r.status === "degraded").length;
-  const totalRuns = new Set(runs.map(r => r.run_at)).size;
+  const totalRuns = new Set(runs.map(r => runKey(r))).size;
 
   const lastTime = runs[0] ? new Date(runs[0].run_at) : null;
 
   function groupLatestHappy() {
     if (!latestRun) return [];
-    const stepRuns = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_") && r.run_at === latestRun);
+    const stepRuns = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_") && runKey(r) === latestRun);
     const map = new Map<string, Run>();
     for (const r of stepRuns) map.set(r.metric, r);
     return map;
@@ -424,7 +426,7 @@ export default function MonitoringDashboard() {
               <div>
                 <SectionCard title="Lighthouse Performance" icon={<BarChart3 className="h-3.5 w-3.5" />}>
                   {["home", "category", "product_detail"].map(p => {
-                    const pageRuns = runs.filter(r => (r.page === p || r.page === `lighthouse/${p}`) && r.run_at === latestRun);
+                    const pageRuns = runs.filter(r => (r.page === p || r.page === `lighthouse/${p}`) && runKey(r) === latestRun);
                     const seen = new Set<string>();
                     const unique: Run[] = [];
                     for (const r of pageRuns) { if (!seen.has(r.metric)) { seen.add(r.metric); unique.push(r); } }
@@ -443,7 +445,7 @@ export default function MonitoringDashboard() {
 
                 {grouped.server.length > 0 && (() => {
                   const latestRun = getLatestRunTime();
-                  const serverLatest = grouped.server.filter(r => r.run_at === latestRun);
+                  const serverLatest = grouped.server.filter(r => runKey(r) === latestRun);
                   const byEndpoint = new Map<string, typeof serverLatest>();
                   for (const r of serverLatest) {
                     const name = r.page.replace("server/", "");
@@ -468,7 +470,7 @@ export default function MonitoringDashboard() {
                 })()}
                 {grouped.api.length > 0 && (() => {
                   const latestRun = getLatestRunTime();
-                  const apiLatest = grouped.api.filter(r => r.run_at === latestRun);
+                  const apiLatest = grouped.api.filter(r => runKey(r) === latestRun);
                   const byEndpoint = new Map<string, typeof apiLatest>();
                   for (const r of apiLatest) {
                     const name = r.page.replace("api/", "");

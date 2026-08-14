@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS monitoring_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  run_id TEXT,
   page TEXT NOT NULL,
   metric TEXT NOT NULL,
   value DOUBLE PRECISION,
@@ -12,8 +13,14 @@ CREATE TABLE IF NOT EXISTS monitoring_runs (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Add run_id to an existing table (for upgrades)
+ALTER TABLE monitoring_runs ADD COLUMN IF NOT EXISTS run_id TEXT;
+
 -- Index for querying latest runs
 CREATE INDEX IF NOT EXISTS idx_monitoring_runs_run_at ON monitoring_runs (run_at DESC);
+
+-- Index for grouping by run_id
+CREATE INDEX IF NOT EXISTS idx_monitoring_runs_run_id ON monitoring_runs (run_id);
 
 -- Index for filtering by page/flow
 CREATE INDEX IF NOT EXISTS idx_monitoring_runs_page ON monitoring_runs (page);

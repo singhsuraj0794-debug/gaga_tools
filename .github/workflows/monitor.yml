@@ -18,6 +18,7 @@ jobs:
         run: python3 monitoring/run_monitor.py
         env:
           MONITOR_MODE: health
+          MONITOR_RUN_ID: ${{ github.run_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -66,6 +67,7 @@ jobs:
         run: python monitoring/run_monitor.py
         env:
           MONITOR_MODE: browser
+          MONITOR_RUN_ID: ${{ github.run_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
