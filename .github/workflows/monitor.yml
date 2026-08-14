@@ -27,6 +27,8 @@ jobs:
         run: python3 monitoring/run_monitor.py
         env:
           MONITOR_MODE: no-lighthouse
+          MONITOR_PAGE_TIMEOUT: "90000"
+          MONITOR_NAV_TIMEOUT: "90000"
           CHROME_PATH: /home/ubuntu/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
