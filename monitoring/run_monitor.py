@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
+import os
 import sys
 import time
 from datetime import datetime, timezone
 
 from lighthouse_audit import audit_all_pages
-from happy_flow import run_happy_flow
 from server_health import check_health as check_server_health
 from api_monitor import monitor_apis
-from feature_checks import run_feature_checks
 from supabase_client import SupabaseStore
 from slack_alert import send_alert
 from rca import generate_rca, format_rca_for_slack
@@ -22,9 +21,18 @@ def main():
     t_start = time.time()
     failures = []
 
+    MODE = os.environ.get("MONITOR_MODE", "full")
+    RUN_CORE = MODE in ("full", "no-lighthouse")
+    RUN_LIGHTHOUSE = MODE in ("full", "lighthouse-only")
+    health_results = []
+    api_results = []
+    audit_results = []
+    flow_results = []
+    feature_results = []
+
     # ── Part 1: Server Health ──
     print("\n--- Server Health ---", flush=True)
-    health_results = check_server_health()
+    health_results = check_server_health() if RUN_CORE else []
     for r in health_results:
         store.store_result(
             page_or_flow=f"server/{r['service']}",
@@ -41,7 +49,7 @@ def main():
 
     # ── Part 2: API Monitoring ──
     print("\n--- API Monitoring ---", flush=True)
-    api_results = monitor_apis()
+    api_results = monitor_apis() if RUN_CORE else []
     for r in api_results:
         store.store_result(
             page_or_flow=f"api/{r['api']}",
@@ -63,7 +71,7 @@ def main():
 
     # ── Part 3: Lighthouse Audits ──
     print("\n--- Lighthouse Audits ---", flush=True)
-    audit_results = audit_all_pages()
+    audit_results = audit_all_pages() if RUN_LIGHTHOUSE else []
     for result in audit_results:
         page = result["page"]
         metrics = result["metrics"]
@@ -92,7 +100,11 @@ def main():
     print("\n--- Happy-Flow Check ---", flush=True)
     print(f"[MONITOR] happy_flow version: 2026-08-12-fix", flush=True)
     try:
-        flow_results = run_happy_flow()
+        if RUN_CORE:
+            from happy_flow import run_happy_flow
+            flow_results = run_happy_flow()
+        else:
+            flow_results = []
     except Exception as e:
         print(f"[MONITOR] HAPPY FLOW CRASHED: {e}", flush=True)
         import traceback; traceback.print_exc()
@@ -154,7 +166,11 @@ def main():
 
     # ── Part 5: Element-Level Feature Checks ──
     print("\n--- Feature Element Checks ---", flush=True)
-    feature_results = run_feature_checks()
+    if RUN_CORE:
+        from feature_checks import run_feature_checks
+        feature_results = run_feature_checks()
+    else:
+        feature_results = []
     for r in feature_results:
         match_count = r.get("match_count")
         store.store_result(
@@ -200,7 +216,6 @@ def main():
         duration_ms=elapsed,
     )
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -4,19 +4,40 @@ on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
-    inputs:
-      runner:
-        description: 'Runner to use'
-        required: false
-        default: 'self-hosted'
-        type: choice
-        options:
-          - self-hosted
-          - ubuntu-latest
 
 jobs:
-  monitor:
-    runs-on: ${{ github.event.inputs.runner || 'self-hosted' }}
+  monitor-india:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Python deps
+        run: pip3 install -r monitoring/requirements.txt
+
+      - name: Download saved session from Supabase
+        run: |
+          curl -s -o monitoring/.gajab_session.json \
+            "https://okxyskmjsmtykblrtmyi.supabase.co/storage/v1/object/public/monitoring/gajab_session.json" \
+            --max-time 15 || echo "No session file available"
+          if [ -f monitoring/.gajab_session.json ] && [ -s monitoring/.gajab_session.json ]; then
+            echo "Session restored ($(wc -c < monitoring/.gajab_session.json) bytes)"
+          fi
+
+      - name: Run monitor (no lighthouse)
+        run: python3 monitoring/run_monitor.py
+        env:
+          MONITOR_MODE: no-lighthouse
+          CHROME_PATH: /home/ubuntu/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TWILIO_SID: ${{ secrets.TWILIO_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          MONITOR_PHONE: ${{ secrets.MONITOR_PHONE }}
+          PAGESPEED_API_KEY: ${{ secrets.PAGESPEED_API_KEY }}
+
+  lighthouse:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -38,27 +59,11 @@ jobs:
           cd monitoring
           npm install lighthouse
 
-      - name: Install Playwright browsers
-        run: |
-          playwright install-deps chromium
-          playwright install chromium
-
-      - name: Download saved session from Supabase
-        run: |
-          curl -s -o monitoring/.gajab_session.json \
-            "https://okxyskmjsmtykblrtmyi.supabase.co/storage/v1/object/public/monitoring/gajab_session.json" \
-            --max-time 15 || echo "No session file available"
-          if [ -f monitoring/.gajab_session.json ] && [ -s monitoring/.gajab_session.json ]; then
-            echo "Session restored ($(wc -c < monitoring/.gajab_session.json) bytes)"
-          fi
-
-      - name: Run monitor
+      - name: Run monitor (lighthouse only)
         run: python monitoring/run_monitor.py
         env:
+          MONITOR_MODE: lighthouse-only
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TWILIO_SID: ${{ secrets.TWILIO_SID }}
-          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
-          MONITOR_PHONE: ${{ secrets.MONITOR_PHONE }}
           PAGESPEED_API_KEY: ${{ secrets.PAGESPEED_API_KEY }}
