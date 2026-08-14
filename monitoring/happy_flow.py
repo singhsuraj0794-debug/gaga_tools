@@ -981,8 +981,9 @@ def _run_platform_flow(platform: str) -> list[dict]:
                             pass
                         # Try JS click (bypasses visibility — for mobile hidden nav)
                         try:
+                            sel_escaped = sel.replace("'", "\\'")
                             page.evaluate(f"""() => {{
-                                const els = document.querySelectorAll('{sel.replace("'", "\\'")}');
+                                const els = document.querySelectorAll('{sel_escaped}');
                                 for (const el of els) {{ el.click(); }}
                             }}""")
                             clicked = True
