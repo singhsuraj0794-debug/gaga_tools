@@ -22,8 +22,11 @@ def main():
     failures = []
 
     MODE = os.environ.get("MONITOR_MODE", "full")
-    RUN_CORE = MODE in ("full", "no-lighthouse")
-    RUN_LIGHTHOUSE = MODE in ("full", "lighthouse-only")
+    # full: everything (local dev)
+    # health: server health + API (India, light/latency checks)
+    # browser: lighthouse + happy flow + feature checks (US, heavy browser)
+    RUN_HEALTH = MODE in ("full", "health")
+    RUN_BROWSER = MODE in ("full", "browser")
     health_results = []
     api_results = []
     audit_results = []
@@ -32,7 +35,7 @@ def main():
 
     # ── Part 1: Server Health ──
     print("\n--- Server Health ---", flush=True)
-    health_results = check_server_health() if RUN_CORE else []
+    health_results = check_server_health() if RUN_HEALTH else []
     for r in health_results:
         store.store_result(
             page_or_flow=f"server/{r['service']}",
@@ -49,7 +52,7 @@ def main():
 
     # ── Part 2: API Monitoring ──
     print("\n--- API Monitoring ---", flush=True)
-    api_results = monitor_apis() if RUN_CORE else []
+    api_results = monitor_apis() if RUN_HEALTH else []
     for r in api_results:
         store.store_result(
             page_or_flow=f"api/{r['api']}",
@@ -71,7 +74,7 @@ def main():
 
     # ── Part 3: Lighthouse Audits ──
     print("\n--- Lighthouse Audits ---", flush=True)
-    audit_results = audit_all_pages() if RUN_LIGHTHOUSE else []
+    audit_results = audit_all_pages() if RUN_BROWSER else []
     for result in audit_results:
         page = result["page"]
         metrics = result["metrics"]
@@ -100,7 +103,7 @@ def main():
     print("\n--- Happy-Flow Check ---", flush=True)
     print(f"[MONITOR] happy_flow version: 2026-08-12-fix", flush=True)
     try:
-        if RUN_CORE:
+        if RUN_BROWSER:
             from happy_flow import run_happy_flow
             flow_results = run_happy_flow()
         else:
@@ -166,7 +169,7 @@ def main():
 
     # ── Part 5: Element-Level Feature Checks ──
     print("\n--- Feature Element Checks ---", flush=True)
-    if RUN_CORE:
+    if RUN_BROWSER:
         from feature_checks import run_feature_checks
         feature_results = run_feature_checks()
     else:

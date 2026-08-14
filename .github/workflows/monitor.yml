@@ -14,31 +14,18 @@ jobs:
       - name: Install Python deps
         run: pip3 install -r monitoring/requirements.txt
 
-      - name: Download saved session from Supabase
-        run: |
-          curl -s -o monitoring/.gajab_session.json \
-            "https://okxyskmjsmtykblrtmyi.supabase.co/storage/v1/object/public/monitoring/gajab_session.json" \
-            --max-time 15 || echo "No session file available"
-          if [ -f monitoring/.gajab_session.json ] && [ -s monitoring/.gajab_session.json ]; then
-            echo "Session restored ($(wc -c < monitoring/.gajab_session.json) bytes)"
-          fi
-
-      - name: Run monitor (no lighthouse)
+      - name: Run monitor (health + API)
         run: python3 monitoring/run_monitor.py
         env:
-          MONITOR_MODE: no-lighthouse
-          MONITOR_PAGE_TIMEOUT: "90000"
-          MONITOR_NAV_TIMEOUT: "90000"
-          CHROME_PATH: /home/ubuntu/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome
+          MONITOR_MODE: health
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           TWILIO_SID: ${{ secrets.TWILIO_SID }}
           TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
           MONITOR_PHONE: ${{ secrets.MONITOR_PHONE }}
-          PAGESPEED_API_KEY: ${{ secrets.PAGESPEED_API_KEY }}
 
-  lighthouse:
+  browser:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -61,10 +48,24 @@ jobs:
           cd monitoring
           npm install lighthouse
 
-      - name: Run monitor (lighthouse only)
+      - name: Install Playwright browsers
+        run: |
+          playwright install-deps chromium
+          playwright install chromium
+
+      - name: Download saved session from Supabase
+        run: |
+          curl -s -o monitoring/.gajab_session.json \
+            "https://okxyskmjsmtykblrtmyi.supabase.co/storage/v1/object/public/monitoring/gajab_session.json" \
+            --max-time 15 || echo "No session file available"
+          if [ -f monitoring/.gajab_session.json ] && [ -s monitoring/.gajab_session.json ]; then
+            echo "Session restored ($(wc -c < monitoring/.gajab_session.json) bytes)"
+          fi
+
+      - name: Run monitor (lighthouse + happy flow + feature)
         run: python monitoring/run_monitor.py
         env:
-          MONITOR_MODE: lighthouse-only
+          MONITOR_MODE: browser
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
