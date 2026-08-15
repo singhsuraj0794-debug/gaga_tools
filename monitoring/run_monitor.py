@@ -24,8 +24,10 @@ def main():
     MODE = os.environ.get("MONITOR_MODE", "full")
     # full: everything (local dev)
     # health: server health + API (India, light/latency checks)
-    # browser: lighthouse + happy flow + feature checks (US, heavy browser)
+    # lighthouse: lighthouse audits only (runs from India Mac when online, else US)
+    # browser: happy flow + feature checks (US, heavy browser)
     RUN_HEALTH = MODE in ("full", "health")
+    RUN_LIGHTHOUSE = MODE in ("full", "lighthouse")
     RUN_BROWSER = MODE in ("full", "browser")
     health_results = []
     api_results = []
@@ -74,7 +76,7 @@ def main():
 
     # ── Part 3: Lighthouse Audits ──
     print("\n--- Lighthouse Audits ---", flush=True)
-    audit_results = audit_all_pages() if RUN_BROWSER else []
+    audit_results = audit_all_pages() if RUN_LIGHTHOUSE else []
     for result in audit_results:
         page = result["page"]
         metrics = result["metrics"]
