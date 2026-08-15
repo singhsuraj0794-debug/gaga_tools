@@ -1001,7 +1001,12 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     except Exception:
                         pass
 
-                time.sleep(2)
+                time.sleep(1)
+                # Products are client-side rendered — wait for them to hydrate
+                try:
+                    page.wait_for_selector("a[href*='/product-detail/']", timeout=15000)
+                except PWTimeout:
+                    pass
                 duration = int((time.time() - t0) * 1000)
                 product_links = page.locator("a[href*='/product-detail/']")
                 has_products = product_links.count() > 0

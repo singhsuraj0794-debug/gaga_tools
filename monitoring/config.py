@@ -34,10 +34,10 @@ URLS = {
 
 CATEGORIES = [
     {"name": "all", "url": "https://gajab.com/product-list/all", "nav_text": "All Products"},
-    {"name": "home-kitchen", "url": "https://gajab.com/product-list/home-kitchen", "nav_text": "Home & Kitchen"},
-    {"name": "toys-games", "url": "https://gajab.com/product-list/toys-games", "nav_text": "Toys & Games"},
-    {"name": "fashion-accessories", "url": "https://gajab.com/product-list/fashion-accessories", "nav_text": "Fashion Accessories"},
-    {"name": "electronics", "url": "https://gajab.com/product-list/electronics", "nav_text": "Electronics"},
+    {"name": "home-kitchen", "url": "https://gajab.com/product-list/home-kitchen/1", "nav_text": "Home & Kitchen"},
+    {"name": "toys-games", "url": "https://gajab.com/product-list/toys-games/17", "nav_text": "Toys & Games"},
+    {"name": "fashion-accessories", "url": "https://gajab.com/product-list/fashion-accessories/44", "nav_text": "Fashion Accessories"},
+    {"name": "electronics", "url": "https://gajab.com/product-list/electronics/49", "nav_text": "Electronics"},
 ]
 
 THRESHOLDS = {
