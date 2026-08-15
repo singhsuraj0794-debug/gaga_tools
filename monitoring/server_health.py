@@ -6,8 +6,8 @@ import json
 HEALTH_ENDPOINTS = {
     "gajab.com (main)": "https://gajab.com/",
     "gajab.com (category)": "https://gajab.com/product-list/all",
-    "gatewayservice.gajab.com": "https://gatewayservice.gajab.com/customer/api/customer/mobile-send-otp-new",
-    "resize.gajab.com (CDN)": "https://resize.gajab.com/",
+    "gatewayservice.gajab.com": "https://gatewayservice.gajab.com/product/api/product-store/product/prestige-pvc-80-veggie-cutter-with-3-stainless-steel-blades-jumbo-bowl-black/4305598878914?pincode=400001",
+    "resize.gajab.com (CDN)": "https://resize.gajab.com/storeLogo/Gajab_og_banner_1770188098122.jpeg",
 }
 
 
