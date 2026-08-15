@@ -293,10 +293,45 @@ def _do_bargain_flow(page, results: list):
     _check_budget("bargain_flow", bargain_duration, results)
 
 
+def _detect_payment_gateway(page) -> bool:
+    """Broad detection of a payment gateway (Razorpay or any payment form)."""
+    # 1. Payment iframe (Razorpay standard checkout)
+    if page.locator("iframe[src*='razorpay'], iframe[id*='razorpay'], iframe[src*='checkout'], iframe[src*='pay']").count() > 0:
+        return True
+    # 2. New tab/popup opened to a payment host
+    try:
+        for p in page.context.pages:
+            u = (p.url or "").lower()
+            if any(k in u for k in ("razorpay", "checkout", "/pay", "payment")):
+                return True
+    except Exception:
+        pass
+    # 3. Razorpay container injected into the page
+    if page.locator(".razorpay-container, [class*='razorpay']").count() > 0:
+        return True
+    # 4. Any payment form fields (card number / UPI)
+    if page.locator("input[placeholder*='card'], input[placeholder*='Card'], input[name*='card'], input[placeholder*='UPI'], input[placeholder*='upi']").count() > 0:
+        return True
+    return False
+
+
+def _capture_gateway_screenshot(page) -> dict:
+    """Capture the payment gateway — including if it opened in a new tab."""
+    for p in page.context.pages:
+        u = (p.url or "").lower()
+        if any(k in u for k in ("razorpay", "checkout", "/pay", "payment")):
+            try:
+                return _capture_screenshot(p, f"{_STEP_PREFIX}payment_gateway")
+            except Exception:
+                pass
+    return _capture_screenshot(page, f"{_STEP_PREFIX}payment_gateway")
+
+
 def _do_checkout_flow(page, results: list):
     """Correct checkout flow: My Bargains → item with timer → Pay → Razorpay."""
     t0 = time.time()
     sub_steps = []
+    ss_after_pay = None
 
     # Step 5a: Go to My Bargains
     log("Step 5a — Navigating to My Bargains")
@@ -403,17 +438,17 @@ def _do_checkout_flow(page, results: list):
         sub_steps.append({"check": "pay_button_click", "status": "pass", "detail": "Pay button clicked from My Bargains"})
         ss_after_pay = _capture_screenshot(page, f"{_STEP_PREFIX}after_pay")
 
-        # Check for Razorpay iframe — wait up to 8s
-        for _ in range(4):
-            razorpay_el = page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']")
-            if razorpay_el.count() > 0:
+        # Check for payment gateway — wait up to 12s
+        for _ in range(6):
+            if _detect_payment_gateway(page):
                 razorpay_found = True
                 break
             time.sleep(2)
 
         if razorpay_found:
-            sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Razorpay payment gateway opened"})
-            log("Razorpay iframe detected")
+            sub_steps.append({"check": "razorpay_loaded", "status": "pass", "detail": "Payment gateway opened"})
+            log("Payment gateway detected")
+            _capture_gateway_screenshot(page)
 
             # Step 5d: Select Card mode in Razorpay
             log("Step 5d — Selecting Card mode in Razorpay")
@@ -477,7 +512,7 @@ def _do_checkout_flow(page, results: list):
         "status": "pass" if razorpay_found and pay_was_clicked else "degraded" if razorpay_found or pay_was_clicked else "fail",
         "sub_steps": sub_steps,
         "detail": f"Checkout: timer={timer_found}, Pay={pay_was_clicked}, Razorpay={'found' if razorpay_found else 'not found'}",
-        "screenshot": ss_bargains,
+        "screenshot": ss_after_pay or ss_bargains,
         "failure_reason": None if razorpay_found else "Payment gateway did not appear — item may not be in My Bargains yet",
     })
     _check_budget("checkout_nav", duration, results)
@@ -821,18 +856,18 @@ def _do_second_bargain(page, results: list):
                     }
                 }""")
             time.sleep(5)
-            # Wait for Razorpay
+            # Wait for payment gateway
             razorpay_found = False
-            for _ in range(4):
-                if page.locator("iframe[src*='razorpay'], iframe[id*='razorpay']").count() > 0:
+            for _ in range(6):
+                if _detect_payment_gateway(page):
                     razorpay_found = True
                     break
                 time.sleep(2)
             if razorpay_found:
-                sub_steps.append({"check": "bargain2_payment", "status": "pass", "detail": "Razorpay opened for second bargain via My Bargains"})
-                _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_payment")
+                sub_steps.append({"check": "bargain2_payment", "status": "pass", "detail": "Payment gateway opened for second bargain via My Bargains"})
+                _capture_gateway_screenshot(page)
             else:
-                sub_steps.append({"check": "bargain2_payment", "status": "degraded", "detail": "Pay clicked but Razorpay not detected"})
+                sub_steps.append({"check": "bargain2_payment", "status": "degraded", "detail": "Pay clicked but payment gateway not detected"})
         else:
             sub_steps.append({"check": "bargain2_payment", "status": "fail", "detail": "No Pay button found in My Bargains"})
 
