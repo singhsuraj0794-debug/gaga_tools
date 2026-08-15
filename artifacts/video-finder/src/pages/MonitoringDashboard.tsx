@@ -135,6 +135,7 @@ function MetricRow({ metric, value, status, detail, tip }: {
 }
 
 function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: React.ReactNode }) {
+  const [showConsole, setShowConsole] = useState(false);
   return (
     <Card className={`border-l-4 ${run.status === "fail" ? "border-l-red-500" : run.status === "degraded" ? "border-l-yellow-500" : "border-l-green-500"}`}>
       <CardContent className="p-3 sm:p-4">
@@ -187,8 +188,17 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
               </div>
             )}
             {run.details?.console_errors && run.details.console_errors.length > 0 && (
-              <div className="mt-1.5 text-xs text-orange-600">
-                <span className="flex items-center gap-1"><Bug className="h-3 w-3" /> {run.details.console_errors.length} console error(s)</span>
+              <div className="mt-1.5">
+                <button onClick={() => setShowConsole(!showConsole)} className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-800">
+                  <Bug className="h-3 w-3" /> {run.details.console_errors.length} console error{run.details.console_errors.length > 1 ? "s" : ""} {showConsole ? "▾" : "▸"}
+                </button>
+                {showConsole && (
+                  <div className="mt-1 space-y-1 max-h-48 overflow-y-auto">
+                    {run.details.console_errors.map((e, i) => (
+                      <div key={i} className="p-1.5 bg-orange-50 border border-orange-100 rounded text-xs font-mono break-all text-orange-700">{e.text}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
             <Screenshot base64={run.details?.screenshot_base64} url={run.details?.screenshot_url} label={stepName} />
@@ -391,6 +401,18 @@ export default function MonitoringDashboard() {
               </div>
             )}
 
+            <details className="mb-4 bg-white border border-slate-200 rounded-lg text-xs">
+              <summary className="cursor-pointer px-3 py-2 font-medium text-slate-600 flex items-center gap-1.5">
+                <Info className="h-3.5 w-3.5 text-indigo-500" /> How checks are scored
+              </summary>
+              <div className="px-3 pb-3 space-y-1.5 text-slate-500 leading-relaxed">
+                <div className="flex items-center gap-2"><Badge status="pass" /> <span>Met its target (element visible, metric within threshold).</span></div>
+                <div className="flex items-center gap-2"><Badge status="fail" /> <span>Exceeded threshold or element missing — likely a real site problem.</span></div>
+                <div className="flex items-center gap-2"><Badge status="degraded" /> <span>Completed but slower than its time budget — a warning, not a hard failure.</span></div>
+                <p className="pt-1.5 border-t border-slate-100 text-slate-400">Thresholds: LCP &lt; 2500ms · TBT &lt; 300ms · SI &lt; 4000ms · CLS &lt; 0.1 · Performance ≥ 50. Every fail/degraded check sends a Slack alert.</p>
+              </div>
+            </details>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               <div>
                 <SectionCard title="Happy Flow" icon={<Activity className="h-3.5 w-3.5" />}>
@@ -490,6 +512,36 @@ export default function MonitoringDashboard() {
                           ))}
                         </div>
                       ))}
+                    </SectionCard>
+                  );
+                })()}
+                {grouped.feature.length > 0 && (() => {
+                  const featureLatest = grouped.feature.filter(r => runKey(r) === latestRun);
+                  const pages = ["home", "category", "product_detail"];
+                  return (
+                    <SectionCard title="Feature Element Checks" icon={<Bug className="h-3.5 w-3.5" />}>
+                      {pages.map(p => {
+                        const checks = featureLatest.filter(r => r.page === `feature/${p}`);
+                        if (checks.length === 0) return null;
+                        const st = checks.some(r => r.status === "fail") ? "fail" : checks.some(r => r.status === "degraded") ? "degraded" : "pass";
+                        return (
+                          <div key={p} className="mb-2 last:mb-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-medium text-slate-700 capitalize">{p.replace(/_/g, " ")}</span>
+                              <Badge status={st} />
+                            </div>
+                            {checks.map(r => (
+                              <div key={r.id} className="flex items-center justify-between py-1 border-b border-slate-100 last:border-b-0 text-sm">
+                                <span className="text-slate-600 flex items-center gap-0.5">
+                                  {r.metric.replace("elem_", "").replace("_visible", "").replace(/_/g, " ")}
+                                  {r.step_failed && <InfoTip text={r.step_failed} />}
+                                </span>
+                                <Badge status={r.status} />
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
                     </SectionCard>
                   );
                 })()}
