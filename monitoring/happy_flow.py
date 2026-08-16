@@ -383,41 +383,46 @@ def _do_checkout_flow(page, results: list):
                 continue
 
     if not pay_btn:
-        # Try clicking on the first bargained item card — use JS click for hidden elements
-        log("  No Pay button visible — clicking on bargained item card via JS")
-        clicked_card = page.evaluate("""() => {
-            // Find bargain-related links/cards
-            const selectors = [
-                'a[href*="/product-detail/"]',
-                '[class*="bargain"] a',
-                '[class*="bargain-card"]',
-                '[class*="bargainCard"]',
-            ];
-            for (const sel of selectors) {
-                const els = document.querySelectorAll(sel);
-                for (const el of els) {
-                    const text = el.textContent || '';
-                    // Skip navigation/header links
-                    if (text.includes('My Bargains') || text.includes('Alerts') || text.length > 200) continue;
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width > 50) {
-                        el.click();
-                        return sel;
+        # Check for "Continue Bargaining" — bargain still in progress
+        log("  No Pay button visible — checking bargain state")
+        continue_sel = "button:has-text('Continue'), button:has-text('Negotiate'), a:has-text('Continue'), [class*='continue']"
+        continue_btns = page.locator(continue_sel)
+        bargain_in_progress = continue_btns.count() > 0
+        if bargain_in_progress:
+            log(f"  Bargain still in progress ({continue_btns.count()} 'Continue' buttons found)")
+            sub_steps.append({"check": "bargain_state", "status": "degraded", "detail": "Bargain still in progress — 'Continue Bargaining' shown instead of Pay"})
+
+        # Try clicking on a bargained item card to see if Pay appears on detail
+        if not bargain_in_progress:
+            log("  Clicking on bargained item card via JS")
+            clicked_card = page.evaluate("""() => {
+                const selectors = [
+                    'a[href*="/product-detail/"]',
+                    '[class*="bargain"] a',
+                    '[class*="bargain-card"]',
+                    '[class*="bargainCard"]',
+                ];
+                for (const sel of selectors) {
+                    const els = document.querySelectorAll(sel);
+                    for (const el of els) {
+                        const text = el.textContent || '';
+                        if (text.includes('My Bargains') || text.includes('Alerts') || text.length > 200) continue;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 50) { el.click(); return sel; }
                     }
                 }
-            }
-            return null;
-        }""")
-        if clicked_card:
-            log(f"  Clicked card via JS: {clicked_card}")
-            time.sleep(2)
-            # Now look for Pay button on the detail page
-            for psel in pay_selectors:
-                ploc = page.locator(psel)
-                if ploc.count() > 0:
-                    pay_btn = ploc.first
-                    log(f"  Pay button found after card click: {psel}")
-                    break
+                return null;
+            }""")
+            if clicked_card:
+                log(f"  Clicked card via JS: {clicked_card}")
+                time.sleep(2)
+                # Look for Pay button on detail page
+                for psel in pay_selectors:
+                    ploc = page.locator(psel)
+                    if ploc.count() > 0:
+                        pay_btn = ploc.first
+                        log(f"  Pay button found after card click: {psel}")
+                        break
 
     ss_before_pay = _capture_screenshot(page, f"{_STEP_PREFIX}bargains_with_item")
 
@@ -506,14 +511,29 @@ def _do_checkout_flow(page, results: list):
 
     duration = int((time.time() - t0) * 1000)
     pay_was_clicked = any(s["check"] == "pay_button_click" and s["status"] == "pass" for s in sub_steps)
+    bargain_in_progress = any(s["check"] == "bargain_state" and s["status"] == "degraded" for s in sub_steps)
+
+    if razorpay_found and pay_was_clicked:
+        checkout_status = "pass"
+        failure_reason = None
+    elif bargain_in_progress:
+        checkout_status = "degraded"
+        failure_reason = "Bargain still in progress — 'Continue Bargaining' shown, Pay not available yet"
+    elif pay_was_clicked:
+        checkout_status = "degraded"
+        failure_reason = "Pay clicked but payment gateway not detected"
+    else:
+        checkout_status = "fail"
+        failure_reason = "No Pay button found — no active bargains with payment available"
+
     results.append({
         "step": _STEP_PREFIX + "checkout_flow",
         "duration_ms": duration,
-        "status": "pass" if razorpay_found and pay_was_clicked else "degraded" if razorpay_found or pay_was_clicked else "fail",
+        "status": checkout_status,
         "sub_steps": sub_steps,
-        "detail": f"Checkout: timer={timer_found}, Pay={pay_was_clicked}, Razorpay={'found' if razorpay_found else 'not found'}",
+        "detail": f"Checkout: timer={timer_found}, Pay={pay_was_clicked}, Razorpay={'found' if razorpay_found else 'not found'}, Bargain={'in-progress' if bargain_in_progress else 'won'}",
         "screenshot": ss_after_pay or ss_bargains,
-        "failure_reason": None if razorpay_found else "Payment gateway did not appear — item may not be in My Bargains yet",
+        "failure_reason": failure_reason,
     })
     _check_budget("checkout_nav", duration, results)
 

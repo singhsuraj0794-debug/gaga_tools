@@ -18,7 +18,15 @@ def check_elements(page, checks: list[dict]) -> list[dict]:
             if check.get("type") == "visible":
                 loc = page.locator(check["selector"])
                 found = loc.count() > 0
-                visible = found and loc.first.is_visible(timeout=3000) if found else False
+                visible = False
+                if found:
+                    for i in range(min(loc.count(), 10)):
+                        try:
+                            if loc.nth(i).is_visible(timeout=1000):
+                                visible = True
+                                break
+                        except Exception:
+                            continue
                 if not visible:
                     status = "fail"
                     error = f"Element not visible (count={loc.count()})"
