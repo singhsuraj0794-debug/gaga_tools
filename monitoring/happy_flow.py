@@ -688,11 +688,32 @@ def _pick_random_product(page) -> str | None:
             page.goto(url, timeout=15000, wait_until="domcontentloaded")
             page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
             time.sleep(0.5)
+            # Dismiss any pincode/location dialog that blocks the bargain UI (mobile especially)
+            for _ in range(3):
+                try:
+                    page.keyboard.press("Escape")
+                    time.sleep(0.3)
+                except Exception:
+                    break
+            # Wait for the price section to render
+            try:
+                page.wait_for_selector("#varient-price", timeout=15000)
+            except Exception:
+                pass
             has_btn = page.evaluate("""() => {
                 const vp = document.getElementById('varient-price');
                 if (!vp) return false;
-                for (const btn of vp.querySelectorAll('button')) {
-                    if (btn.textContent.includes('Start Bargaining')) return true;
+                // Check the price section and the whole page for the bargaining button
+                const candidates = [vp, ...vp.querySelectorAll('div'), document.body];
+                for (const root of candidates) {
+                    if (!root) continue;
+                    const btns = root.querySelectorAll('button, a');
+                    for (const btn of btns) {
+                        const t = (btn.textContent || '').trim().toLowerCase();
+                        if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
+                            return true;
+                        }
+                    }
                 }
                 return false;
             }""")
