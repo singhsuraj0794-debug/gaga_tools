@@ -283,8 +283,6 @@ function isDurationShort(duration: string | null | undefined): boolean {
     const secs = parseInt(parts[1]);
     return mins === 0 && secs <= 60;
   }
-  return false;
-}
   return false; // Longer formats are definitely not Shorts
 }
 
@@ -306,7 +304,7 @@ async function searchYouTubeScrape(
     if (videos.length >= 20) break;
     try {
       const query = encodeURIComponent(rawQuery);
-      const resp = await axios.get(\`https://www.youtube.com/results?search_query=\${query}\`, {
+      const resp = await axios.get(`https://www.youtube.com/results?search_query=${query}`, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -338,7 +336,7 @@ async function searchYouTubeScrape(
             const viewCount = viewMatch ? parseInt(viewMatch[1].replace(/,/g, ""), 10) : null;
             const duration: string = vr.lengthText?.simpleText || null;
             const thumbnail = vr.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
-              \`https://img.youtube.com/vi/\${videoId}/hqdefault.jpg\`;
+              `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
 
             const isShort = duration && isDurationShort(duration);
             if (!isShort) continue; // Only Shorts
@@ -352,6 +350,7 @@ async function searchYouTubeScrape(
             video.relevanceScore = calculateRelevanceScore(video, productName);
             videos.push(video);
             if (videos.length >= 20) break;
+          }
           const reelShelf = item?.reelShelfRenderer;
           if (reelShelf?.items) {
             for (const reelItem of reelShelf.items) {
@@ -361,11 +360,11 @@ async function searchYouTubeScrape(
               const videoId: string = reel.videoId;
               const title: string = reel.headline?.simpleText || reel.videoTitle || productName;
               const thumbnail = reel.thumbnail?.thumbnails?.slice(-1)?.[0]?.url ||
-                \`https://img.youtube.com/vi/\${videoId}/hqdefault.jpg\`;
+                `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
               const video: VideoResult = {
-                id: \`yt-\${videoId}\`, platform: "youtube", title,
-                url: \`https://www.youtube.com/shorts/\${videoId}\`,
-                embedUrl: \`https://www.youtube.com/embed/\${videoId}\`,
+                id: `yt-${videoId}`, platform: "youtube", title,
+                url: `https://www.youtube.com/shorts/${videoId}`,
+                embedUrl: `https://www.youtube.com/embed/${videoId}`,
                 thumbnailUrl: thumbnail, channelName: null, duration: null, viewCount: null,
                 productId, productName,
               };
