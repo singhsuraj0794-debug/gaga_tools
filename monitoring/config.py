@@ -70,6 +70,12 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 
+EMAIL_FROM = os.getenv("EMAIL_FROM", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+EMAIL_TO = os.getenv("EMAIL_TO", "")
+EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
+EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+
 PAGESPEED_API_KEY = os.getenv("PAGESPEED_API_KEY", "")
 
 PAGESPEED_URLS = list(URLS.values())
