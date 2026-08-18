@@ -33,7 +33,7 @@ URLS = {
 }
 
 CATEGORIES = [
-    {"name": "all", "url": "https://gajab.com/product-list/all", "nav_text": "All Products"},
+    {"name": "all", "url": "https://gajab.com/product-list/all", "nav_text": "All Products", "direct_url": True},
     {"name": "home-kitchen", "url": "https://gajab.com/product-list/home-kitchen/1", "nav_text": "Home & Kitchen"},
     {"name": "toys-games", "url": "https://gajab.com/product-list/toys-games/17", "nav_text": "Toys & Games"},
     {"name": "fashion-accessories", "url": "https://gajab.com/product-list/fashion-accessories/44", "nav_text": "Fashion Accessories"},

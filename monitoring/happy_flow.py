@@ -342,6 +342,18 @@ def _do_checkout_flow(page, results: list):
         time.sleep(1)
         if page.locator("a[href*='/product-detail/'], [class*='bargain'], [class*='timer']").count() > 0:
             break
+
+    # A won bargain's Pay button may take a few seconds to render — wait for it
+    log("  Waiting for a Pay button to appear (won bargain needs time to settle)")
+    pay_wait = 0
+    for _ in range(12):
+        if page.locator("button:has-text('Pay'), button:has-text('Pay Now'), a:has-text('Pay')").count() > 0:
+            break
+        time.sleep(2)
+        pay_wait += 2
+    if pay_wait > 0:
+        log(f"  Waited {pay_wait}s for Pay button")
+
     ss_bargains = _capture_screenshot(page, f"{_STEP_PREFIX}my_bargains_page")
     is_bargains = "bargain" in page.url.lower()
     sub_steps.append({"check": "my_bargains_nav", "status": "pass" if is_bargains else "degraded", "detail": f"URL: {page.url[:80]}"})
@@ -1018,6 +1030,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
 
                 # Click the category — try visible click first, then JS click for hidden elements
                 clicked = False
+                direct_url = cat.get("direct_url", False)
                 nav_selectors = [
                     f"a:has-text('{nav_text}')",
                     f"[href*='{cat['url'].split('/')[-1]}']",
@@ -1046,6 +1059,10 @@ def _run_platform_flow(platform: str) -> list[dict]:
                             break
                         except Exception:
                             continue
+                    if direct_url:
+                        # No nav link exists — navigate directly instead
+                        log(f"  {cat_name} has no nav link — using direct URL")
+                        break
 
                 if not clicked:
                     # Fallback: navigate directly
@@ -1064,22 +1081,24 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     pass
                 duration = int((time.time() - t0) * 1000)
                 product_links = page.locator("a[href*='/product-detail/']")
-                has_products = product_links.count() > 0
+                product_count = product_links.count()
+                has_products = product_count > 0
 
                 ss_cat = _capture_screenshot(page, f"{_STEP_PREFIX}category_{cat_name}")
                 failure_reason = None
                 if not has_products:
                     failure_reason = f"No product links on {cat_name}"
-                elif not clicked:
+                elif not clicked and not direct_url:
                     failure_reason = f"Nav click failed for {nav_text}"
                 elif duration > TIME_BUDGETS_SECONDS.get("category_page_load", 12) * 1000:
                     failure_reason = f"Page load slow ({duration}ms)"
+                category_ok = has_products and (clicked or direct_url)
                 results.append({
                     "step": _STEP_PREFIX + f"category_{cat_name}_load",
                     "duration_ms": duration,
-                    "status": "pass" if has_products and clicked else "fail",
-                    "detail": f"Products: {product_links.count()}, clicked: {clicked}, URL: {page.url}",
-                    "product_count": product_links.count(),
+                    "status": "pass" if category_ok else "fail",
+                    "detail": f"Products: {product_count}, clicked: {clicked}, URL: {page.url}",
+                    "product_count": product_count,
                     "screenshot": ss_cat,
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                     "failure_reason": failure_reason,
