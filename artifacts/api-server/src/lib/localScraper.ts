@@ -38,6 +38,18 @@ export async function runLocalExtract(url: string): Promise<any> {
   } catch { return null; }
 }
 
+export async function runLocalExtractPage(url: string, page: number): Promise<any> {
+  if (!LOCAL_SCRAPER_URL) return null;
+  try {
+    const { data } = await axios.post(
+      `${LOCAL_SCRAPER_URL}/extract`,
+      { url, page },
+      { timeout: 55000 },  // keep under ngrok's ~60s limit
+    );
+    return data;
+  } catch { return null; }
+}
+
 export function hasLocalScraper(): boolean {
   return !!LOCAL_SCRAPER_URL;
 }

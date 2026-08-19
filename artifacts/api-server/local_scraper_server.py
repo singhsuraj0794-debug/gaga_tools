@@ -43,9 +43,17 @@ class ScraperHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length))
             url = body.get("url", "")
+            page_num = int(body.get("page", 0)) or 0
 
             if not url:
                 self._json(400, {"status": "failed", "error": "url required"})
+                return
+
+            if page_num > 0:
+                # Single-page chunk (fits under ngrok's ~60s limit)
+                print(f"[EXTRACT] meesho page {page_num}: {url}", flush=True)
+                result = meesho_scraper.extract_page(url, page_num)
+                self._json(200, result)
                 return
 
             print(f"[EXTRACT] meesho: {url}", flush=True)

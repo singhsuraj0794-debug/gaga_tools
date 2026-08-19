@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
-import { runLocalScraper, runLocalExtract, hasLocalScraper } from "../../lib/localScraper.js";
+import { runLocalScraper, runLocalExtract, runLocalExtractPage, hasLocalScraper } from "../../lib/localScraper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -162,42 +162,76 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
     (async () => {
       job.status = "running";
 
-      // Prefer the local laptop scraper (has Chrome CDP to bypass Meesho's Akamai)
-      let result: any = null;
-      if (hasLocalScraper()) {
-        result = await runLocalExtract(storeUrl);
-      }
-      if (!result || result.status === "failed") {
-        result = await callPython("extract", storeUrl).catch((e) => ({ status: "failed", error: e.message }));
-      }
+      // Map a raw product to the detailed product shape
+      const mapProduct = (p: any): MeeshoDetailedProduct => ({
+        id: p.id || "",
+        title: p.title || "Untitled",
+        description: p.description || null,
+        meta_description: p.meta_description || null,
+        imageUrl: (p.images || [])[0] || p.imageUrl || null,
+        images: p.images || [],
+        hsn: p.hsn || null,
+        gst: p.gst || null,
+        dimensions: p.dimensions || null,
+        weight: p.weight || null,
+        specifications: p.specifications || null,
+        variants: p.variants || null,
+        price: p.price || null,
+        url: p.url || "",
+        status: "success",
+        error: null,
+      });
 
-      if (result && result.status !== "failed") {
-        job.products = (result.products || []).map((p: any): MeeshoDetailedProduct => ({
-          id: p.id || "",
-          title: p.title || "Untitled",
-          description: p.description || null,
-          meta_description: p.meta_description || null,
-          imageUrl: (p.images || [])[0] || p.imageUrl || null,
-          images: p.images || [],
-          hsn: p.hsn || null,
-          gst: p.gst || null,
-          dimensions: p.dimensions || null,
-          weight: p.weight || null,
-          specifications: p.specifications || null,
-          variants: p.variants || null,
-          price: p.price || null,
-          url: p.url || "",
-          status: "success",
-          error: null,
-        }));
-        job.storeName = result.store_name || "";
-        job.errors = result.errors || [];
-        job.completed = job.products.length;
-        job.total = job.products.length;
+      const seen = new Set<string>();
+      const allProducts: MeeshoDetailedProduct[] = [];
+      let storeName = "";
+
+      if (hasLocalScraper()) {
+        // Paginate via the local Chrome-CDP scraper in sub-60s chunks (ngrok limit)
+        let page = 1;
+        let consecutiveEmpty = 0;
+        const MAX_PAGES = 300;
+        while (page <= MAX_PAGES) {
+          const chunk = await runLocalExtractPage(storeUrl, page);
+          if (!chunk) {
+            job.errors = job.errors || [];
+            job.errors.push(`Failed to reach local scraper on page ${page}`);
+            consecutiveEmpty++;
+          } else if (chunk.products && chunk.products.length > 0) {
+            consecutiveEmpty = 0;
+            for (const p of chunk.products) {
+              const url = p.url || "";
+              if (!url || seen.has(url)) continue;
+              seen.add(url);
+              allProducts.push(mapProduct(p));
+            }
+          } else {
+            consecutiveEmpty++;
+          }
+          job.completed = allProducts.length;
+          if (consecutiveEmpty >= 3) break;  // end of products
+          page++;
+        }
+        job.products = allProducts;
+        job.storeName = storeName;
+        job.errors = job.errors || [];
+        job.total = allProducts.length;
+        job.completed = allProducts.length;
         job.status = "completed";
       } else {
-        job.status = "failed";
-        job.errors = [result?.error || "Failed to extract products"];
+        // No local scraper — try Render's Python (best-effort)
+        const result = await callPython("extract", storeUrl).catch((e) => ({ status: "failed", error: e.message }));
+        if (result && result.status !== "failed") {
+          job.products = (result.products || []).map(mapProduct);
+          job.storeName = result.store_name || "";
+          job.errors = result.errors || [];
+          job.completed = job.products.length;
+          job.total = job.products.length;
+          job.status = "completed";
+        } else {
+          job.status = "failed";
+          job.errors = [result?.error || "Failed to extract products (no Chrome CDP available)"];
+        }
       }
       logger.info({ jobId, total: job.products.length }, "Meesho extract job completed");
     })().catch((err: any) => {

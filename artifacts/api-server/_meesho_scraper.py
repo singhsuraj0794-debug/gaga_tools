@@ -653,6 +653,51 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def extract_page(store_url: str, page_num: int) -> dict:
+    """Extract product links from a single paginated page of a Meesho store (Chrome CDP).
+
+    Kept fast (<60s) so it can run through ngrok. Returns { products, hasMore }.
+    """
+    url_clean = store_url.split("?")[0].rstrip("/")
+    page_url = f"{url_clean}?_ms=3.0.1" if page_num <= 1 else f"{url_clean}?_ms=3.0.1&page={page_num}"
+    products = []
+    try:
+        import time as _time
+        import urllib.request
+        from playwright.sync_api import sync_playwright
+        urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+    except Exception as e:
+        return {"products": [], "hasMore": False, "error": f"Chrome CDP not available: {e}"}
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            ctx = browser.new_context()
+            page = ctx.new_page()
+            page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+            _time.sleep(2.5)
+            links = page.locator("a[href*='/p/']")
+            for i in range(links.count()):
+                href = links.nth(i).get_attribute("href")
+                if href and "/p/" in href:
+                    product_id = href.rstrip("/").split("/p/")[-1]
+                    products.append({
+                        "id": product_id,
+                        "title": "Untitled",
+                        "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
+                        "status": "pending",
+                        "error": None,
+                    })
+            page.close()
+            ctx.close()
+    except Exception as e:
+        return {"products": products, "hasMore": False, "error": str(e)}
+
+    # If the page yielded no products, we've reached the end (no more pages)
+    has_more = len(products) > 0
+    return {"products": products, "hasMore": has_more, "error": None}
+
+
 def extract_store(store_url: str) -> dict:
     """Extract all products from a Meesho store across all pages.
 
