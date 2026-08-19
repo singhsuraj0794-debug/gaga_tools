@@ -19,8 +19,8 @@ import sys
 import traceback
 
 PROXY = os.environ.get("MEESHO_PROXY", "") or os.environ.get("SCRAPER_PROXY", "")
-# Link extraction uses the LOCAL-IP Chrome (no proxy) — fast & reliable.
-EXTRACT_CDP_URL = os.environ.get("EXTRACT_CDP_URL", "http://localhost:9222")
+# Link extraction uses a dedicated LOCAL-IP Chrome (no proxy) — fast & reliable.
+EXTRACT_CDP_URL = os.environ.get("EXTRACT_CDP_URL", "http://localhost:9225")
 # Product scraping uses the Webshare-proxied Chrome so we don't get IP-blocked.
 SCRAPE_CDP_URL = os.environ.get("SCRAPE_CDP_URL", "http://localhost:9223")
 SCRAPE_DO_TOKEN = os.environ.get("SCRAPE_DO_TOKEN", "")
