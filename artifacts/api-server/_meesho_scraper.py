@@ -656,49 +656,84 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _grab_product_links(page) -> list:
+    """Collect all /p/ product links currently in the DOM."""
+    products = []
+    seen = set()
+    links = page.locator("a[href*='/p/']")
+    for i in range(links.count()):
+        href = links.nth(i).get_attribute("href")
+        if href and "/p/" in href and href not in seen:
+            seen.add(href)
+            product_id = href.rstrip("/").split("/p/")[-1]
+            products.append({
+                "id": product_id,
+                "title": "Untitled",
+                "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
+                "status": "pending",
+                "error": None,
+            })
+    return products
+
+
 def extract_page(store_url: str, page_num: int) -> dict:
     """Extract product links from a single paginated page of a Meesho store (Chrome CDP).
 
-    Kept fast (<60s) so it can run through ngrok. Returns { products, hasMore }.
+    Waits for products to load (up to 20 per page) and retries the page a few
+    times if it loads fewer than expected — Webshare rotates IPs so a retry often
+    succeeds. Kept under ngrok's ~60s limit per call.
     """
+    import time as _time
+    import urllib.request
+    from playwright.sync_api import sync_playwright
+
     url_clean = store_url.split("?")[0].rstrip("/")
     page_url = f"{url_clean}?_ms=3.0.1" if page_num <= 1 else f"{url_clean}?_ms=3.0.1&page={page_num}"
-    products = []
+
     try:
-        import time as _time
-        import urllib.request
-        from playwright.sync_api import sync_playwright
         urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=5)
     except Exception as e:
         return {"products": [], "hasMore": False, "error": f"Chrome CDP not available: {e}"}
 
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(CDP_URL)
-            ctx = browser.new_context()
-            page = ctx.new_page()
-            page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
-            _time.sleep(2.5)
-            links = page.locator("a[href*='/p/']")
-            for i in range(links.count()):
-                href = links.nth(i).get_attribute("href")
-                if href and "/p/" in href:
-                    product_id = href.rstrip("/").split("/p/")[-1]
-                    products.append({
-                        "id": product_id,
-                        "title": "Untitled",
-                        "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
-                        "status": "pending",
-                        "error": None,
-                    })
-            page.close()
-            ctx.close()
-    except Exception as e:
-        return {"products": products, "hasMore": False, "error": str(e)}
+    products = []
+    last_error = None
+    for attempt in range(3):  # retry the page up to 3 times
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.connect_over_cdp(CDP_URL)
+                ctx = browser.new_context()
+                page = ctx.new_page()
+                page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
 
-    # If the page yielded no products, we've reached the end (no more pages)
+                # Poll for products to load — up to ~20s for 20 links
+                links = page.locator("a[href*='/p/']")
+                deadline = _time.time() + 20
+                while _time.time() < deadline and links.count() < 20:
+                    _time.sleep(1)
+                    # scroll to trigger lazy loading
+                    try:
+                        page.mouse.wheel(0, 2000)
+                    except Exception:
+                        pass
+
+                products = _grab_product_links(page)
+                page.close()
+                ctx.close()
+
+                # Good enough if we got ~20 links (or this is the last/empty page)
+                if len(products) >= 15:
+                    break
+                # Otherwise retry (may be a transient IP block / slow load)
+                _time.sleep(1.5)
+        except Exception as e:
+            last_error = str(e)
+            _time.sleep(1.5)
+            continue
+
+    # If after retries we still have fewer than expected but some products, it's likely a real page
     has_more = len(products) > 0
-    return {"products": products, "hasMore": has_more, "error": None}
+    error = None if (products or last_error is None) else (last_error or "")
+    return {"products": products, "hasMore": has_more, "error": error}
 
 
 def extract_store(store_url: str) -> dict:
