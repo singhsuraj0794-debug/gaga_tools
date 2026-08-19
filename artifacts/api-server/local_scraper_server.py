@@ -29,12 +29,32 @@ class ScraperHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/scrape":
             self._handle_scrape()
+        elif self.path == "/extract":
+            self._handle_extract()
         elif self.path == "/search":
             self._handle_search()
         else:
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b'{"error":"not found"}')
+
+    def _handle_extract(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            url = body.get("url", "")
+
+            if not url:
+                self._json(400, {"status": "failed", "error": "url required"})
+                return
+
+            print(f"[EXTRACT] meesho: {url}", flush=True)
+            result = meesho_scraper.extract_store(url)
+            self._json(200, result)
+
+        except Exception as e:
+            traceback.print_exc()
+            self._json(500, {"status": "failed", "error": str(e)})
 
     def _handle_scrape(self):
         try:

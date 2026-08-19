@@ -26,6 +26,18 @@ export async function runLocalSearch(title: string, imageUrl: string, price: str
   } catch { return null; }
 }
 
+export async function runLocalExtract(url: string): Promise<any> {
+  if (!LOCAL_SCRAPER_URL) return null;
+  try {
+    const { data } = await axios.post(
+      `${LOCAL_SCRAPER_URL}/extract`,
+      { url },
+      { timeout: 900000 },
+    );
+    return data;
+  } catch { return null; }
+}
+
 export function hasLocalScraper(): boolean {
   return !!LOCAL_SCRAPER_URL;
 }

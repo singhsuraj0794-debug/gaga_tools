@@ -653,6 +653,58 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def extract_store(store_url: str) -> dict:
+    """Extract all products from a Meesho store across all pages."""
+    url_clean = store_url.split("?")[0].rstrip("/")
+    first_url = _build_store_url(url_clean, 1)
+    html = _try_curl_cffi(first_url) or _fetch(first_url)
+    if not html:
+        return {"status": "failed", "error": f"Could not fetch {store_url}"}
+
+    total_count = _get_total_count(html)
+    total_pages = max(1, (min(total_count, MAX_EXTRACT_PAGES * PAGE_SIZE) + PAGE_SIZE - 1) // PAGE_SIZE) if total_count else MAX_EXTRACT_PAGES
+
+    result = extract_products(html, store_url)
+    all_products = result.get("products", [])
+    seen_ids = {p["id"] for p in all_products}
+    errors = list(result.get("errors", []))
+    empty_streak = 0
+
+    for page in range(2, min(total_pages + 1, MAX_EXTRACT_PAGES + 1)):
+        page_url = _build_store_url(url_clean, page)
+        page_html = _try_curl_cffi(page_url)
+        if not page_html:
+            page_html = _fetch_page(page_url)
+        if not page_html:
+            errors.append(f"Failed to fetch page {page}")
+            empty_streak += 1
+            if empty_streak >= 3:
+                break
+            continue
+        page_result = extract_products(page_html, store_url)
+        page_products = page_result.get("products", [])
+        if not page_products:
+            empty_streak += 1
+            if empty_streak >= 3:
+                break
+            continue
+        empty_streak = 0
+        for p in page_products:
+            if p["id"] not in seen_ids:
+                seen_ids.add(p["id"])
+                all_products.append(p)
+
+    return {
+        "products": all_products,
+        "errors": errors,
+        "store_name": result.get("store_name", ""),
+        "total_pages": total_pages,
+        "total_products": total_count,
+        "total_unique": len(all_products),
+    }
+
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(json.dumps({"status": "failed", "error": "Usage: _meesho_scraper.py <action> [url]"}))
@@ -667,53 +719,7 @@ if __name__ == "__main__":
 
     try:
         if action == "extract":
-            url_clean = url.split("?")[0].rstrip("/")
-            first_url = _build_store_url(url_clean, 1)
-            html = _try_curl_cffi(first_url) or _fetch(first_url)
-            if not html:
-                print(json.dumps({"status": "failed", "error": f"Could not fetch {url}"}))
-                sys.exit(0)
-            total_count = _get_total_count(html)
-            total_pages = max(1, (min(total_count, MAX_EXTRACT_PAGES * PAGE_SIZE) + PAGE_SIZE - 1) // PAGE_SIZE) if total_count else MAX_EXTRACT_PAGES
-
-            result = extract_products(html, url)
-            all_products = result.get("products", [])
-            seen_ids = {p["id"] for p in all_products}
-            errors = list(result.get("errors", []))
-            empty_streak = 0
-
-            for page in range(2, min(total_pages + 1, MAX_EXTRACT_PAGES + 1)):
-                page_url = _build_store_url(url_clean, page)
-                page_html = _try_curl_cffi(page_url)
-                if not page_html:
-                    page_html = _fetch_page(page_url)
-                if not page_html:
-                    errors.append(f"Failed to fetch page {page}")
-                    empty_streak += 1
-                    if empty_streak >= 3:
-                        break
-                    continue
-                page_result = extract_products(page_html, url)
-                page_products = page_result.get("products", [])
-                if not page_products:
-                    empty_streak += 1
-                    if empty_streak >= 3:
-                        break
-                    continue
-                empty_streak = 0
-                for p in page_products:
-                    if p["id"] not in seen_ids:
-                        seen_ids.add(p["id"])
-                        all_products.append(p)
-
-            result = {
-                "products": all_products,
-                "errors": errors,
-                "store_name": result.get("store_name", ""),
-                "total_pages": total_pages,
-                "total_products": total_count,
-                "total_unique": len(all_products),
-            }
+            result = extract_store(url)
             print(json.dumps(result))
         elif action == "scrape":
             html = _fetch_product_page(url)

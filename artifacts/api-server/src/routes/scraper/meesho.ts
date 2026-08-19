@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
-import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
+import { runLocalScraper, runLocalExtract, hasLocalScraper } from "../../lib/localScraper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,10 +36,13 @@ interface MeeshoDetailedProduct {
 
 interface ScrapeJob {
   id: string;
+  type: "scrape" | "extract";
   status: "pending" | "running" | "completed" | "failed";
   total: number;
   completed: number;
   products: MeeshoDetailedProduct[];
+  storeName?: string;
+  errors?: string[];
   createdAt: Date;
 }
 
@@ -140,25 +143,90 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    logger.info({ storeUrl }, "Extracting products from Meesho store");
+    logger.info({ storeUrl }, "Starting Meesho store extraction job");
 
-    const result = await callPython("extract", storeUrl);
+    const jobId = generateJobId();
+    const job: ScrapeJob = {
+      id: jobId,
+      type: "extract",
+      status: "pending",
+      total: 1,
+      completed: 0,
+      products: [],
+      storeName: "",
+      errors: [],
+      createdAt: new Date(),
+    };
+    jobs.set(jobId, job);
 
-    if (result.status === "failed") {
-      res.status(500).json({ error: result.error || "Failed to extract products" });
-      return;
-    }
+    (async () => {
+      job.status = "running";
 
-    res.json({
-      storeName: result.store_name || "",
-      products: result.products || [],
-      errors: result.errors || [],
-      total: (result.products || []).length,
+      // Prefer the local laptop scraper (has Chrome CDP to bypass Meesho's Akamai)
+      let result: any = null;
+      if (hasLocalScraper()) {
+        result = await runLocalExtract(storeUrl);
+      }
+      if (!result || result.status === "failed") {
+        result = await callPython("extract", storeUrl).catch((e) => ({ status: "failed", error: e.message }));
+      }
+
+      if (result && result.status !== "failed") {
+        job.products = (result.products || []).map((p: any): MeeshoDetailedProduct => ({
+          id: p.id || "",
+          title: p.title || "Untitled",
+          description: p.description || null,
+          meta_description: p.meta_description || null,
+          imageUrl: (p.images || [])[0] || p.imageUrl || null,
+          images: p.images || [],
+          hsn: p.hsn || null,
+          gst: p.gst || null,
+          dimensions: p.dimensions || null,
+          weight: p.weight || null,
+          specifications: p.specifications || null,
+          variants: p.variants || null,
+          price: p.price || null,
+          url: p.url || "",
+          status: "success",
+          error: null,
+        }));
+        job.storeName = result.store_name || "";
+        job.errors = result.errors || [];
+        job.completed = job.products.length;
+        job.total = job.products.length;
+        job.status = "completed";
+      } else {
+        job.status = "failed";
+        job.errors = [result?.error || "Failed to extract products"];
+      }
+      logger.info({ jobId, total: job.products.length }, "Meesho extract job completed");
+    })().catch((err: any) => {
+      logger.error({ jobId, err: err.message }, "Meesho extract job failed");
+      job.status = "failed";
+      job.errors = [err.message];
     });
+
+    res.json({ jobId, status: "pending" });
   } catch (err: any) {
-    logger.error({ err: err.message }, "Meesho extract failed");
+    logger.error({ err: err.message }, "Meesho extract submit failed");
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get("/extract/:jobId", (req: Request, res: Response): void => {
+  const job = jobs.get(req.params.jobId as string);
+  if (!job || job.type !== "extract") {
+    res.json({ status: "failed", total: 0, completed: 0, products: [], errors: ["Job not found"] });
+    return;
+  }
+  res.json({
+    status: job.status,
+    storeName: job.storeName || "",
+    total: job.total,
+    completed: job.completed,
+    products: job.products,
+    errors: job.errors || [],
+  });
 });
 
 router.post("/clear-cache", async (_req: Request, res: Response): Promise<void> => {
@@ -181,6 +249,7 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
     const jobId = generateJobId();
     const job: ScrapeJob = {
       id: jobId,
+      type: "scrape",
       status: "pending",
       total: urls.length,
       completed: 0,
