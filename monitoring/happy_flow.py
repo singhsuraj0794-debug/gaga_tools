@@ -268,22 +268,37 @@ def _do_bargain_flow(page, results: list):
 
     time.sleep(3)
 
-    log("Step 4f — Checking for Accept offer button")
+    log("Step 4f — Waiting for counter-offer and Accept button (up to 30s)")
     accepted = False
-    for sel in ["button:has-text('Accept the offer')", "button:has-text('Accept')"]:
-        loc = page.locator(sel)
-        try:
-            if loc.count() > 0 and loc.first.is_visible(timeout=2000):
-                box = loc.first.bounding_box()
-                if box:
-                    page.mouse.click(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
-                    log("Clicked Accept")
-                    accepted = True
-                    sub_steps.append({"check": "accept_offer", "status": "pass", "detail": "Seller accepted offer"})
-                    time.sleep(2)
-                    break
-        except Exception:
-            continue
+    for _ in range(15):  # Wait up to 30s for the counter-offer to come back
+        accept_btn = page.locator("button:has-text('Accept Offer'), button:has-text('Accept the offer'), button:has-text('Accept')").first
+        bargain_more = page.locator("button:has-text('Bargain More'), button:has-text('Bargain more')").first
+
+        if accept_btn.count() > 0 and accept_btn.is_visible(timeout=1000):
+            box = accept_btn.bounding_box()
+            if box:
+                page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            else:
+                accept_btn.click(force=True)
+            accepted = True
+            log("Counter-offer accepted (Accept clicked)")
+            sub_steps.append({"check": "accept_offer", "status": "pass", "detail": "Counter-offer accepted"})
+            time.sleep(2)
+            break
+
+        if bargain_more.count() > 0 and bargain_more.is_visible(timeout=1000):
+            log("Counter-offer received with Bargain More button")
+            # Try accepting alongside Bargain More (accept may also be present)
+            if accept_btn.count() > 0 and accept_btn.is_visible(timeout=500):
+                accept_btn.click(force=True)
+                accepted = True
+                log("Accept clicked (next to Bargain More)")
+                sub_steps.append({"check": "accept_offer", "status": "pass", "detail": "Counter-offer accepted"})
+                time.sleep(2)
+                break
+
+        time.sleep(2)
+
     if not accepted:
         sub_steps.append({"check": "accept_offer", "status": "pass", "detail": "Offer sent to seller — awaiting manual acceptance"})
 
