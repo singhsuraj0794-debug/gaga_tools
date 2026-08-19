@@ -698,7 +698,7 @@ def extract_page(store_url: str, page_num: int) -> dict:
 
     products = []
     last_error = None
-    for attempt in range(3):  # retry the page up to 3 times
+    for attempt in range(3):  # retry only when a page loads ZERO products (transient block/load failure)
         try:
             with sync_playwright() as p:
                 browser = p.chromium.connect_over_cdp(EXTRACT_CDP_URL)
@@ -706,12 +706,11 @@ def extract_page(store_url: str, page_num: int) -> dict:
                 page = ctx.new_page()
                 page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
 
-                # Poll for products to load — up to ~20s for 20 links
+                # Poll for products — up to ~12s (a full page has 20; the last page has fewer)
                 links = page.locator("a[href*='/p/']")
-                deadline = _time.time() + 20
+                deadline = _time.time() + 12
                 while _time.time() < deadline and links.count() < 20:
                     _time.sleep(1)
-                    # scroll to trigger lazy loading
                     try:
                         page.mouse.wheel(0, 2000)
                     except Exception:
@@ -721,17 +720,17 @@ def extract_page(store_url: str, page_num: int) -> dict:
                 page.close()
                 ctx.close()
 
-                # Good enough if we got ~20 links (or this is the last/empty page)
-                if len(products) >= 15:
+                # Any products means this is a valid page (last page may have <20). Return immediately.
+                if len(products) > 0:
                     break
-                # Otherwise retry (may be a transient IP block / slow load)
+                # Zero products → likely a failed load or transient block; retry with a fresh IP
                 _time.sleep(1.5)
         except Exception as e:
             last_error = str(e)
             _time.sleep(1.5)
             continue
 
-    # If after retries we still have fewer than expected but some products, it's likely a real page
+    # A page that still has 0 products after retries = end of the store
     has_more = len(products) > 0
     error = None if (products or last_error is None) else (last_error or "")
     return {"products": products, "hasMore": has_more, "error": error}
