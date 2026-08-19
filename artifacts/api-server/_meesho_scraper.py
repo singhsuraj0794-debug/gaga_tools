@@ -720,7 +720,7 @@ def _extract_from_html(html: str, store_url: str) -> dict:
 
 
 def _extract_via_browser(url_clean: str, store_url: str) -> dict:
-    """Load the store in real Chrome (CDP), scroll to load products, grab /p/ links."""
+    """Load the store in real Chrome (CDP) and paginate through &page=N, grabbing /p/ links."""
     try:
         import time as _time
         import urllib.request
@@ -734,48 +734,45 @@ def _extract_via_browser(url_clean: str, store_url: str) -> dict:
     products = []
     seen = set()
     store_name = ""
+    errors = []
     try:
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp("http://localhost:9222")
-            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            ctx = browser.new_context()
             page = ctx.new_page()
-            page.goto(url_clean, wait_until="domcontentloaded", timeout=45000)
-            _time.sleep(6)
-            store_name = page.title() or store_name
 
-            # Scroll repeatedly to trigger lazy-loading of products
-            for _ in range(30):
-                page.mouse.wheel(0, 4000)
-                _time.sleep(1.2)
-                links = page.locator("a[href*='/p/']")
-                count = links.count()
-                if count >= 40 and count <= len(seen) + 5:
+            for pg in range(1, MAX_EXTRACT_PAGES + 1):
+                page_url = f"{url_clean}?_ms=3.0.1" if pg == 1 else f"{url_clean}?_ms=3.0.1&page={pg}"
+                try:
+                    page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+                    _time.sleep(2.5)
+                except Exception:
+                    errors.append(f"Failed to load page {pg}")
                     break
-                if count > 0:
-                    new = 0
-                    for i in range(count):
-                        href = links.nth(i).get_attribute("href")
-                        if href and href not in seen:
-                            seen.add(href)
-                            new += 1
-                    if new == 0 and count >= 20:
-                        break
 
-            # Final pass: collect all /p/ links
-            seen = set()
-            links = page.locator("a[href*='/p/']")
-            for i in range(links.count()):
-                href = links.nth(i).get_attribute("href")
-                if href and "/p/" in href and href not in seen:
-                    seen.add(href)
-                    product_id = href.rstrip("/").split("/p/")[-1]
-                    products.append({
-                        "id": product_id,
-                        "title": "Untitled",
-                        "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
-                        "status": "pending",
-                        "error": None,
-                    })
+                if not store_name:
+                    store_name = page.title() or store_name
+
+                links = page.locator("a[href*='/p/']")
+                page_new = 0
+                for i in range(links.count()):
+                    href = links.nth(i).get_attribute("href")
+                    if href and "/p/" in href and href not in seen:
+                        seen.add(href)
+                        product_id = href.rstrip("/").split("/p/")[-1]
+                        products.append({
+                            "id": product_id,
+                            "title": "Untitled",
+                            "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
+                            "status": "pending",
+                            "error": None,
+                        })
+                        page_new += 1
+
+                # Stop when a page has no product links or no new products (reached the end)
+                if links.count() == 0 or page_new == 0:
+                    if pg > 1:
+                        break
             page.close()
     except Exception as e:
         import traceback
@@ -783,12 +780,13 @@ def _extract_via_browser(url_clean: str, store_url: str) -> dict:
 
     return {
         "products": products,
-        "errors": [],
+        "errors": errors,
         "store_name": store_name,
         "total_pages": 0,
         "total_products": len(products),
         "total_unique": len(products),
     }
+
 
 
 
