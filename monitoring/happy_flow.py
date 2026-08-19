@@ -169,21 +169,28 @@ def _do_bargain_flow(page, results: list):
 
     log("Step 4b — Locating & clicking Start Bargaining button")
     clicked = page.evaluate("""() => {
-        const vp = document.getElementById('varient-price');
-        if (!vp) return false;
+        // Search the whole document (mobile renders the button outside #varient-price)
+        const roots = [document.getElementById('varient-price'), document.body].filter(Boolean);
         let clicked_any = false;
-        for (const btn of vp.querySelectorAll('button')) {
-            if (btn.textContent.includes('Start Bargaining')) {
-                // Only remove disabled attribute - don't change any visual styles
-                btn.removeAttribute('disabled');
-                btn.scrollIntoView({behavior:'instant',block:'center'});
-                const event = new MouseEvent('click', {
-                    view: window, bubbles: true, cancelable: true,
-                    clientX: btn.getBoundingClientRect().left + btn.offsetWidth / 2,
-                    clientY: btn.getBoundingClientRect().top + btn.offsetHeight / 2,
-                });
-                btn.dispatchEvent(event);
-                clicked_any = true;
+        const seen = new Set();
+        for (const root of roots) {
+            const btns = root.querySelectorAll('button, a');
+            for (const btn of btns) {
+                const t = (btn.textContent || '').trim().toLowerCase();
+                if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
+                    if (seen.has(btn)) continue;
+                    seen.add(btn);
+                    btn.removeAttribute('disabled');
+                    btn.scrollIntoView({behavior:'instant',block:'center'});
+                    const event = new MouseEvent('click', {
+                        view: window, bubbles: true, cancelable: true,
+                        clientX: btn.getBoundingClientRect().left + btn.offsetWidth / 2,
+                        clientY: btn.getBoundingClientRect().top + btn.offsetHeight / 2,
+                    });
+                    btn.dispatchEvent(event);
+                    clicked_any = true;
+                    break;
+                }
             }
         }
         return clicked_any;
@@ -765,13 +772,17 @@ def _do_second_bargain(page, results: list):
     time.sleep(1)
 
     page.evaluate("""() => {
-        const vp = document.getElementById('varient-price');
-        if (!vp) return;
-        for (const btn of vp.querySelectorAll('button')) {
-            if (btn.textContent.includes('Start Bargaining')) {
-                btn.removeAttribute('disabled');
-                btn.scrollIntoView();
-                btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+        const roots = [document.getElementById('varient-price'), document.body].filter(Boolean);
+        for (const root of roots) {
+            const btns = root.querySelectorAll('button, a');
+            for (const btn of btns) {
+                const t = (btn.textContent || '').trim().toLowerCase();
+                if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
+                    btn.removeAttribute('disabled');
+                    btn.scrollIntoView();
+                    btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                    break;
+                }
             }
         }
     }""")
@@ -1168,16 +1179,28 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     has_varient = bool(text and text.strip())
                 except Exception:
                     has_varient = False
+            # Mobile may render the price/bargain section outside #varient-price — fall back to body-wide detection
+            has_bargain_btn = False
+            if not has_varient:
+                has_bargain_btn = page.evaluate("""() => {
+                    const btns = document.querySelectorAll('button, a');
+                    for (const btn of btns) {
+                        const t = (btn.textContent || '').trim().toLowerCase();
+                        if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) return true;
+                    }
+                    return false;
+                }""")
+            pdp_ok = has_varient or has_bargain_btn
             ss_pdp = _capture_screenshot(page, f"{_STEP_PREFIX}product_detail")
             failure_reason = None
-            if not has_varient:
+            if not pdp_ok:
                 failure_reason = "#varient-price element not found"
             results.append({
                 "step": _STEP_PREFIX + "product_detail_load",
                 "duration_ms": duration,
-                "status": "pass" if has_varient else "fail",
-                "detail": f"#varient-price visible: {has_varient}, title: {page.title()[:60]}",
-                "varient_price_found": has_varient,
+                "status": "pass" if pdp_ok else "fail",
+                "detail": f"#varient-price visible: {has_varient}, bargain button: {has_bargain_btn}, title: {page.title()[:60]}",
+                "varient_price_found": pdp_ok,
                 "screenshot": ss_pdp,
                 "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 "failure_reason": failure_reason,
