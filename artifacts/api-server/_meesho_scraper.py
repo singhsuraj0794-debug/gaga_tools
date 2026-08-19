@@ -19,6 +19,9 @@ import sys
 import traceback
 
 PROXY = os.environ.get("MEESHO_PROXY", "") or os.environ.get("SCRAPER_PROXY", "")
+# Separate Chrome CDP instance used ONLY for scraping (runs through Webshare proxy).
+# Monitoring uses its own Chrome on port 9222 (no proxy) — these never conflict.
+CDP_URL = os.environ.get("SCRAPER_CDP_URL", "http://localhost:9223")
 SCRAPE_DO_TOKEN = os.environ.get("SCRAPE_DO_TOKEN", "")
 SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "") or f"https://api.scraperapi.com?api_key={SCRAPERAPI_KEY}&url="
@@ -162,10 +165,10 @@ def _try_playwright(url: str) -> str:
         import time, urllib.request
         from playwright.sync_api import sync_playwright
 
-        urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+        urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=5)
 
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            browser = p.chromium.connect_over_cdp(CDP_URL)
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -665,13 +668,13 @@ def extract_page(store_url: str, page_num: int) -> dict:
         import time as _time
         import urllib.request
         from playwright.sync_api import sync_playwright
-        urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+        urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=5)
     except Exception as e:
         return {"products": [], "hasMore": False, "error": f"Chrome CDP not available: {e}"}
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            browser = p.chromium.connect_over_cdp(CDP_URL)
             ctx = browser.new_context()
             page = ctx.new_page()
             page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
@@ -772,7 +775,7 @@ def _extract_via_browser(url_clean: str, store_url: str) -> dict:
         from playwright.sync_api import sync_playwright
 
         # Verify Chrome CDP is available
-        urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+        urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=5)
     except Exception as e:
         return {"products": [], "errors": [f"Chrome CDP not available: {e}"], "store_name": "", "total_pages": 0, "total_products": 0, "total_unique": 0}
 
@@ -782,7 +785,7 @@ def _extract_via_browser(url_clean: str, store_url: str) -> dict:
     errors = []
     try:
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            browser = p.chromium.connect_over_cdp(CDP_URL)
             ctx = browser.new_context()
             page = ctx.new_page()
 
