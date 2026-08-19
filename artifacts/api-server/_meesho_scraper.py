@@ -133,7 +133,7 @@ def _is_bot_page(html: str) -> bool:
     return any(checks)
 
 
-def _try_curl_cffi(url: str, impersonate: str = "chrome110") -> str:
+def _try_curl_cffi(url: str, impersonate: str = "safari15_5") -> str:
     """Fetch via curl_cffi with browser impersonation — bypasses Akamai."""
     kwargs = dict(impersonate=impersonate, timeout=30)
     if PROXY:
