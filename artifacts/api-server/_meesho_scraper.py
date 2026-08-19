@@ -697,8 +697,12 @@ def extract_page(store_url: str, page_num: int) -> dict:
         return {"products": [], "hasMore": False, "error": f"Chrome CDP not available: {e}"}
 
     products = []
+    seen = set()
     last_error = None
-    for attempt in range(3):  # retry only when a page loads ZERO products (transient block/load failure)
+    # Retry while we have fewer than a full page (20) — a short page is either a
+    # slow/partial load (retry helps) or the genuine last page (we accept whatever
+    # we got). Accumulate unique links across attempts.
+    for attempt in range(3):
         try:
             with sync_playwright() as p:
                 browser = p.chromium.connect_over_cdp(EXTRACT_CDP_URL)
@@ -706,28 +710,30 @@ def extract_page(store_url: str, page_num: int) -> dict:
                 page = ctx.new_page()
                 page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
 
-                # Poll for products — up to ~12s (a full page has 20; the last page has fewer)
+                # Poll + scroll for products to load (up to ~10s per attempt)
                 links = page.locator("a[href*='/p/']")
-                deadline = _time.time() + 12
+                deadline = _time.time() + 10
                 while _time.time() < deadline and links.count() < 20:
-                    _time.sleep(1)
+                    _time.sleep(0.8)
                     try:
-                        page.mouse.wheel(0, 2000)
+                        page.mouse.wheel(0, 2500)
                     except Exception:
                         pass
 
-                products = _grab_product_links(page)
+                for item in _grab_product_links(page):
+                    if item["url"] not in seen:
+                        seen.add(item["url"])
+                        products.append(item)
                 page.close()
                 ctx.close()
 
-                # Any products means this is a valid page (last page may have <20). Return immediately.
-                if len(products) > 0:
-                    break
-                # Zero products → likely a failed load or transient block; retry with a fresh IP
-                _time.sleep(1.5)
+                if len(products) >= 20:
+                    break  # full page loaded
+                # Fewer than 20 → retry (partial load or last page); stop after 3 attempts
+                _time.sleep(1)
         except Exception as e:
             last_error = str(e)
-            _time.sleep(1.5)
+            _time.sleep(1)
             continue
 
     # A page that still has 0 products after retries = end of the store
