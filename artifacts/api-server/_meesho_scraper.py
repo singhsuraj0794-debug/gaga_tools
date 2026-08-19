@@ -654,27 +654,42 @@ def _clean(s: str) -> str:
 
 
 def extract_store(store_url: str) -> dict:
-    """Extract all products from a Meesho store across all pages."""
+    """Extract all products from a Meesho store across all pages.
+
+    Meri Shop pages are client-side rendered: products load via JS + scroll and
+    the products API is Akamai-protected. So we use the real browser (Chrome CDP)
+    to load the page, scroll to trigger lazy-loading, and grab the /p/ product links.
+    """
     url_clean = store_url.split("?")[0].rstrip("/")
-    first_url = _build_store_url(url_clean, 1)
-    html = _try_curl_cffi(first_url) or _fetch(first_url)
-    if not html:
-        return {"status": "failed", "error": f"Could not fetch {store_url}"}
+    if "meesho.com/" in url_clean and not url_clean.rstrip("/").endswith("meesho.com"):
+        # First try the fast path (server-rendered shop) — many shops still SSR
+        try:
+            first_url = _build_store_url(url_clean, 1)
+            html = _try_curl_cffi(first_url)
+            if html and _get_total_count(html) > 0:
+                result = _extract_from_html(html, store_url)
+                if result.get("products"):
+                    return result
+        except Exception:
+            pass
 
-    total_count = _get_total_count(html)
-    total_pages = max(1, (min(total_count, MAX_EXTRACT_PAGES * PAGE_SIZE) + PAGE_SIZE - 1) // PAGE_SIZE) if total_count else MAX_EXTRACT_PAGES
+    # Fall back to real browser (Chrome CDP) — load, scroll, grab /p/ links
+    return _extract_via_browser(url_clean, store_url)
 
+
+def _extract_from_html(html: str, store_url: str) -> dict:
     result = extract_products(html, store_url)
-    all_products = result.get("products", [])
+    total_count = _get_total_count(html)
+    total_pages = max(1, (min(total_count, MAX_EXTRACT_PAGES * PAGE_SIZE) + PAGE_SIZE - 1) // PAGE_SIZE) if total_count else 0
+    all_products = list(result.get("products", []))
     seen_ids = {p["id"] for p in all_products}
     errors = list(result.get("errors", []))
     empty_streak = 0
 
+    url_clean = store_url.split("?")[0].rstrip("/")
     for page in range(2, min(total_pages + 1, MAX_EXTRACT_PAGES + 1)):
         page_url = _build_store_url(url_clean, page)
-        page_html = _try_curl_cffi(page_url)
-        if not page_html:
-            page_html = _fetch_page(page_url)
+        page_html = _try_curl_cffi(page_url) or _fetch_page(page_url)
         if not page_html:
             errors.append(f"Failed to fetch page {page}")
             empty_streak += 1
@@ -701,6 +716,78 @@ def extract_store(store_url: str) -> dict:
         "total_pages": total_pages,
         "total_products": total_count,
         "total_unique": len(all_products),
+    }
+
+
+def _extract_via_browser(url_clean: str, store_url: str) -> dict:
+    """Load the store in real Chrome (CDP), scroll to load products, grab /p/ links."""
+    try:
+        import time as _time
+        import urllib.request
+        from playwright.sync_api import sync_playwright
+
+        # Verify Chrome CDP is available
+        urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+    except Exception as e:
+        return {"products": [], "errors": [f"Chrome CDP not available: {e}"], "store_name": "", "total_pages": 0, "total_products": 0, "total_unique": 0}
+
+    products = []
+    seen = set()
+    store_name = ""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp("http://localhost:9222")
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = ctx.new_page()
+            page.goto(url_clean, wait_until="domcontentloaded", timeout=45000)
+            _time.sleep(6)
+            store_name = page.title() or store_name
+
+            # Scroll repeatedly to trigger lazy-loading of products
+            for _ in range(30):
+                page.mouse.wheel(0, 4000)
+                _time.sleep(1.2)
+                links = page.locator("a[href*='/p/']")
+                count = links.count()
+                if count >= 40 and count <= len(seen) + 5:
+                    break
+                if count > 0:
+                    new = 0
+                    for i in range(count):
+                        href = links.nth(i).get_attribute("href")
+                        if href and href not in seen:
+                            seen.add(href)
+                            new += 1
+                    if new == 0 and count >= 20:
+                        break
+
+            # Final pass: collect all /p/ links
+            seen = set()
+            links = page.locator("a[href*='/p/']")
+            for i in range(links.count()):
+                href = links.nth(i).get_attribute("href")
+                if href and "/p/" in href and href not in seen:
+                    seen.add(href)
+                    product_id = href.rstrip("/").split("/p/")[-1]
+                    products.append({
+                        "id": product_id,
+                        "title": "Untitled",
+                        "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
+                        "status": "pending",
+                        "error": None,
+                    })
+            page.close()
+    except Exception as e:
+        import traceback
+        return {"products": products, "errors": [f"Browser extract failed: {e}"], "store_name": store_name, "total_pages": 0, "total_products": len(products), "total_unique": len(products)}
+
+    return {
+        "products": products,
+        "errors": [],
+        "store_name": store_name,
+        "total_pages": 0,
+        "total_products": len(products),
+        "total_unique": len(products),
     }
 
 
