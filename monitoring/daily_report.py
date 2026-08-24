@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from email_alert import send_email
 from config import SUPABASE_URL, SUPABASE_KEY, SLACK_WEBHOOK_URL
 from rca import generate_rca
+from groq_summary import summarize
 
 HOURS = int(sys.argv[1]) if len(sys.argv) > 1 else 24
 
@@ -137,6 +138,29 @@ def build_report(rows: list[dict]) -> dict:
     }
 
 
+def _groq_prompt(report: dict) -> str:
+    lines = [
+        "Summarize this synthetic-monitoring report for a technical lead. Be concise and actionable: "
+        "what's healthy, what's broken, and the single most important thing to fix next. Use plain English, no markdown.",
+        "",
+        f"Overall health score: {report['overall']}/100 (last {report['hours']}h, {report['total_checks']} checks).",
+        "Per-flow scores:",
+    ]
+    for f in report["flows"]:
+        lines.append(f"- {f['label']}: {f['score']}/100 (pass {f['pass']}, fail {f['fail']}, degraded {f['degraded']})")
+    lines.append("")
+    lines.append("Failing checks and root causes:")
+    for f in report["not_in_order"]:
+        for checks in f["checks"].values():
+            for c in checks:
+                if c["status"] == "fail":
+                    lines.append(f"- {f['label']} / {c['metric']}: {c['step_failed'] or '(threshold exceeded)'}")
+                    rca = c.get("rca")
+                    if rca and rca.get("causes"):
+                        lines.append(f"    causes: {'; '.join(rca['causes'][:2])}")
+    return "\n".join(lines)
+
+
 def format_email(report: dict) -> str:
     lines = [
         "Gajab Synthetic Monitor — Daily Health Summary",
@@ -233,6 +257,11 @@ def main():
     report = build_report(rows)
     email_body = format_email(report)
 
+    # Generate a natural-language executive summary via Groq
+    groq_summary = summarize(_groq_prompt(report), "You are a concise, plain-English monitoring analyst. Report facts only.")
+    if groq_summary:
+        email_body = f"EXECUTIVE SUMMARY\n-----------------\n{groq_summary}\n\n{email_body}"
+
     print("=" * 60)
     print(email_body)
     print("=" * 60)
@@ -244,7 +273,10 @@ def main():
     # Send Slack summary
     if SLACK_WEBHOOK_URL:
         from slack_alert import send_alert
-        send_alert(subject.replace("[GAJAB] ", ""), format_slack(report))
+        slack_body = format_slack(report)
+        if groq_summary:
+            slack_body = f"🤖 *AI Summary:*\n{groq_summary}\n\n{slack_body}"
+        send_alert(subject.replace("[GAJAB] ", ""), slack_body)
 
     return 0
 

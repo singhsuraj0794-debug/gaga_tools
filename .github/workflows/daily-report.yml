@@ -27,3 +27,4 @@ jobs:
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

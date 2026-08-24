@@ -78,4 +78,7 @@ EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
 
 PAGESPEED_API_KEY = os.getenv("PAGESPEED_API_KEY", "")
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "groq/compound-mini")
+
 PAGESPEED_URLS = list(URLS.values())

@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from email_alert import send_email
 from config import SUPABASE_URL, SUPABASE_KEY, SLACK_WEBHOOK_URL
 from rca import generate_rca
+from groq_summary import summarize
 
 DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 7
 
@@ -180,6 +181,23 @@ def format_email(w: dict) -> str:
     return "\n".join(lines)
 
 
+def _groq_prompt(w: dict) -> str:
+    lines = [
+        "Summarize this weekly happy-flow monitoring report for a technical lead. Be concise and actionable: "
+        "which user journeys are failing, the trend over the week, and the single most important fix. Plain English, no markdown.",
+        "",
+        f"Window: last {w['days']} days, {w['total_fails']} total happy-flow failures.",
+        "Per-step pass rates:",
+    ]
+    for s in w["steps"]:
+        lines.append(f"- {s['label']}: {s['pass_rate']}% pass ({s['fail']} fail, {s['degraded']} degraded)")
+    lines.append("")
+    lines.append("Most problematic steps:")
+    for s in w["problem_steps"]:
+        lines.append(f"- {s['label']}: {s['pass_rate']}% pass — {s['last_error'][:120]}")
+    return "\n".join(lines)
+
+
 def format_slack(w: dict) -> str:
     lines = [f"📊 *Weekly Happy-Flow Summary — {w['days']} days*", ""]
     for s in w["steps"]:
@@ -203,6 +221,11 @@ def main():
     w = build_weekly(rows)
     email_body = format_email(w)
 
+    # Natural-language executive summary via Groq
+    groq_summary = summarize(_groq_prompt(w), "You are a concise, plain-English monitoring analyst. Report facts only.")
+    if groq_summary:
+        email_body = f"EXECUTIVE SUMMARY\n-----------------\n{groq_summary}\n\n{email_body}"
+
     print("=" * 60)
     print(email_body)
     print("=" * 60)
@@ -212,7 +235,10 @@ def main():
 
     if SLACK_WEBHOOK_URL:
         from slack_alert import send_alert
-        send_alert(subject.replace("[GAJAB] ", ""), format_slack(w))
+        slack_body = format_slack(w)
+        if groq_summary:
+            slack_body = f"🤖 *AI Summary:*\n{groq_summary}\n\n{slack_body}"
+        send_alert(subject.replace("[GAJAB] ", ""), slack_body)
 
     return 0
 
