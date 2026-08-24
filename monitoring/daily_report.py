@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 from email_alert import send_email
 from config import SUPABASE_URL, SUPABASE_KEY, SLACK_WEBHOOK_URL
+from rca import generate_rca
 
 HOURS = int(sys.argv[1]) if len(sys.argv) > 1 else 24
 
@@ -49,6 +50,20 @@ def _flow_of(page: str) -> str:
     return page  # home, category, product_detail
 
 
+def _rca_check_name(flow: str, metric: str) -> str:
+    if flow in ("home", "category", "product_detail"):
+        return f"lighthouse_{metric}"
+    if flow == "happy_flow":
+        return metric  # "step_mweb_checkout_flow" already contains "checkout_flow"
+    if flow == "feature":
+        return f"feature_{metric}"
+    if flow == "server":
+        return f"server_{metric}"
+    if flow == "api":
+        return f"api_{metric}"
+    return metric
+
+
 def _status_score(status: str) -> float:
     return {"pass": 1.0, "degraded": 0.5, "fail": 0.0}.get(status, 0.0)
 
@@ -62,11 +77,21 @@ def build_report(rows: list[dict]) -> dict:
         flow = _flow_of(r.get("page", ""))
         flows[flow][status] += 1
         flows[flow]["total"] += 1
-        flows[flow]["checks"][r.get("page", "")].append({
+        check = {
             "metric": r.get("metric", ""),
             "status": status,
-            "step_failed": (r.get("step_failed") or "")[:100],
-        })
+            "step_failed": (r.get("step_failed") or "").strip(),
+        }
+        if status in ("fail", "degraded"):
+            detail = check["step_failed"] or (f"{r.get('metric', '')} exceeded threshold" if flow in ("home", "category", "product_detail") else "")
+            rca = generate_rca(_rca_check_name(flow, r.get("metric", "")), detail)
+            check["rca"] = {
+                "summary": rca.get("summary", ""),
+                "causes": rca.get("probable_causes", [])[:3],
+                "actions": rca.get("actions", [])[:3],
+                "severity": rca.get("severity", "medium"),
+            }
+        flows[flow]["checks"][r.get("page", "")].append(check)
 
     # Per-flow scores
     flow_rows = []
@@ -139,8 +164,22 @@ def format_email(report: dict) -> str:
             lines.append(f"🔴 {f['label']} — {f['fail']} failing of {f['total']} checks")
             for page, checks in f["checks"].items():
                 for c in checks:
-                    if c["status"] == "fail":
-                        lines.append(f"   • {page.replace('feature/','').replace('server/','').replace('api/','')} / {c['metric']}: {c['step_failed']}")
+                    if c["status"] != "fail":
+                        continue
+                    page_clean = page.replace("feature/", "").replace("server/", "").replace("api/", "")
+                    lines.append(f"   • {page_clean} / {c['metric']}: {c['step_failed']}")
+                    rca = c.get("rca")
+                    if rca:
+                        if rca.get("summary") and rca["summary"] != c["step_failed"]:
+                            lines.append(f"       🔍 {rca['summary']}")
+                        if rca.get("causes"):
+                            lines.append("       Likely causes:")
+                            for cause in rca["causes"]:
+                                lines.append(f"         - {cause}")
+                        if rca.get("actions"):
+                            lines.append("       Actions:")
+                            for action in rca["actions"]:
+                                lines.append(f"         - {action}")
     else:
         lines.append("No flows are consistently failing today.")
 

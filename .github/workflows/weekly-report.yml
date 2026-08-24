@@ -1,0 +1,29 @@
+name: Weekly Happy-Flow Summary
+
+on:
+  schedule:
+    - cron: "30 4 * * 1"   # 04:30 UTC Monday = 10:00 IST Monday
+  workflow_dispatch:
+
+jobs:
+  weekly-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: pip install -r monitoring/requirements.txt
+
+      - name: Run weekly happy-flow summary (last 7 days)
+        run: python monitoring/weekly_report.py 7
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
