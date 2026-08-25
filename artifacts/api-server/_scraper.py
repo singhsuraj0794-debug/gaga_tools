@@ -55,7 +55,8 @@ def _is_bot_page(html: str) -> bool:
     checks = [
         "sec-if-cpt-container" in html,
         "_abck" in html[:2000],
-        "Access Denied" in html,
+        # "Access Denied" is intentionally NOT here — Flipkart's normal pages embed
+        # the string "Access Denied" inside a JSON error-widget, causing false positives.
         "cf-browser-verification" in html,
         "/cdn-cgi/" in html[:2000],
     ]
@@ -328,6 +329,16 @@ def _regex_fallback(html: str) -> dict:
     m = re.search(r'<h1[^>]*>(.*?)</h1>', html, re.DOTALL)
     if m:
         title = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+
+    # Flipkart now renders client-side: the real title lives in JSON (ogTitle).
+    if not title:
+        m = re.search(r'"ogTitle"\s*:\s*"([^"]{5,200})"', html)
+        if m:
+            title = m.group(1).strip()
+    if not title:
+        m = re.search(r'"seoData"\s*:\s*\{.*?"title"\s*:\s*"([^"]{5,200})"', html, re.DOTALL)
+        if m:
+            title = m.group(1).strip()
 
     imgs = _extract_images_from_html(html)
     price = None
