@@ -340,6 +340,11 @@ def _regex_fallback(html: str) -> dict:
         if m:
             title = m.group(1).strip()
 
+    # Strip Flipkart's SEO suffixes so the title is the clean product name
+    if title:
+        title = re.sub(r"\s*Online at Best Prices?.*$", "", title, flags=re.IGNORECASE).strip()
+        title = re.sub(r"\s*\|\s*Flipkart.*$", "", title, flags=re.IGNORECASE).strip()
+
     imgs = _extract_images_from_html(html)
     price = None
     m = re.search(r"[₹]\s*([\d,]+(?:\.\d{2})?)", html)
