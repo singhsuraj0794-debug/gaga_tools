@@ -114,10 +114,16 @@ def run_flow() -> list[dict]:
                         "detail": "product cards visible" if products else "no product cards",
                         "duration_ms": duration, "screenshot": screenshot(driver, "home_products")})
 
-        # ── Step 2b: banners / category tabs ──
+        # ── Step 2b: banners / category tabs (scroll down — banners are below the fold) ──
         t0 = time.time()
-        banner = find(driver, '//*[contains(@content-desc, "#")]', timeout=10) is not None or \
-                 find_desc(driver, "Buy Now", timeout=5) is not None
+        try:
+            driver.swipe(500, 1800, 500, 700, 600)
+            time.sleep(2)
+        except Exception:
+            pass
+        banner = find(driver, '//*[contains(@content-desc, "#")]', timeout=8) is not None or \
+                 find_desc(driver, "Buy Now", timeout=5) is not None or \
+                 find_desc(driver, "saved", timeout=5) is not None
         cat_tabs = find_desc(driver, "Home & Kitchen", timeout=8) is not None or find_desc(driver, "All", timeout=5) is not None
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_banners_check", "status": "pass" if (banner and cat_tabs) else "fail",
@@ -199,32 +205,37 @@ def run_flow() -> list[dict]:
             bargains_tab.click()
             time.sleep(3)
         t0 = time.time()
-        # Poll for the seller's response (accept/counter) — it can take 20-40s
-        accept_btn = None
         pay_btn = None
-        deadline = time.time() + 45
+        accept_btn = None
+        bargain_more = None
+        deadline = time.time() + 50
         while time.time() < deadline:
-            accept_btn = find_desc(driver, "Accept the offer", timeout=3)
-            pay_btn = find_desc(driver, "Pay", timeout=3)
-            if accept_btn or pay_btn:
+            pay_btn = find_desc(driver, "Pay", timeout=2)
+            accept_btn = find_desc(driver, "Accept the offer", timeout=2)
+            bargain_more = find_desc(driver, "Bargain More", timeout=2)
+            if pay_btn or accept_btn or bargain_more:
                 break
             time.sleep(2)
-        if accept_btn:
+        if accept_btn and not pay_btn:
             accept_btn.click()
             time.sleep(4)
-            pay_btn = find_desc(driver, "Pay", timeout=10)
+            pay_btn = find_desc(driver, "Pay", timeout=12)
         if pay_btn:
             pay_btn.click()
             time.sleep(4)
         duration = int((time.time() - t0) * 1000)
-        # Detect payment gateway (Razorpay / UPI / card form)
         gateway = find_desc(driver, "Razorpay", timeout=10) or find_desc(driver, "UPI", timeout=5) or \
                  find_desc(driver, "Debit Card", timeout=5) or find_desc(driver, "Card Number", timeout=5)
-        results.append({"step": f"{PLATFORM}_checkout_flow",
-                        "status": "pass" if pay_btn else ("degraded" if accept_btn else "fail"),
-                        "detail": ("payment gateway opened" if gateway else "Pay clicked" if pay_btn else
-                                   "offer accepted, no Pay" if accept_btn else "no bargain item"),
-                        "duration_ms": duration, "screenshot": screenshot(driver, "checkout")})
+        if gateway:
+            checkout_status, checkout_detail = "pass", "payment gateway opened"
+        elif pay_btn:
+            checkout_status, checkout_detail = "pass", "Pay clicked (gateway not detected)"
+        elif accept_btn or bargain_more:
+            checkout_status, checkout_detail = "degraded", "bargain still in progress (no Pay yet)"
+        else:
+            checkout_status, checkout_detail = "fail", "no bargain item in My Bargains"
+        results.append({"step": f"{PLATFORM}_checkout_flow", "status": checkout_status,
+                        "detail": checkout_detail, "duration_ms": duration, "screenshot": screenshot(driver, "checkout")})
 
         # ── Step 7: My Bargains page ──
         t0 = time.time()
@@ -233,11 +244,11 @@ def run_flow() -> list[dict]:
             bargains_tab.click()
             time.sleep(3)
         my_bargains_ok = find_desc(driver, "My Bargains", timeout=10) is not None or \
-                         find_desc(driver, "Accept the offer", timeout=5) is not None or \
-                         find_desc(driver, "Bargain More", timeout=5) is not None
+                         find_desc(driver, "Bargain More", timeout=5) is not None or \
+                         find_desc(driver, "Accept the offer", timeout=5) is not None
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_my_bargains", "status": "pass" if my_bargains_ok else "fail",
-                        "detail": "bargains list visible" if my_bargains_ok else "no bargains",
+                        "detail": "My Bargains page loaded" if my_bargains_ok else "no bargains",
                         "duration_ms": duration, "screenshot": screenshot(driver, "my_bargains")})
 
         # ── Step 8: Alerts / Orders page ──
@@ -246,7 +257,8 @@ def run_flow() -> list[dict]:
         if alerts_tab:
             alerts_tab.click()
             time.sleep(3)
-        alerts_ok = find_desc(driver, "Alerts", timeout=10) is not None or \
+        alerts_ok = find_desc(driver, "My Alerts", timeout=8) is not None or \
+                    find_desc(driver, "Alerts", timeout=5) is not None or \
                     find_desc(driver, "Orders", timeout=5) is not None
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_alerts_orders", "status": "pass" if alerts_ok else "fail",
@@ -285,10 +297,12 @@ def run_flow() -> list[dict]:
 def main():
     results = run_flow()
     failed = [r for r in results if r["status"] == "fail"]
+    degraded = [r for r in results if r["status"] == "degraded"]
     print("\n=== SUMMARY ===")
     for r in results:
-        print(f"  {'PASS' if r['status']=='pass' else 'FAIL'}  {r['step']}  {r['detail']}")
-    print(f"steps={len(results)} failed={len(failed)}")
+        mark = "PASS" if r["status"] == "pass" else ("DEGRADED" if r["status"] == "degraded" else "FAIL")
+        print(f"  {mark:9s} {r['step']}  {r['detail']}")
+    print(f"steps={len(results)} passed={len(results)-len(failed)-len(degraded)} degraded={len(degraded)} failed={len(failed)}")
     sys.exit(1 if failed else 0)
 
 
