@@ -159,20 +159,25 @@ def run_flow() -> list[dict]:
                         "detail": f"{len(cat_cards)} category products loaded" if cat_cards else "no category products",
                         "duration_ms": duration, "screenshot": screenshot(driver, "category")})
 
-        # ── Step 4: product detail — pick a random product, retry if no bargain button ──
+        # ── Step 4: product detail — pick a random in-stock product ──
         bargain_btn = None
         chosen = None
         pool = list(cat_cards)
         random.shuffle(pool)
-        for prod in pool[:8]:  # try up to 8 random products
+        for prod in pool[:10]:  # try up to 10 random products
             try:
                 prod.click()
-                time.sleep(3)
-                bargain_btn = find_desc(driver, "Start Bargaining", timeout=6)
+                time.sleep(2.5)
+                # Skip out-of-stock products immediately
+                if find_desc(driver, "Out of Stock", timeout=2):
+                    driver.back()
+                    time.sleep(2)
+                    continue
+                bargain_btn = find_desc(driver, "Start Bargaining", timeout=3)
                 if bargain_btn:
                     chosen = prod
                     break
-                # No bargain button — go back and try another
+                # Not bargainable for another reason — go back and try another
                 driver.back()
                 time.sleep(2)
             except Exception:
@@ -236,10 +241,20 @@ def run_flow() -> list[dict]:
             buy_btn.click()
             time.sleep(4)
         duration = int((time.time() - t0) * 1000)
-        gateway = find_desc(driver, "Razorpay", timeout=8) or find_desc(driver, "UPI", timeout=5) or \
-                 find_desc(driver, "Debit Card", timeout=5) or find_desc(driver, "Card Number", timeout=5)
+        # The checkout page shows "Checkout" / "Pay Online" / "Pay ₹N" (final pay button opens the gateway)
+        checkout_page = find_desc(driver, "Checkout", timeout=8) or find_desc(driver, "Pay Online", timeout=5)
+        pay_now = find_desc(driver, "Pay ₹", timeout=5)
+        gateway = find_desc(driver, "Razorpay", timeout=5) or find_desc(driver, "UPI", timeout=5) or \
+                 find_desc(driver, "Debit Card", timeout=5)
+        if pay_now and not gateway:
+            pay_now.click()
+            time.sleep(4)
+            gateway = find_desc(driver, "Razorpay", timeout=8) or find_desc(driver, "UPI", timeout=5) or \
+                     find_desc(driver, "Debit Card", timeout=5)
         if gateway:
             checkout_status, checkout_detail = "pass", "payment gateway opened"
+        elif checkout_page or pay_now:
+            checkout_status, checkout_detail = "pass", "checkout page reached (Pay ₹ button present)"
         elif buy_btn:
             checkout_status, checkout_detail = "pass", "Buy Now clicked (gateway not detected)"
         elif bargain_more:
@@ -249,9 +264,16 @@ def run_flow() -> list[dict]:
         results.append({"step": f"{PLATFORM}_checkout_flow", "status": checkout_status,
                         "detail": checkout_detail, "duration_ms": duration, "screenshot": screenshot(driver, "checkout")})
 
-        # ── Step 7: My Bargains page ──
+        # ── Step 7: My Bargains page (reset back to main app first) ──
         t0 = time.time()
-        bargains_tab = find_desc(driver, "Bargains", timeout=8)
+        # Back out of the checkout/payment screen, then tap Bargains tab
+        for _ in range(3):
+            try:
+                driver.back()
+                time.sleep(1)
+            except Exception:
+                break
+        bargains_tab = find_desc(driver, "Bargains", timeout=5)
         if bargains_tab:
             bargains_tab.click()
             time.sleep(3)
@@ -293,11 +315,15 @@ def run_flow() -> list[dict]:
         cards2 = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
         random.shuffle(cards2)
         b2_bargain_btn = None
-        for prod in cards2[:6]:
+        for prod in cards2[:10]:
             try:
                 prod.click()
-                time.sleep(3)
-                b2_bargain_btn = find_desc(driver, "Start Bargaining", timeout=6)
+                time.sleep(2.5)
+                if find_desc(driver, "Out of Stock", timeout=2):
+                    driver.back()
+                    time.sleep(2)
+                    continue
+                b2_bargain_btn = find_desc(driver, "Start Bargaining", timeout=3)
                 if b2_bargain_btn:
                     break
                 driver.back()
