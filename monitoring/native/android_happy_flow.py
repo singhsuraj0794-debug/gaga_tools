@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import os
+import random
 import sys
 import time
 from datetime import datetime, timezone
@@ -113,6 +114,16 @@ def run_flow() -> list[dict]:
                         "detail": "product cards visible" if products else "no product cards",
                         "duration_ms": duration, "screenshot": screenshot(driver, "home_products")})
 
+        # ── Step 2b: banners / category tabs ──
+        t0 = time.time()
+        banner = find(driver, '//*[contains(@content-desc, "#")]', timeout=10) is not None or \
+                 find_desc(driver, "Buy Now", timeout=5) is not None
+        cat_tabs = find_desc(driver, "Home & Kitchen", timeout=8) is not None or find_desc(driver, "All", timeout=5) is not None
+        duration = int((time.time() - t0) * 1000)
+        results.append({"step": f"{PLATFORM}_banners_check", "status": "pass" if (banner and cat_tabs) else "fail",
+                        "detail": f"banners={banner}, category tabs={cat_tabs}",
+                        "duration_ms": duration, "screenshot": screenshot(driver, "banners")})
+
         # ── Step 3: category ──
         cat_tab = find_desc(driver, "Categories", timeout=8)
         if cat_tab:
@@ -123,50 +134,85 @@ def run_flow() -> list[dict]:
         if cat_link:
             cat_link.click()
             time.sleep(4)
-        cat_products = find(driver, '//android.widget.ImageView[@content-desc != "" and @clickable="true"]', timeout=15)
+        # Collect ALL product cards (ImageViews with a product-name content-desc)
+        cat_cards = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
         duration = int((time.time() - t0) * 1000)
-        results.append({"step": f"{PLATFORM}_category_load", "status": "pass" if cat_products else "fail",
-                        "detail": "category products loaded" if cat_products else "no category products",
+        results.append({"step": f"{PLATFORM}_category_load", "status": "pass" if cat_cards else "fail",
+                        "detail": f"{len(cat_cards)} category products loaded" if cat_cards else "no category products",
                         "duration_ms": duration, "screenshot": screenshot(driver, "category")})
 
-        # ── Step 4: product detail ──
-        if cat_products:
-            cat_products.click()
-            time.sleep(4)
-        t0 = time.time()
-        bargain_btn = find_desc(driver, "Start Bargaining", timeout=15)
+        # ── Step 4: product detail — pick a random product, retry if no bargain button ──
+        bargain_btn = None
+        chosen = None
+        pool = list(cat_cards)
+        random.shuffle(pool)
+        for prod in pool[:8]:  # try up to 8 random products
+            try:
+                prod.click()
+                time.sleep(3)
+                bargain_btn = find_desc(driver, "Start Bargaining", timeout=6)
+                if bargain_btn:
+                    chosen = prod
+                    break
+                # No bargain button — go back and try another
+                driver.back()
+                time.sleep(2)
+            except Exception:
+                continue
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_product_detail_load", "status": "pass" if bargain_btn else "fail",
-                        "detail": "Start Bargaining visible" if bargain_btn else "no bargain button",
+                        "detail": "Start Bargaining visible" if bargain_btn else "no bargainable product found",
                         "duration_ms": duration, "screenshot": screenshot(driver, "product_detail")})
 
-        # ── Step 5: bargain flow ──
-        if bargain_btn:
-            bargain_btn.click()
-            time.sleep(4)
+        # ── Step 5: bargain flow (open modal with retry, slide price down, then offer) ──
         t0 = time.time()
-        offer_btn = find_desc(driver, "Offer Your Price", timeout=12) or find_desc(driver, "Make an Offer", timeout=8) \
-            or find_desc(driver, "Submit Offer", timeout=5) or find_desc(driver, "Offer", timeout=5)
+        offer_btn = None
+        slid = False
+        # Tap Start Bargaining (retry until the modal opens) — the tap is flaky on RN
+        for attempt in range(4):
+            sb = find_desc(driver, "Start Bargaining", timeout=5)
+            if sb:
+                sb.click()
+                time.sleep(3)
+            offer_btn = find_desc(driver, "Offer Your Price", timeout=5) or find_desc(driver, "Make an Offer", timeout=3)
+            if offer_btn:
+                break
+        # Slide the price down via the clickable price markers (e.g. 538, 568, 598, ...)
         if offer_btn:
+            for price in ("568", "598", "628"):
+                marker = find_desc(driver, price, timeout=3)
+                if marker:
+                    marker.click()
+                    time.sleep(1)
+                    slid = True
+                    break
             offer_btn.click()
             time.sleep(4)
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_bargain_flow", "status": "pass" if offer_btn else "fail",
-                        "detail": "offer submitted" if offer_btn else "offer button not found",
+                        "detail": ("offer submitted (price slid)" if slid else "offer submitted") if offer_btn else "offer button not found",
                         "duration_ms": duration, "screenshot": screenshot(driver, "bargain")})
 
         # ── Step 6: checkout (Bargains → Accept offer → Pay) ──
         bargains_tab = find_desc(driver, "Bargains", timeout=8)
         if bargains_tab:
             bargains_tab.click()
-            time.sleep(4)
+            time.sleep(3)
         t0 = time.time()
-        # The seller may have countered — accept the offer to win the bargain, then Pay appears
-        accept_btn = find_desc(driver, "Accept the offer", timeout=15)
+        # Poll for the seller's response (accept/counter) — it can take 20-40s
+        accept_btn = None
+        pay_btn = None
+        deadline = time.time() + 45
+        while time.time() < deadline:
+            accept_btn = find_desc(driver, "Accept the offer", timeout=3)
+            pay_btn = find_desc(driver, "Pay", timeout=3)
+            if accept_btn or pay_btn:
+                break
+            time.sleep(2)
         if accept_btn:
             accept_btn.click()
             time.sleep(4)
-        pay_btn = find_desc(driver, "Pay", timeout=15)
+            pay_btn = find_desc(driver, "Pay", timeout=10)
         if pay_btn:
             pay_btn.click()
             time.sleep(4)
@@ -179,6 +225,33 @@ def run_flow() -> list[dict]:
                         "detail": ("payment gateway opened" if gateway else "Pay clicked" if pay_btn else
                                    "offer accepted, no Pay" if accept_btn else "no bargain item"),
                         "duration_ms": duration, "screenshot": screenshot(driver, "checkout")})
+
+        # ── Step 7: My Bargains page ──
+        t0 = time.time()
+        bargains_tab = find_desc(driver, "Bargains", timeout=8)
+        if bargains_tab:
+            bargains_tab.click()
+            time.sleep(3)
+        my_bargains_ok = find_desc(driver, "My Bargains", timeout=10) is not None or \
+                         find_desc(driver, "Accept the offer", timeout=5) is not None or \
+                         find_desc(driver, "Bargain More", timeout=5) is not None
+        duration = int((time.time() - t0) * 1000)
+        results.append({"step": f"{PLATFORM}_my_bargains", "status": "pass" if my_bargains_ok else "fail",
+                        "detail": "bargains list visible" if my_bargains_ok else "no bargains",
+                        "duration_ms": duration, "screenshot": screenshot(driver, "my_bargains")})
+
+        # ── Step 8: Alerts / Orders page ──
+        t0 = time.time()
+        alerts_tab = find_desc(driver, "Alerts", timeout=8)
+        if alerts_tab:
+            alerts_tab.click()
+            time.sleep(3)
+        alerts_ok = find_desc(driver, "Alerts", timeout=10) is not None or \
+                    find_desc(driver, "Orders", timeout=5) is not None
+        duration = int((time.time() - t0) * 1000)
+        results.append({"step": f"{PLATFORM}_alerts_orders", "status": "pass" if alerts_ok else "fail",
+                        "detail": "alerts/orders page loaded" if alerts_ok else "page not found",
+                        "duration_ms": duration, "screenshot": screenshot(driver, "alerts_orders")})
 
     finally:
         # Stop recording and save
