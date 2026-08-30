@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from config import (
-    VIEWPORT, VIEWPORT_IOS, VIEWPORT_DESKTOP, DEVICE_SCALE_FACTOR, IOS_SCALE_FACTOR, GEOLOCATION,
+    VIEWPORT, VIEWPORT_DESKTOP, DEVICE_SCALE_FACTOR, GEOLOCATION,
     PAGE_TIMEOUT, NAV_TIMEOUT, TIME_BUDGETS_SECONDS,
     OTP_TIMEOUT, OTP_POLL_INTERVAL, MONITOR_PHONE,
     TWILIO_SID, TWILIO_AUTH_TOKEN,
@@ -968,18 +968,12 @@ def _run_platform_flow(platform: str) -> list[dict]:
     step_prefix = _STEP_PREFIX
     
     # Platform-specific config
-    if platform == "android":
+    if platform == "mweb":
         viewport = VIEWPORT
         scale = DEVICE_SCALE_FACTOR
         is_mobile = True
         has_touch = True
-        ua = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-    elif platform == "ios":
-        viewport = VIEWPORT_IOS
-        scale = IOS_SCALE_FACTOR
-        is_mobile = True
-        has_touch = True
-        ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+        ua = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     else:  # web
         viewport = VIEWPORT_DESKTOP
         scale = 1

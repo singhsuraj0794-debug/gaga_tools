@@ -55,7 +55,7 @@ def _rca_check_name(flow: str, metric: str) -> str:
     if flow in ("home", "category", "product_detail"):
         return f"lighthouse_{metric}"
     if flow == "happy_flow":
-        return metric  # "step_android_checkout_flow" already contains "checkout_flow"
+        return metric  # "step_mweb_checkout_flow" already contains "checkout_flow"
     if flow == "feature":
         return f"feature_{metric}"
     if flow == "server":

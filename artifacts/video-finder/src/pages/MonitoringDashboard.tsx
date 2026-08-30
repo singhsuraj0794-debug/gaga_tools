@@ -5,7 +5,7 @@ import {
   Activity, ArrowLeft, BarChart3, Loader2, AlertTriangle,
   CheckCircle, MinusCircle, Clock, Camera, Info, Globe,
   Bug, Search, Image, DollarSign, Server, Cpu, ShoppingCart,
-  Smartphone, Monitor, Apple,
+  Smartphone, Monitor,
 } from "lucide-react";
 
 const _SUPABASE_URL = "https://okxyskmjsmtykblrtmyi.supabase.co";
@@ -252,7 +252,7 @@ function GroupMetrics({ runs, title, icon }: { runs: Run[]; title: string; icon:
 export default function MonitoringDashboard() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState<"android" | "ios" | "web">("android");
+  const [platform, setPlatform] = useState<"mweb" | "web">("mweb");
 
   async function fetchRuns() {
     const url = import.meta.env.VITE_SUPABASE_URL || _SUPABASE_URL;
@@ -346,7 +346,7 @@ export default function MonitoringDashboard() {
     { key: "bargain2_flow", label: "Bargain 2" },
   ];
 
-  const PLATFORMS = ["android", "ios", "web"];
+  const PLATFORMS = ["mweb", "web"];
 
   function pagePage(page: string) {
     if (page === "home" || page === "lighthouse/home") return "home";
@@ -419,20 +419,12 @@ export default function MonitoringDashboard() {
                   {/* Platform tabs */}
                   <div className="flex gap-1 mb-3 p-0.5 bg-slate-100 rounded-lg">
                     <button
-                      onClick={() => setPlatform("android")}
+                      onClick={() => setPlatform("mweb")}
                       className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                        platform === "android" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                        platform === "mweb" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
                       }`}
                     >
-                      <Smartphone className="h-3.5 w-3.5" /> Android
-                    </button>
-                    <button
-                      onClick={() => setPlatform("ios")}
-                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                        platform === "ios" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                      }`}
-                    >
-                      <Apple className="h-3.5 w-3.5" /> iOS
+                      <Smartphone className="h-3.5 w-3.5" /> Mweb
                     </button>
                     <button
                       onClick={() => setPlatform("web")}
