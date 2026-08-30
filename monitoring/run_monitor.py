@@ -116,11 +116,11 @@ def main():
         flow_results = []
     flow_overall = "pass"
     # First pass: upload videos for each platform
-    video_urls = {}  # {"mweb": url, "web": url}
+    video_urls = {}  # {"android": url, "ios": url, "web": url}
     for step in flow_results:
         if step.get("step", "").endswith("session_recording") and step.get("video_path"):
             step_name = step["step"]
-            platform = "mweb" if step_name.startswith("mweb_") else "web" if step_name.startswith("web_") else "unknown"
+            platform = next((p for p in ("android", "ios", "web") if step_name.startswith(f"{p}_")), "unknown")
             if platform not in video_urls:
                 video_urls[platform] = store.upload_video(step["video_path"], platform=platform)
                 print(f"[MONITOR] Video uploaded for {platform}: {video_urls[platform]}", flush=True)
@@ -139,7 +139,7 @@ def main():
         console_errors = step.get("console_errors", [])
         sub_steps = step.get("sub_steps", [])
         # Determine which platform this step belongs to
-        platform = "mweb" if step_name.startswith("mweb_") else "web" if step_name.startswith("web_") else None
+        platform = next((p for p in ("android", "ios", "web") if step_name.startswith(f"{p}_")), None)
         details = {
             "failure_reason": failure_reason or error,
             "console_errors": console_errors,

@@ -16,12 +16,14 @@ NAV_TIMEOUT = int(os.getenv("MONITOR_NAV_TIMEOUT", "30000"))
 OTP_TIMEOUT = int(os.getenv("MONITOR_OTP_TIMEOUT", "30"))
 OTP_POLL_INTERVAL = int(os.getenv("MONITOR_OTP_POLL_INTERVAL", "3"))
 
-VIEWPORT = {"width": 430, "height": 932}
+VIEWPORT = {"width": 430, "height": 932}        # android mobile
+VIEWPORT_IOS = {"width": 390, "height": 844}    # ios mobile (iPhone)
 VIEWPORT_DESKTOP = {"width": 1440, "height": 900}
 DEVICE_SCALE_FACTOR = 2
+IOS_SCALE_FACTOR = 3
 GEOLOCATION = {"latitude": 19.4560, "longitude": 72.8054}
 
-PLATFORMS = ["mweb", "web"]  # mweb = mobile, web = desktop
+PLATFORMS = ["android", "ios", "web"]  # android = mobile chrome, ios = mobile safari, web = desktop
 
 URLS = {
     "home": os.getenv("MONITOR_URL_HOME", "https://gajab.go.link/k9bGV"),

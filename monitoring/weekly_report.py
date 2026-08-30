@@ -46,20 +46,19 @@ STEP_LABELS = {
 
 
 def _step_base(metric: str) -> str:
-    # metric like "step_mweb_checkout_flow" -> "mweb:checkout_flow"
+    # metric like "step_android_checkout_flow" -> "checkout_flow"
     if metric.startswith("step_"):
         metric = metric[5:]
-    for plat in ("mweb_", "web_"):
+    for plat in ("android_", "ios_", "web_"):
         if metric.startswith(plat):
             return metric[len(plat):]
     return metric
 
 
 def _platform(metric: str) -> str:
-    if metric.startswith("step_mweb"):
-        return "mweb"
-    if metric.startswith("step_web"):
-        return "web"
+    for plat in ("android", "ios", "web"):
+        if metric.startswith(f"step_{plat}"):
+            return plat
     return "?"
 
 
