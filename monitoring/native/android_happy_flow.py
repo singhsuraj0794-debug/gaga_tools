@@ -148,7 +148,9 @@ def run_flow() -> list[dict]:
             pass
         banner = find(driver, '//*[contains(@content-desc, "#")]', timeout=8) is not None or \
                  find_desc(driver, "Buy Now", timeout=5) is not None or \
-                 find_desc(driver, "saved", timeout=5) is not None
+                 find_desc(driver, "saved", timeout=5) is not None or \
+                 find_desc(driver, "gift card", timeout=5) is not None or \
+                 find_desc(driver, "Code", timeout=5) is not None
         cat_tabs = find_desc(driver, "Home & Kitchen", timeout=8) is not None or find_desc(driver, "All", timeout=5) is not None
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_banners_check", "status": "pass" if (banner and cat_tabs) else "fail",
@@ -156,14 +158,23 @@ def run_flow() -> list[dict]:
                         "duration_ms": duration, "screenshot": screenshot(driver, "banners")})
 
         # ── Step 3: category ──
+        # Scroll back to top first (banners_check scrolled down)
+        driver.swipe(540, 600, 540, 1800, 600)
+        time.sleep(1)
         cat_tab = find_desc(driver, "Categories", timeout=8)
         if cat_tab:
             cat_tab.click()
             time.sleep(3)
+        # Verify we're on Categories page (should NOT have home-page category tabs like "All", "Home & Kitchen")
+        # On the Categories page, look for category-specific content-desc links
         t0 = time.time()
-        cat_link = find_desc(driver, "Home & Kitchen", timeout=12)
+        # The Categories page has distinct category entries — try several known ones
+        cat_link = (find_desc(driver, "Sporting Goods", timeout=8) or
+                    find_desc(driver, "Kitchen & Dining", timeout=5) or
+                    find_desc(driver, "Household Appliances", timeout=5) or
+                    find_desc(driver, "Lawn & Garden", timeout=5))
         if cat_link:
-            cat_link.click()
+            tap_center(driver, cat_link)
             time.sleep(4)
         # Collect ALL product cards (ImageViews with a product-name content-desc)
         cat_cards = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
@@ -338,26 +349,30 @@ def run_flow() -> list[dict]:
                 time.sleep(0.5)
             except Exception:
                 break
-        bazaar_tab = find_desc(driver, "Bazaar", timeout=5)
-        if bazaar_tab:
-            bazaar_tab.click()
-            time.sleep(2)
-        # Look for search icon/bar on home screen
-        search_icon = find_desc(driver, "Search", timeout=8) or \
-                      find(driver, '//*[contains(@content-desc, "search") or contains(@content-desc, "Search")]', 5) or \
-                      find(driver, '//android.widget.EditText', 5)
-        if search_icon:
+        # Search bar is on the Categories page, so navigate there first
+        cat_tab3 = find_desc(driver, "Categories", timeout=5)
+        if cat_tab3:
+            cat_tab3.click()
+            time.sleep(3)
+        # On Categories page, the search bar at top shows the current category name — tap it
+        search_field = find(driver, '//android.widget.EditText', 5)
+        if not search_field:
+            # Try tapping any text that looks like a search bar (Sporting Goods, Kitchen & Dining, etc.)
+            search_field = (find_desc(driver, "Sporting Goods", timeout=3) or
+                           find_desc(driver, "Kitchen & Dining", timeout=3) or
+                           find_desc(driver, "Search", timeout=3))
+        if search_field:
             try:
-                search_icon.click()
+                search_field.click()
                 time.sleep(2)
             except Exception:
-                tap_center(driver, search_icon)
+                tap_center(driver, search_field)
                 time.sleep(2)
             # Type search query
-            search_field = find(driver, '//android.widget.EditText', 5)
-            if search_field:
-                search_field.clear()
-                search_field.send_keys("cricket bat")
+            search_input = find(driver, '//android.widget.EditText', 5)
+            if search_input:
+                search_input.clear()
+                search_input.send_keys("cricket bat")
                 time.sleep(3)
                 # Check for search results
                 results_found = find(driver, '//*[contains(@text, "cricket") or contains(@text, "Cricket")]', 8) is not None
