@@ -340,7 +340,13 @@ def run_flow() -> list[dict]:
         t0 = time.time()
         search_ok = False
         search_detail = "search not available"
-        # Navigate back to home/Bazaar first
+        # Relaunch app if it was backgrounded
+        try:
+            driver.activate_app(APP_PACKAGE)
+            time.sleep(2)
+        except Exception:
+            pass
+        # Navigate back to app home first
         for _ in range(10):
             if find_desc(driver, "Bazaar", timeout=1) or find_desc(driver, "Categories", timeout=1):
                 break
@@ -349,32 +355,38 @@ def run_flow() -> list[dict]:
                 time.sleep(0.5)
             except Exception:
                 break
-        # Search bar is on the Categories page, so navigate there first
+        # Go to Categories page where the search icon is
         cat_tab3 = find_desc(driver, "Categories", timeout=5)
         if cat_tab3:
             cat_tab3.click()
             time.sleep(3)
-        # On Categories page, the search bar at top shows the current category name — tap it
-        search_field = find(driver, '//android.widget.EditText', 5)
-        if not search_field:
-            # Try tapping any text that looks like a search bar (Sporting Goods, Kitchen & Dining, etc.)
-            search_field = (find_desc(driver, "Sporting Goods", timeout=3) or
-                           find_desc(driver, "Kitchen & Dining", timeout=3) or
-                           find_desc(driver, "Search", timeout=3))
-        if search_field:
+        # The search icon is a magnifying glass ImageView in the top-right of the header
+        # Try finding it by class + position (top 100px of screen)
+        search_icon = None
+        icons = driver.find_elements("xpath", '//android.widget.ImageView[@clickable="true"]')
+        for icon in icons:
             try:
-                search_field.click()
+                rect = icon.rect
+                if rect["y"] < 120 and rect["x"] > 400:  # top-right area
+                    search_icon = icon
+                    break
+            except Exception:
+                continue
+        if not search_icon:
+            search_icon = find_desc(driver, "Search", timeout=5)
+        if search_icon:
+            try:
+                search_icon.click()
                 time.sleep(2)
             except Exception:
-                tap_center(driver, search_field)
+                tap_center(driver, search_icon)
                 time.sleep(2)
-            # Type search query
+            # Type search query in the EditText that appears
             search_input = find(driver, '//android.widget.EditText', 5)
             if search_input:
                 search_input.clear()
                 search_input.send_keys("cricket bat")
                 time.sleep(3)
-                # Check for search results
                 results_found = find(driver, '//*[contains(@text, "cricket") or contains(@text, "Cricket")]', 8) is not None
                 no_results = find(driver, '//*[contains(@text, "No results") or contains(@text, "no results") or contains(@text, "did not match")]', 5) is not None
                 if results_found:
@@ -386,14 +398,15 @@ def run_flow() -> list[dict]:
                 else:
                     search_ok = True
                     search_detail = "search submitted"
-                # Go back to home after search
-                try:
-                    driver.back()
-                    time.sleep(1)
-                    driver.back()
-                    time.sleep(1)
-                except Exception:
-                    pass
+                # Navigate back safely (check we're still in the app)
+                for _ in range(5):
+                    if find_desc(driver, "Bazaar", timeout=1) or find_desc(driver, "Categories", timeout=1):
+                        break
+                    try:
+                        driver.back()
+                        time.sleep(0.5)
+                    except Exception:
+                        break
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_search_products", "status": "pass" if search_ok else "degraded",
                         "detail": search_detail,
@@ -403,6 +416,12 @@ def run_flow() -> list[dict]:
         t0 = time.time()
         b2_offer = None
         b2_slid = False
+        # Relaunch app if it was backgrounded by search step
+        try:
+            driver.activate_app(APP_PACKAGE)
+            time.sleep(2)
+        except Exception:
+            pass
         # Ensure bottom nav is visible
         for _ in range(10):
             if find_desc(driver, "Categories", timeout=1) or find_desc(driver, "Bazaar", timeout=1):
