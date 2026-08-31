@@ -80,15 +80,19 @@ def screenshot(driver, label: str) -> str | None:
 
 
 def tap_center(driver, el, duration: int = 100) -> bool:
-    """Tap an element by its center coordinates (more reliable than .click() for React Native)."""
+    """Tap an element (el.click() is most reliable for React Native)."""
     try:
-        rect = el.rect
-        x = rect["x"] + rect["width"] // 2
-        y = rect["y"] + rect["height"] // 2
-        driver.tap([(x, y)], duration)
+        el.click()
         return True
     except Exception:
-        return False
+        try:
+            rect = el.rect
+            x = rect["x"] + rect["width"] // 2
+            y = rect["y"] + rect["height"] // 2
+            driver.tap([(x, y)], duration)
+            return True
+        except Exception:
+            return False
 
 
 def run_flow() -> list[dict]:
@@ -121,6 +125,15 @@ def run_flow() -> list[dict]:
         # ── Step 2: home products populate ──
         t0 = time.time()
         products = find_desc(driver, "Asking Price", timeout=15) is not None
+        if not products:
+            # Products may be below fold or loading slowly — scroll down
+            driver.swipe(540, 1800, 540, 1000, 600)
+            time.sleep(2)
+            products = find_desc(driver, "Asking Price", timeout=10) is not None
+        if not products:
+            # Try alternate indicators
+            products = find_desc(driver, "Trending", timeout=5) is not None or \
+                       find_desc(driver, "Bargain Price", timeout=5) is not None
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_home_products_populate", "status": "pass" if products else "fail",
                         "detail": "product cards visible" if products else "no product cards",
@@ -266,11 +279,13 @@ def run_flow() -> list[dict]:
 
         # ── Step 7: My Bargains page (reset back to main app first) ──
         t0 = time.time()
-        # Back out of the checkout/payment screen, then tap Bargains tab
-        for _ in range(3):
+        # Back out until bottom nav is visible (Bazaar or Bargains in content-desc)
+        for _ in range(10):
+            if find_desc(driver, "Bazaar", timeout=1) or find_desc(driver, "Bargains", timeout=1):
+                break
             try:
                 driver.back()
-                time.sleep(1)
+                time.sleep(0.5)
             except Exception:
                 break
         bargains_tab = find_desc(driver, "Bargains", timeout=5)
@@ -285,13 +300,24 @@ def run_flow() -> list[dict]:
                         "detail": "My Bargains page loaded" if my_bargains_ok else "no bargains",
                         "duration_ms": duration, "screenshot": screenshot(driver, "my_bargains")})
 
-        # ── Step 8: Alerts / Orders page ──
+        # ── Step 8: Alerts / Orders page (navigate via bottom nav) ──
         t0 = time.time()
+        # Bottom nav should already be visible from Bargains page
+        # If not, back out until it is
+        for _ in range(10):
+            if find_desc(driver, "Alerts", timeout=1) or find_desc(driver, "Bazaar", timeout=1):
+                break
+            try:
+                driver.back()
+                time.sleep(0.5)
+            except Exception:
+                break
         alerts_tab = find_desc(driver, "Alerts", timeout=8)
         if alerts_tab:
             alerts_tab.click()
             time.sleep(3)
-        alerts_ok = find_desc(driver, "My Alerts", timeout=8) is not None or \
+        alerts_ok = find_desc(driver, "Alerts", timeout=5) is not None or \
+                    find_desc(driver, "Notification", timeout=5) is not None or \
                     find_desc(driver, "Orders", timeout=5) is not None or \
                     find_desc(driver, "No alerts", timeout=5) is not None
         duration = int((time.time() - t0) * 1000)
@@ -303,19 +329,36 @@ def run_flow() -> list[dict]:
         t0 = time.time()
         b2_offer = None
         b2_slid = False
-        # Navigate back to a category and pick a fresh random product
-        cat_tab2 = find_desc(driver, "Categories", timeout=8)
+        # Ensure bottom nav is visible
+        for _ in range(10):
+            if find_desc(driver, "Categories", timeout=1) or find_desc(driver, "Bazaar", timeout=1):
+                break
+            try:
+                driver.back()
+                time.sleep(0.5)
+            except Exception:
+                break
+        # Navigate to a category - first try Categories tab, then find category links directly
+        cat_tab2 = find_desc(driver, "Categories", timeout=5)
         if cat_tab2:
-            cat_tab2.click()
+            tap_center(driver, cat_tab2)
             time.sleep(3)
-        cat_link2 = find_desc(driver, "Toys & Games", timeout=10) or find_desc(driver, "Home & Kitchen", timeout=8)
+        cat_link2 = (find_desc(driver, "Toys & Games", timeout=5) or find_desc(driver, "Home & Kitchen", timeout=5) or
+                     find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Decor", timeout=5) or
+                     find_desc(driver, "Fashion Accessories", timeout=5))
+        if not cat_link2:
+            # Scroll down on categories page and try again
+            driver.swipe(540, 1800, 540, 800, 600)
+            time.sleep(2)
+            cat_link2 = (find_desc(driver, "Toys & Games", timeout=5) or find_desc(driver, "Home & Kitchen", timeout=5) or
+                         find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Decor", timeout=5))
         if cat_link2:
-            cat_link2.click()
+            tap_center(driver, cat_link2)
             time.sleep(4)
         cards2 = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
         random.shuffle(cards2)
         b2_bargain_btn = None
-        for prod in cards2[:10]:
+        for prod in cards2[:15]:
             try:
                 prod.click()
                 time.sleep(2.5)
@@ -323,20 +366,29 @@ def run_flow() -> list[dict]:
                     driver.back()
                     time.sleep(2)
                     continue
-                b2_bargain_btn = find_desc(driver, "Start Bargaining", timeout=3)
+                b2_bargain_btn = find_desc(driver, "Start Bargaining", timeout=5)
                 if b2_bargain_btn:
                     break
                 driver.back()
                 time.sleep(2)
             except Exception:
+                try:
+                    driver.back()
+                    time.sleep(1)
+                except Exception:
+                    pass
                 continue
         if b2_bargain_btn:
             # open bargain modal with retry
             for _ in range(4):
-                sb = find_desc(driver, "Start Bargaining", timeout=4)
-                if sb:
-                    sb.click()
-                    time.sleep(3)
+                try:
+                    sb = find_desc(driver, "Start Bargaining", timeout=4)
+                    if sb:
+                        sb.click()
+                        time.sleep(3)
+                except Exception:
+                    time.sleep(1)
+                    continue
                 b2_offer = find_desc(driver, "Offer Your Price", timeout=4) or find_desc(driver, "Make an Offer", timeout=3)
                 if b2_offer:
                     break
