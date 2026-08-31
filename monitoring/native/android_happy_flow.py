@@ -165,14 +165,44 @@ def run_flow() -> list[dict]:
         if cat_tab:
             cat_tab.click()
             time.sleep(3)
-        # Verify we're on Categories page (should NOT have home-page category tabs like "All", "Home & Kitchen")
-        # On the Categories page, look for category-specific content-desc links
+        # Dismiss keyboard/search if still open from previous run
+        keyboard = find(driver, '//android.view.inputmethod.InputMethodService', 2) or \
+                   find(driver, '//android.widget.Button[@text="✓"]', 2)
+        if keyboard:
+            driver.back()
+            time.sleep(1)
+        # Also check if search bar is focused — press back to dismiss
+        search_bar = find(driver, '//android.widget.EditText', 2)
+        if search_bar:
+            try:
+                focused = search_bar.get_attribute("focused")
+                if focused == "true":
+                    driver.back()
+                    time.sleep(1)
+            except Exception:
+                pass
+        # The Categories page has a grid/list of category entries — look for one that is
+        # a clickable category item (NOT in the search bar, NOT in Recently Viewed)
+        # Category items on the Categories page are typically ImageView or TextView with category name
+        # that have content-desc and are clickable, located below the top area (y > 150)
         t0 = time.time()
-        # The Categories page has distinct category entries — try several known ones
-        cat_link = (find_desc(driver, "Sporting Goods", timeout=8) or
-                    find_desc(driver, "Kitchen & Dining", timeout=5) or
-                    find_desc(driver, "Household Appliances", timeout=5) or
-                    find_desc(driver, "Lawn & Garden", timeout=5))
+        cat_link = None
+        # Try to find category links that are actual list items (below search bar area, y > 200)
+        CAT_NAMES = ["Sporting Goods", "Kitchen & Dining", "Household Appliances",
+                     "Lawn & Garden", "Home & Kitchen", "Toys & Games", "Gaming",
+                     "Beauty & Health", "Electronics", "Fashion Accessories"]
+        for name in CAT_NAMES:
+            els = driver.find_elements("xpath", f'//*[contains(@content-desc, "{name}") or contains(@text, "{name}")]')
+            for el in els:
+                try:
+                    rect = el.rect
+                    if rect["y"] > 200:  # below the search/header area
+                        cat_link = el
+                        break
+                except Exception:
+                    continue
+            if cat_link:
+                break
         if cat_link:
             tap_center(driver, cat_link)
             time.sleep(4)
@@ -361,18 +391,20 @@ def run_flow() -> list[dict]:
             cat_tab3.click()
             time.sleep(3)
         # The search icon is a magnifying glass ImageView in the top-right of the header
-        # Try finding it by class + position (top 100px of screen)
+        # Try finding it by class + position (top 150px of screen, right half)
         search_icon = None
         icons = driver.find_elements("xpath", '//android.widget.ImageView[@clickable="true"]')
         for icon in icons:
             try:
                 rect = icon.rect
-                if rect["y"] < 120 and rect["x"] > 400:  # top-right area
+                # Search icon is in the header (y < 150) and on the right side
+                if rect["y"] < 150 and rect["x"] > 300:
                     search_icon = icon
                     break
             except Exception:
                 continue
         if not search_icon:
+            # Fallback: look for content-desc containing "search" or "Search"
             search_icon = find_desc(driver, "Search", timeout=5)
         if search_icon:
             try:
