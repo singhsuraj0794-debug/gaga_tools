@@ -206,8 +206,32 @@ def run_flow() -> list[dict]:
         if cat_link:
             tap_center(driver, cat_link)
             time.sleep(4)
-        # Collect ALL product cards (ImageViews with a product-name content-desc)
+        # Collect product cards — try multiple selectors since different category pages
+        # use different layouts. Filter out filter/sort elements and header area.
+        cat_cards = []
+        # Try 1: clickable ImageViews with non-empty content-desc (home page products)
         cat_cards = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
+        # Try 2: if few found, also try clickable ViewGroups/FrameLayouts in product grid area
+        if len(cat_cards) < 3:
+            extras = driver.find_elements("xpath", '//android.view.ViewGroup[@clickable="true"]')
+            for el in extras:
+                try:
+                    rect = el.rect
+                    if rect["y"] > 300 and rect["width"] > 100 and rect["height"] > 100:
+                        cat_cards.append(el)
+                except Exception:
+                    continue
+        # Try 3: if still few, look for any clickable element with price text (₹)
+        if len(cat_cards) < 3:
+            price_els = driver.find_elements("xpath", '//*[contains(@text, "₹") and @clickable="true"]')
+            for el in price_els:
+                try:
+                    rect = el.rect
+                    if rect["y"] > 300:
+                        # Find its parent or sibling image
+                        cat_cards.append(el)
+                except Exception:
+                    continue
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_category_load", "status": "pass" if cat_cards else "fail",
                         "detail": f"{len(cat_cards)} category products loaded" if cat_cards else "no category products",
