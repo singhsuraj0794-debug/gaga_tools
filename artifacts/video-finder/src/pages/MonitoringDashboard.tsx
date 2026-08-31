@@ -88,6 +88,7 @@ function Val({ metric, value }: { metric: string; value: number | null }) {
 function VideoPlayer({ url, label }: { url?: string; label: string }) {
   const [open, setOpen] = useState(false);
   if (!url) return null;
+  const videoType = url.endsWith(".mp4") ? "video/mp4" : "video/webm";
   return (
     <div className="mt-1.5">
       <button onClick={() => setOpen(!open)} className="flex items-center gap-1 text-xs text-indigo-500 hover:text-indigo-700">
@@ -95,7 +96,7 @@ function VideoPlayer({ url, label }: { url?: string; label: string }) {
       </button>
       {open && (
         <video controls className="mt-1.5 rounded border max-w-full max-h-64 bg-black">
-          <source src={url} type="video/webm" />
+          <source src={url} type={videoType} />
         </video>
       )}
     </div>
@@ -252,7 +253,7 @@ function GroupMetrics({ runs, title, icon }: { runs: Run[]; title: string; icon:
 export default function MonitoringDashboard() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
-  const [platform, setPlatform] = useState<"mweb" | "web">("mweb");
+  const [platform, setPlatform] = useState<"mweb" | "web" | "android">("mweb");
 
   async function fetchRuns() {
     const url = import.meta.env.VITE_SUPABASE_URL || _SUPABASE_URL;
@@ -276,7 +277,7 @@ export default function MonitoringDashboard() {
   useEffect(() => { fetchRuns(); const i = setInterval(fetchRuns, REFRESH_INTERVAL); return () => clearInterval(i); }, []);
 
   const grouped = useMemo(() => {
-    const happy = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_"));
+    const happy = runs.filter(r => (r.page === "happy_flow" || r.page === "native_happy_flow") && r.metric.startsWith("step_"));
     const lh = runs.filter(r => r.page.startsWith("lighthouse/") || ["home", "category", "product_detail"].includes(r.page));
     const server = runs.filter(r => r.page.startsWith("server/"));
     const api = runs.filter(r => r.page.startsWith("api/"));
@@ -297,9 +298,14 @@ export default function MonitoringDashboard() {
 
   const lastTime = runs[0] ? new Date(runs[0].run_at) : null;
 
-  function groupLatestHappy() {
+  function groupLatestHappy(pageFilter?: string) {
     if (!latestRun) return [];
-    const stepRuns = runs.filter(r => r.page === "happy_flow" && r.metric.startsWith("step_") && runKey(r) === latestRun);
+    const stepRuns = runs.filter(r => {
+      if (!r.metric.startsWith("step_")) return false;
+      if (runKey(r) !== latestRun) return false;
+      if (pageFilter) return r.page === pageFilter;
+      return r.page === "happy_flow" || r.page === "native_happy_flow";
+    });
     const map = new Map<string, Run>();
     for (const r of stepRuns) map.set(r.metric, r);
     return map;
@@ -346,7 +352,19 @@ export default function MonitoringDashboard() {
     { key: "bargain2_flow", label: "Bargain 2" },
   ];
 
-  const PLATFORMS = ["mweb", "web"];
+  const ANDROID_HAPPY_STEPS = [
+    { key: "home_load", label: "Home Page" },
+    { key: "home_products_populate", label: "Product Populate" },
+    { key: "banners_check", label: "Banners" },
+    { key: "category_load", label: "Category Page" },
+    { key: "product_detail_load", label: "Product Detail" },
+    { key: "bargain_flow", label: "Bargain" },
+    { key: "checkout_flow", label: "Checkout" },
+    { key: "my_bargains", label: "My Bargains" },
+    { key: "alerts_orders", label: "Alerts & Orders" },
+    { key: "search_products", label: "Search" },
+    { key: "bargain2_flow", label: "Bargain 2" },
+  ];
 
   function pagePage(page: string) {
     if (page === "home" || page === "lighthouse/home") return "home";
@@ -434,9 +452,17 @@ export default function MonitoringDashboard() {
                     >
                       <Monitor className="h-3.5 w-3.5" /> Desktop
                     </button>
+                    <button
+                      onClick={() => setPlatform("android")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        platform === "android" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                      }`}
+                    >
+                      <Smartphone className="h-3.5 w-3.5" /> Android
+                    </button>
                   </div>
                   {/* Steps for selected platform */}
-                  {HAPPY_STEPS.map(({ key: stepKey, label }) => {
+                  {(platform === "android" ? ANDROID_HAPPY_STEPS : HAPPY_STEPS).map(({ key: stepKey, label }) => {
                     const metric = `step_${platform}_${stepKey}`;
                     const run = latestHappy.get(metric);
                     if (!run) return <div key={metric} className="text-xs text-slate-400 py-1.5 pl-1">No data for {label.toLowerCase()}</div>;

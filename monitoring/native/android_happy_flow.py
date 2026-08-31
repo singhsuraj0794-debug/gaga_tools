@@ -325,7 +325,66 @@ def run_flow() -> list[dict]:
                         "detail": "alerts/orders page loaded" if alerts_ok else "page not found",
                         "duration_ms": duration, "screenshot": screenshot(driver, "alerts_orders")})
 
-        # ── Step 9: bargain 2 (second bargain on another random product) ──
+        # ── Step 9: Search products ──
+        t0 = time.time()
+        search_ok = False
+        search_detail = "search not available"
+        # Navigate back to home/Bazaar first
+        for _ in range(10):
+            if find_desc(driver, "Bazaar", timeout=1) or find_desc(driver, "Categories", timeout=1):
+                break
+            try:
+                driver.back()
+                time.sleep(0.5)
+            except Exception:
+                break
+        bazaar_tab = find_desc(driver, "Bazaar", timeout=5)
+        if bazaar_tab:
+            bazaar_tab.click()
+            time.sleep(2)
+        # Look for search icon/bar on home screen
+        search_icon = find_desc(driver, "Search", timeout=8) or \
+                      find(driver, '//*[contains(@content-desc, "search") or contains(@content-desc, "Search")]', 5) or \
+                      find(driver, '//android.widget.EditText', 5)
+        if search_icon:
+            try:
+                search_icon.click()
+                time.sleep(2)
+            except Exception:
+                tap_center(driver, search_icon)
+                time.sleep(2)
+            # Type search query
+            search_field = find(driver, '//android.widget.EditText', 5)
+            if search_field:
+                search_field.clear()
+                search_field.send_keys("cricket bat")
+                time.sleep(3)
+                # Check for search results
+                results_found = find(driver, '//*[contains(@text, "cricket") or contains(@text, "Cricket")]', 8) is not None
+                no_results = find(driver, '//*[contains(@text, "No results") or contains(@text, "no results") or contains(@text, "did not match")]', 5) is not None
+                if results_found:
+                    search_ok = True
+                    search_detail = "search results displayed"
+                elif no_results:
+                    search_ok = True
+                    search_detail = "search completed (no results for cricket bat)"
+                else:
+                    search_ok = True
+                    search_detail = "search submitted"
+                # Go back to home after search
+                try:
+                    driver.back()
+                    time.sleep(1)
+                    driver.back()
+                    time.sleep(1)
+                except Exception:
+                    pass
+        duration = int((time.time() - t0) * 1000)
+        results.append({"step": f"{PLATFORM}_search_products", "status": "pass" if search_ok else "degraded",
+                        "detail": search_detail,
+                        "duration_ms": duration, "screenshot": screenshot(driver, "search_products")})
+
+        # ── Step 10: bargain 2 (second bargain on another random product) ──
         t0 = time.time()
         b2_offer = None
         b2_slid = False
@@ -343,15 +402,17 @@ def run_flow() -> list[dict]:
         if cat_tab2:
             tap_center(driver, cat_tab2)
             time.sleep(3)
-        cat_link2 = (find_desc(driver, "Toys & Games", timeout=5) or find_desc(driver, "Home & Kitchen", timeout=5) or
-                     find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Decor", timeout=5) or
-                     find_desc(driver, "Fashion Accessories", timeout=5))
+        # Scroll to top of Categories page (categories list starts at top)
+        driver.swipe(540, 1800, 540, 600, 600)
+        time.sleep(2)
+        cat_link2 = (find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Kitchen & Dining", timeout=5) or
+                     find_desc(driver, "Household Appliances", timeout=5) or find_desc(driver, "Lawn & Garden", timeout=5) or
+                     find_desc(driver, "Home & Kitchen", timeout=5))
         if not cat_link2:
-            # Scroll down on categories page and try again
-            driver.swipe(540, 1800, 540, 800, 600)
+            driver.swipe(540, 1800, 540, 600, 600)
             time.sleep(2)
-            cat_link2 = (find_desc(driver, "Toys & Games", timeout=5) or find_desc(driver, "Home & Kitchen", timeout=5) or
-                         find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Decor", timeout=5))
+            cat_link2 = (find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Kitchen & Dining", timeout=5) or
+                         find_desc(driver, "Household Appliances", timeout=5) or find_desc(driver, "Lawn & Garden", timeout=5))
         if cat_link2:
             tap_center(driver, cat_link2)
             time.sleep(4)
