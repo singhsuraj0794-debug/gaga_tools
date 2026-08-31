@@ -492,8 +492,10 @@ export default function MonitoringDashboard() {
                 </SectionCard>
 
                 {grouped.server.length > 0 && (() => {
-                  const latestRun = getLatestRunTime();
-                  const serverLatest = grouped.server.filter(r => runKey(r) === latestRun);
+                  // Use the most recent server run_id (not the global latestRun which may be happy_flow)
+                  const serverRunIds = grouped.server.map(r => runKey(r));
+                  const latestServerRun = serverRunIds.sort().reverse()[0] || latestRun;
+                  const serverLatest = grouped.server.filter(r => runKey(r) === latestServerRun);
                   const byEndpoint = new Map<string, typeof serverLatest>();
                   for (const r of serverLatest) {
                     const name = r.page.replace("server/", "");
@@ -517,8 +519,9 @@ export default function MonitoringDashboard() {
                   );
                 })()}
                 {grouped.api.length > 0 && (() => {
-                  const latestRun = getLatestRunTime();
-                  const apiLatest = grouped.api.filter(r => runKey(r) === latestRun);
+                  const apiRunIds = grouped.api.map(r => runKey(r));
+                  const latestApiRun = apiRunIds.sort().reverse()[0] || latestRun;
+                  const apiLatest = grouped.api.filter(r => runKey(r) === latestApiRun);
                   const byEndpoint = new Map<string, typeof apiLatest>();
                   for (const r of apiLatest) {
                     const name = r.page.replace("api/", "");
@@ -542,7 +545,9 @@ export default function MonitoringDashboard() {
                   );
                 })()}
                 {grouped.feature.length > 0 && (() => {
-                  const featureLatest = grouped.feature.filter(r => runKey(r) === latestRun);
+                  const featureRunIds = grouped.feature.map(r => runKey(r));
+                  const latestFeatureRun = featureRunIds.sort().reverse()[0] || latestRun;
+                  const featureLatest = grouped.feature.filter(r => runKey(r) === latestFeatureRun);
                   const pages = ["home", "category", "product_detail"];
                   return (
                     <SectionCard title="Feature Element Checks" icon={<Bug className="h-3.5 w-3.5" />}>
