@@ -57,3 +57,21 @@ End-user experience monitoring for gajab.com.
 cd monitoring
 python3 run_monitor.py
 ```
+
+## HSN Suggestion (`HSN/` + api-server)
+
+Embedding-based semantic search that maps a scraped product title/description to the closest entries in the GST 2.0 Rate Notification (Notification No. 09/2025), suggesting HSN codes + GST rate. Zero-shot: no training data — the notification itself is the knowledge base.
+
+### Structure
+- `HSN/GST_2.0_Rate_Notification_English.docx` — source notification (7 schedules)
+- `HSN/parse_hsn.py` — parses the docx into structured JSON (code, description, schedule, central tax, GST rate). Run: `python3 parse_hsn.py GST_2.0_Rate_Notification_English.docx hsn_entries.json`
+- `HSN/hsn_entries.json` — 1,195 parsed entries (also copied into `artifacts/api-server/` for deployment)
+- `artifacts/api-server/_hsn_suggest.py` — the ML service: embeds all entries with `sentence-transformers/all-MiniLM-L6-v2` (cached to `.hsn_embeddings.npy`), embeds the product query, returns top-5 by cosine similarity. Uses a `SYNONYMS`/`STOPWORDS` query-expansion lexicon (retail → tariff language).
+- Endpoint: `POST /api/products/hsn-suggest` — body `{ "products": [{ "sku", "title", "description" }] }`; returns `{ results: [{ sku, query, suggestions: [{ hsn, description, gst_rate, central_tax, schedule, confidence, rank }], topGstRate, topSchedule }] }`
+
+### Notes
+- First call downloads the model (~9s) and embeds the 1,195-entry corpus (cached to `.hsn_embeddings.npy` next to the script; delete to rebuild). Subsequent calls reuse the cache.
+- `build.mjs` copies `_hsn_suggest.py` + `hsn_entries.json` into `dist/`.
+- Known limitation: exact 6/8-digit HSN can be imprecise for generic apparel (tends to match fabric/caps chapters), but the GST rate is generally correct. Treat suggestions as human-verifiable candidates, not ground truth.
+
+

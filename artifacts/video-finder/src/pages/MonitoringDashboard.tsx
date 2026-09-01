@@ -298,19 +298,22 @@ export default function MonitoringDashboard() {
 
   const lastTime = runs[0] ? new Date(runs[0].run_at) : null;
 
-  function groupLatestHappy(pageFilter?: string) {
-    if (!latestRun) return [];
+  function groupLatestHappy(forPlatform?: string) {
+    const targetPages = forPlatform === "android" ? ["native_happy_flow"] : ["happy_flow"];
+    // latest run for this platform's page, not global latestRun (native runs are local, separate run_id)
+    const platformRuns = runs.filter(r => targetPages.includes(r.page) && r.metric.startsWith("step_"));
+    const latestForPlatform = platformRuns.length > 0 ? runKey(platformRuns[0]) : latestRun;
+    if (!latestForPlatform) return new Map<string, Run>();
     const stepRuns = runs.filter(r => {
       if (!r.metric.startsWith("step_")) return false;
-      if (runKey(r) !== latestRun) return false;
-      if (pageFilter) return r.page === pageFilter;
-      return r.page === "happy_flow" || r.page === "native_happy_flow";
+      if (runKey(r) !== latestForPlatform) return false;
+      return targetPages.includes(r.page);
     });
     const map = new Map<string, Run>();
     for (const r of stepRuns) map.set(r.metric, r);
     return map;
   }
-  const latestHappy = groupLatestHappy();
+  const latestHappy = groupLatestHappy(platform);
 
   const STEP_ICONS: Record<string, React.ReactNode> = {
     step_home_load: <Globe className="h-4 w-4" />,
