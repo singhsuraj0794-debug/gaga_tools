@@ -40,6 +40,9 @@ CREATE POLICY "anon_can_insert" ON monitoring_runs
 CREATE POLICY "service_can_all" ON monitoring_runs
   FOR ALL USING (true);
 
+-- Issue type field: "product" = real bug, "infra" = timing/infra/session issue
+ALTER TABLE monitoring_runs ADD COLUMN IF NOT EXISTS issue_type TEXT;
+
 -- Storage bucket for monitoring recordings
 INSERT INTO storage.buckets (id, name, public) VALUES ('monitoring', 'monitoring', true)
   ON CONFLICT (id) DO NOTHING;

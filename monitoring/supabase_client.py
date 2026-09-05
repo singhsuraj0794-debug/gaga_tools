@@ -87,7 +87,7 @@ class SupabaseStore:
             print(f"[SUPABASE] Screenshot upload error: {e}")
             return None
 
-    def store_result(self, page_or_flow: str, metric: str, value: float, status: str, step_failed: str | None = None, duration_ms: int | None = None, details: dict | None = None):
+    def store_result(self, page_or_flow: str, metric: str, value: float, status: str, step_failed: str | None = None, duration_ms: int | None = None, details: dict | None = None, issue_type: str | None = None):
         if not self._client:
             print(f"[SUPABASE] Would store: {page_or_flow}/{metric}={value} status={status}")
             return
@@ -103,6 +103,8 @@ class SupabaseStore:
         }
         if details:
             row["details"] = details
+        if issue_type:
+            row["issue_type"] = issue_type  # "product" = real bug, "infra" = timing/infra issue
         try:
             self._client.table("monitoring_runs").insert(row).execute()
         except Exception as e:
@@ -119,7 +121,7 @@ class SupabaseStore:
         for metric, value in metrics.items():
             self.store_result(page_or_flow=page, metric=metric, value=value, status=status)
 
-    def store_flow_step(self, flow_name: str, step: str, duration_ms: int, status: str, error: str | None = None, details: dict | None = None):
+    def store_flow_step(self, flow_name: str, step: str, duration_ms: int, status: str, error: str | None = None, details: dict | None = None, issue_type: str | None = None):
         self.store_result(
             page_or_flow=flow_name,
             metric=f"step_{step}",
@@ -128,6 +130,7 @@ class SupabaseStore:
             step_failed=error,
             duration_ms=duration_ms,
             details=details,
+            issue_type=issue_type,
         )
 
     def upload_session(self, filepath: str) -> str | None:
@@ -202,3 +205,39 @@ class SupabaseStore:
         except Exception as e:
             print(f"[SUPABASE] Query error: {e}")
             return []
+
+    def get_flakiness_rates(self, days: int = 7, min_runs: int = 5) -> dict[str, dict]:
+        """Compute pass/fail ratios per metric over the last N days.
+        Returns: { metric: { pass: N, fail: N, degraded: N, rate: 0.0-1.0, total: N } }
+        Only includes metrics with >= min_runs total runs.
+        """
+        if not self._client:
+            return {}
+        try:
+            from datetime import datetime, timezone, timedelta
+            since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            resp = self._client.table("monitoring_runs").select("metric,status").gte("run_at", since).limit(5000).execute()
+            from collections import Counter
+            by_metric = {}
+            for r in resp.data:
+                m = r["metric"]
+                if m not in by_metric:
+                    by_metric[m] = Counter()
+                by_metric[m][r["status"]] += 1
+            result = {}
+            for m, counts in by_metric.items():
+                total = sum(counts.values())
+                if total < min_runs:
+                    continue
+                passes = counts.get("pass", 0)
+                result[m] = {
+                    "pass": passes,
+                    "fail": counts.get("fail", 0),
+                    "degraded": counts.get("degraded", 0),
+                    "total": total,
+                    "rate": round(passes / total, 3) if total > 0 else 0,
+                }
+            return result
+        except Exception as e:
+            print(f"[SUPABASE] Flakiness query error: {e}")
+            return {}

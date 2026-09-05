@@ -583,7 +583,7 @@ def run_flow() -> list[dict]:
                 details["screenshot_url"] = url
         if video_url:
             details["session_recording_url"] = video_url
-        store.store_flow_step(FLOW_NAME, r["step"], r["duration_ms"], r["status"], None if r["status"] == "pass" else r["detail"], details)
+        store.store_flow_step(FLOW_NAME, r["step"], r["duration_ms"], r["status"], None if r["status"] == "pass" else r["detail"], details, issue_type=r.get("issue_type"))
     return results
 
 

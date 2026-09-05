@@ -157,7 +157,7 @@ def main():
         # Attach the correct platform's video URL
         if platform and platform in video_urls and video_urls[platform]:
             details["session_recording_url"] = video_urls[platform]
-        store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details)
+        store.store_flow_step("happy_flow", step_name, duration, step_status, error or failure_reason or detail[:200] if detail else error, details, issue_type=step.get("issue_type"))
         if step_status in ("fail", "degraded"):
             flow_overall = step_status
             rca_context = error or failure_reason or detail or f"Degraded ({duration}ms)"

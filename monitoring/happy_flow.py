@@ -32,6 +32,55 @@ def log(msg):
     print(f"[HAPPY_FLOW] {msg}", flush=True)
 
 
+def _wait_for_products(page, selector: str = "a[href*='/product-detail/']", min_count: int = 1, timeout_s: int = 15) -> int:
+    """Wait for product grid to populate. Returns count when ready, 0 on timeout."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            count = page.locator(selector).count()
+            if count >= min_count:
+                return count
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return 0
+
+
+def _detect_session_expired(page) -> bool:
+    """Check if the page indicates session/login expiry."""
+    try:
+        url = page.url.lower()
+        body = page.evaluate("() => document.body?.innerText?.substring(0, 2000) || ''")
+        indicators = [
+            "session expired", "session invalid", "please login", "please log in",
+            "sign in", "unauthorized", "access denied", "token expired",
+            "otp", "verify", "login required",
+        ]
+        # URL redirect to login
+        if any(k in url for k in ("signin", "login", "otp", "verify")):
+            return True
+        # Body text contains expiry messages
+        body_lower = body.lower()
+        matches = sum(1 for k in indicators if k in body_lower)
+        if matches >= 2:  # at least 2 indicators = likely session issue
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _retry_once(fn, label: str):
+    """Run fn() once. If it fails, retry once before giving up. Returns (result, retries)."""
+    try:
+        return fn(), 0
+    except Exception as e:
+        log(f"  {label} — first attempt failed ({e}), retrying once...")
+        try:
+            return fn(), 1
+        except Exception as e2:
+            raise e2
+
+
 def _get_twilio_messages(since_ts: datetime):
     from twilio.rest import Client
     client = Client(TWILIO_SID, TWILIO_AUTH_TOKEN)
@@ -1026,36 +1075,46 @@ def _run_platform_flow(platform: str) -> list[dict]:
                 "screenshot": ss_home,
                 "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 "failure_reason": None if has_gajab else "Page title missing 'Gajab'",
+                "issue_type": None if has_gajab else "product",
             })
             _check_budget("home_page_load", duration, results)
 
-            # Step 1b: Smooth human-speed scroll for 10s, track when products first populate
-            log("Step 1b — Scrolling homepage smoothly (10s human-speed)")
+            # Step 1b: Wait for products to load (load-complete signal), then scroll to count
+            log("Step 1b — Waiting for homepage products to load (load-complete signal)")
             pop_t0 = time.time()
             first_product_at = None
-            # Smooth scroll: 40 increments of 150px over ~10s (150ms per step)
-            for i in range(40):
+
+            # Phase 1: Wait for at least 1 product to appear (poll every 500ms, up to 10s)
+            product_count = _wait_for_products(page, min_count=1, timeout_s=10)
+            if product_count > 0:
+                first_product_at = int((time.time() - pop_t0) * 1000)
+                log(f"  First product appeared at {first_product_at}ms")
+
+            # Phase 2: Scroll smoothly to trigger lazy-load, keep polling
+            for i in range(30):
                 page.evaluate("window.scrollBy(0, 150)")
                 time.sleep(0.15)
-                product_links = page.locator("a[href*='/product-detail/']")
-                count = product_links.count()
-                if count >= 1 and first_product_at is None:
-                    first_product_at = int((time.time() - pop_t0) * 1000)
-                    log(f"  First product appeared at {first_product_at}ms (scroll step {i+1})")
+                current = page.locator("a[href*='/product-detail/']").count()
+                if current > product_count:
+                    product_count = current
+                    if first_product_at is None:
+                        first_product_at = int((time.time() - pop_t0) * 1000)
+
             pop_duration_ms = first_product_at or int((time.time() - pop_t0) * 1000)
             product_count = page.locator("a[href*='/product-detail/']").count()
-            log(f"  Final: {product_count} product links visible after 10s scroll")
+            log(f"  Final: {product_count} product links visible")
             ss_pop = _capture_screenshot(page, f"{_STEP_PREFIX}home_products")
             pop_status = "pass" if product_count >= 4 else "fail"
             results.append({
                 "step": _STEP_PREFIX + "home_products_populate",
                 "duration_ms": pop_duration_ms,
                 "status": pop_status,
-                "detail": f"First product at {first_product_at}ms, {product_count} total after 10s scroll",
+                "detail": f"First product at {first_product_at}ms, {product_count} total",
                 "product_count": product_count,
                 "screenshot": ss_pop,
                 "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
-                "failure_reason": None if product_count >= 4 else f"Only {product_count} products after 10s scroll",
+                "failure_reason": None if product_count >= 4 else f"Only {product_count} products loaded",
+                "issue_type": "product" if product_count == 0 else ("infra" if product_count < 4 else None),
             })
             _check_budget("home_products_populate", pop_duration_ms, results)
 
@@ -1121,25 +1180,35 @@ def _run_platform_flow(platform: str) -> list[dict]:
                         pass
 
                 time.sleep(1)
-                # Products are client-side rendered — wait for them to hydrate
-                try:
-                    page.wait_for_selector("a[href*='/product-detail/']", timeout=15000)
-                except PWTimeout:
-                    pass
+                # Wait for products to load (load-complete signal with timeout)
+                product_count = _wait_for_products(page, min_count=1, timeout_s=15)
                 duration = int((time.time() - t0) * 1000)
-                product_links = page.locator("a[href*='/product-detail/']")
-                product_count = product_links.count()
                 has_products = product_count > 0
 
                 ss_cat = _capture_screenshot(page, f"{_STEP_PREFIX}category_{cat_name}")
                 failure_reason = None
+                issue_type = None
                 if not has_products:
-                    failure_reason = f"No product links on {cat_name}"
+                    # Auto-retry once before logging failure
+                    log(f"  {cat_name}: no products found, retrying once...")
+                    try:
+                        page.reload(timeout=NAV_TIMEOUT)
+                        page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT)
+                        product_count = _wait_for_products(page, min_count=1, timeout_s=10)
+                        has_products = product_count > 0
+                        duration = int((time.time() - t0) * 1000)
+                    except Exception:
+                        pass
+                if not has_products:
+                    failure_reason = f"No product links on {cat_name} (after retry)"
+                    issue_type = "product"
                 elif not clicked and not direct_url:
                     failure_reason = f"Nav click failed for {nav_text}"
                 elif duration > TIME_BUDGETS_SECONDS.get("category_page_load", 12) * 1000:
                     failure_reason = f"Page load slow ({duration}ms)"
                 category_ok = has_products and (clicked or direct_url)
+                if not category_ok and issue_type is None:
+                    issue_type = "infra" if (not clicked and not direct_url) else "product"
                 results.append({
                     "step": _STEP_PREFIX + f"category_{cat_name}_load",
                     "duration_ms": duration,
@@ -1149,26 +1218,32 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     "screenshot": ss_cat,
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                     "failure_reason": failure_reason,
+                    "issue_type": issue_type,
                 })
                 _check_budget("category_page_load", duration, results)
 
             # Pick a random product for bargain
             product_url = _pick_random_product(page)
             if not product_url:
-                # No bargainable product — likely session expired, mark remaining steps as skipped
-                log("No bargainable product found — session may be expired")
+                # Detect if session expired vs. no bargainable products
+                session_expired = _detect_session_expired(page)
+                reason = "Session expired — login/auth required" if session_expired else "No product found with bargain button"
+                log(f"No bargainable product found — {reason}")
                 results.append({
                     "step": _STEP_PREFIX + "product_detail_load", "duration_ms": 0, "status": "fail",
-                    "detail": "No product found with bargain button", "failure_reason": "Session expired or no bargainable products",
+                    "detail": "No product found with bargain button", "failure_reason": reason,
+                    "issue_type": "infra" if session_expired else "product",
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 })
                 results.append({
                     "step": _STEP_PREFIX + "bargain_flow", "duration_ms": 0, "status": "fail",
-                    "detail": "Skipped — no bargainable product", "failure_reason": "No product with Start Bargaining button",
+                    "detail": "Skipped — no bargainable product", "failure_reason": reason,
+                    "issue_type": "infra" if session_expired else "product",
                 })
                 results.append({
                     "step": _STEP_PREFIX + "checkout_flow", "duration_ms": 0, "status": "fail",
-                    "detail": "Skipped — flow aborted", "failure_reason": "No bargainable product",
+                    "detail": "Skipped — flow aborted", "failure_reason": reason,
+                    "issue_type": "infra" if session_expired else "product",
                 })
                 return results
             log(f"Selected product: {product_url}")
@@ -1208,8 +1283,15 @@ def _run_platform_flow(platform: str) -> list[dict]:
             pdp_ok = has_varient or has_bargain_btn
             ss_pdp = _capture_screenshot(page, f"{_STEP_PREFIX}product_detail")
             failure_reason = None
+            issue_type = None
             if not pdp_ok:
-                failure_reason = "#varient-price element not found"
+                session_expired = _detect_session_expired(page)
+                if session_expired:
+                    failure_reason = "Session expired — login/auth required"
+                    issue_type = "infra"
+                else:
+                    failure_reason = "#varient-price element not found"
+                    issue_type = "product"
             results.append({
                 "step": _STEP_PREFIX + "product_detail_load",
                 "duration_ms": duration,
@@ -1219,6 +1301,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
                 "screenshot": ss_pdp,
                 "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
                 "failure_reason": failure_reason,
+                "issue_type": issue_type,
             })
             _check_budget("product_detail_load", duration, results)
 
@@ -1234,6 +1317,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
             except Exception as e:
                 log(f"Bargain flow error (continuing): {e}")
                 ss = _capture_screenshot(page, f"{_STEP_PREFIX}bargain_failed")
+                session_expired = _detect_session_expired(page)
                 results.append({
                     "step": _STEP_PREFIX + "bargain_flow",
                     "duration_ms": 0,
@@ -1242,6 +1326,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     "failure_reason": str(e)[:200],
                     "screenshot": ss,
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                    "issue_type": "infra" if session_expired else "product",
                 })
 
             # Step 5: Checkout + Razorpay payment gateway check
@@ -1250,6 +1335,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
             except Exception as e:
                 log(f"Checkout flow error (continuing): {e}")
                 ss = _capture_screenshot(page, f"{_STEP_PREFIX}checkout_failed")
+                session_expired = _detect_session_expired(page)
                 results.append({
                     "step": _STEP_PREFIX + "checkout_flow",
                     "duration_ms": 0,
@@ -1258,6 +1344,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     "failure_reason": str(e)[:200],
                     "screenshot": ss,
                     "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                    "issue_type": "infra" if session_expired else "product",
                 })
 
             # Step 6: Additional page checks (My Account, My Bargains, Orders, Banners)

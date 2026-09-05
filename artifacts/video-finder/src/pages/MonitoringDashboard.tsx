@@ -17,6 +17,7 @@ interface Run {
   run_id?: string | null;
   value: number | null; status: "pass" | "fail" | "degraded";
   step_failed: string | null; duration_ms: number | null;
+  issue_type?: "product" | "infra" | null;
   details?: {
     screenshot_base64?: string; screenshot_url?: string; failure_reason?: string;
     console_errors?: {type:string;text:string}[];
@@ -146,6 +147,13 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-medium text-sm text-slate-800">{stepName}</span>
               <Badge status={run.status} />
+              {run.issue_type && run.status !== "pass" && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                  run.issue_type === "infra" ? "bg-blue-50 text-blue-700 border border-blue-200" : "bg-red-50 text-red-700 border border-red-200"
+                }`}>
+                  {run.issue_type === "infra" ? "INFRA" : "PRODUCT"}
+                </span>
+              )}
               <span className="text-xs text-slate-400 ml-auto">{run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "—"}</span>
             </div>
             {run.details?.detail && <p className="text-xs text-slate-500 mt-0.5">{run.details.detail}</p>}
