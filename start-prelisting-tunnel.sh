@@ -61,15 +61,29 @@ else
 fi
 
 echo "=== 3/3: Starting Cloudflare Tunnel -> 127.0.0.1:${PORT} ==="
-echo ""
-echo "    ⚠️  The tunnel URL below changes on every run."
-echo "    Use it to build + deploy the frontend:"
-echo ""
-echo "        VITE_PRELISTING_API_URL=<url> npx vite build"
-echo ""
-cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate 2>&1 &
+CLOUDFLARED_LOG="$(mktemp -t cloudflared.XXXXXX.log)"
+cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate >"$CLOUDFLARED_LOG" 2>&1 &
 TUNNEL_PID=$!
 
-# Surface the trycloudflare.com URL as soon as it appears.
-sleep 5
+# Wait for the trycloudflare.com URL to appear in cloudflared's log.
+TUNNEL_URL=""
+for _ in $(seq 1 30); do
+  sleep 1
+  TUNNEL_URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" | head -1 || true)"
+  if [ -n "$TUNNEL_URL" ]; then
+    break
+  fi
+done
+
+echo ""
+echo "    ╔════════════════════════════════════════════════════════════════╗"
+echo "    ║  PRE-LISTING VALIDATOR TUNNEL IS LIVE                          ║"
+echo "    ║                                                               ║"
+echo "    ║  $TUNNEL_URL"
+echo "    ║                                                               ║"
+echo "    ║  Build + deploy the frontend with:                             ║"
+echo "    ║    VITE_PRELISTING_API_URL=$TUNNEL_URL npx vite build"
+echo "    ╚════════════════════════════════════════════════════════════════╝"
+echo ""
+
 wait "$TUNNEL_PID"
