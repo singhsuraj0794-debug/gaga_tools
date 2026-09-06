@@ -2,12 +2,30 @@ import * as XLSX from "xlsx";
 import Papa from "papaparse";
 
 // Base URL for the pre-listing validator compute API (HSN, CLIP, text correction).
-// Baked in at build time. Point it at your local Cloudflare Tunnel when the
-// frontend is deployed (e.g. VITE_PRELISTING_API_URL=https://xxx.trycloudflare.com).
-const PRELISTING_API_BASE: string =
+// Defaults to the build-time env var, then localhost for local dev. The app can
+// override it at runtime via setPrelistingApiBase() (see PreListingValidator.tsx),
+// so a changing Cloudflare Tunnel URL doesn't require a rebuild.
+const DEFAULT_API_BASE: string =
   (import.meta.env?.VITE_PRELISTING_API_URL as string | undefined) || "http://localhost:8080";
 
-export { PRELISTING_API_BASE };
+let _prelistingApiBase: string = DEFAULT_API_BASE;
+
+export function getPrelistingApiBase(): string {
+  return _prelistingApiBase;
+}
+
+export function setPrelistingApiBase(url: string): void {
+  const trimmed = (url || "").trim().replace(/\/+$/, "");
+  if (/^https?:\/\//i.test(trimmed)) {
+    _prelistingApiBase = trimmed;
+  }
+}
+
+export { PRELISTING_API_BASE as _deprecatedPrelistingApiBase };
+
+// Re-export the constant name for backwards compatibility, but compute calls
+// should use getPrelistingApiBase() so runtime overrides take effect.
+export const PRELISTING_API_BASE: string = DEFAULT_API_BASE;
 
 export type Decision = "PASS" | "FLAG" | "REJECT";
 
@@ -520,7 +538,7 @@ export async function runTextCorrection(
   apiBase: string = "",
   useQwen: boolean = false,
 ): Promise<CorrectTextResult> {
-  const baseUrl = apiBase || PRELISTING_API_BASE;
+  const baseUrl = apiBase || getPrelistingApiBase();
   const resp = await fetch(`${baseUrl}/api/products/correct-text`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1651,7 +1669,7 @@ export async function runClipVerification(
   apiBase: string = "",
   useQwenVerify: boolean = false,
 ): Promise<ClipVerificationResult> {
-  const baseUrl = apiBase || PRELISTING_API_BASE;
+  const baseUrl = apiBase || getPrelistingApiBase();
   const resp = await fetch(`${baseUrl}/api/products/clip-verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1938,7 +1956,7 @@ export async function runHsnSuggestion(
   products: HsnSuggestProduct[],
   apiBase: string = "",
 ): Promise<HsnSuggestResult> {
-  const baseUrl = apiBase || PRELISTING_API_BASE;
+  const baseUrl = apiBase || getPrelistingApiBase();
   const resp = await fetch(`${baseUrl}/api/products/hsn-suggest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

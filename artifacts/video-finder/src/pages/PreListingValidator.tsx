@@ -20,6 +20,7 @@ import {
   Image,
   Eye,
   Copy,
+  Server,
 } from "lucide-react";
 import {
   parseFile,
@@ -40,7 +41,8 @@ import {
   buildFeedback,
   stripHtml,
   descriptionPassesAttributes,
-  PRELISTING_API_BASE,
+  getPrelistingApiBase,
+  setPrelistingApiBase,
   type ValidationResult,
   type ListingRow,
   type CheckResult,
@@ -111,6 +113,15 @@ export default function PreListingValidator() {
 
   const [dismissedChecks, setDismissedChecks] = useState<Map<string, Set<number>>>(new Map());
   const [correctionFeedback, setCorrectionFeedback] = useState<Map<string, boolean>>(new Map());
+
+  // ── Compute API URL (runtime-configurable; survives tunnel restarts) ───────
+  const [apiUrl, setApiUrl] = useState<string>(() =>
+    (typeof window !== "undefined" && window.localStorage.getItem("plv_api_url")) || getPrelistingApiBase(),
+  );
+  useEffect(() => {
+    setPrelistingApiBase(apiUrl);
+    if (typeof window !== "undefined") window.localStorage.setItem("plv_api_url", apiUrl);
+  }, [apiUrl]);
 
   const logRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1496,7 +1507,7 @@ export default function PreListingValidator() {
     // Enhance specs using API-based extraction (category-aware + Marqo)
     try {
       setImageGenStatus("Enhancing specs with AI extraction...");
-      const specResp = await fetch(`${PRELISTING_API_BASE}/api/products/extract-specs`, {
+      const specResp = await fetch(`${getPrelistingApiBase()}/api/products/extract-specs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1548,7 +1559,7 @@ export default function PreListingValidator() {
         const qwenResults = new Map<string, Record<string, string>>();
         for (let i = 0; i < qwenProducts.length; i += 5) {
           const batch = qwenProducts.slice(i, i + 5);
-          const resp = await fetch(`${PRELISTING_API_BASE}/api/products/qwen-specs`, {
+          const resp = await fetch(`${getPrelistingApiBase()}/api/products/qwen-specs`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ products: batch }),
@@ -1584,7 +1595,7 @@ export default function PreListingValidator() {
     }
 
     try {
-      const resp = await fetch(`${PRELISTING_API_BASE}/api/products/image-gen`, {
+      const resp = await fetch(`${getPrelistingApiBase()}/api/products/image-gen`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ products: genProducts }),
@@ -1679,7 +1690,7 @@ export default function PreListingValidator() {
           setDuplicateStatus(`[${batchIdx}/${filteredMap.size}] ${label}: scanning images... (${m}m ${s}s elapsed)`);
         }, 5000);
 
-        const resp = await fetch(`${PRELISTING_API_BASE}/api/products/sheet-duplicates`, {
+        const resp = await fetch(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ products: sellerProducts }),
@@ -1753,7 +1764,7 @@ export default function PreListingValidator() {
       setVisualVerifyStatus(`Running CLIP flagging on ${limitedProducts.length} products...`);
 
       // Step 1: CLIP only (fast)
-      const resp = await fetch(`${PRELISTING_API_BASE}/api/products/visual-verify`, {
+      const resp = await fetch(`${getPrelistingApiBase()}/api/products/visual-verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ products: limitedProducts, skipQwen: true }),
@@ -1793,7 +1804,7 @@ export default function PreListingValidator() {
           return { ...p, flagged: clipResult?.flagged || [] };
         });
 
-      const qwenResp = await fetch(`${PRELISTING_API_BASE}/api/products/visual-verify`, {
+      const qwenResp = await fetch(`${getPrelistingApiBase()}/api/products/visual-verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ products: flaggedProducts, skipQwen: false }),
@@ -2069,6 +2080,17 @@ export default function PreListingValidator() {
               <h1 className="text-3xl font-bold text-slate-900">Pre-Listing Validator</h1>
               <p className="text-slate-500 mt-1">Upload a Gajab Hub export and validate product listings before upload</p>
             </div>
+          </div>
+          <div className="mb-6 flex items-center gap-2 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">
+            <Server className="w-4 h-4 text-teal-600 shrink-0" />
+            <span className="text-xs font-medium text-teal-800 shrink-0">Compute API</span>
+            <input
+              value={apiUrl}
+              onChange={(e) => setApiUrl(e.target.value)}
+              placeholder="https://your-tunnel.trycloudflare.com"
+              className="flex-1 min-w-0 bg-white border border-teal-200 rounded px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-400"
+            />
+            <span className="text-[10px] text-teal-600 shrink-0 hidden sm:inline">paste your tunnel URL (saved in browser)</span>
           </div>
           <Card className="border-2 border-dashed border-slate-300 bg-white/50">
             <CardContent className="p-12">
