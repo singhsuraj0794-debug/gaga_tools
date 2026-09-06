@@ -390,6 +390,16 @@ importers:
         version: 3.25.76
 
   artifacts/video-finder:
+    dependencies:
+      '@workspace/api-zod':
+        specifier: workspace:*
+        version: link:../../lib/api-zod
+      papaparse:
+        specifier: ^5.5.4
+        version: 5.5.4
+      xlsx:
+        specifier: ^0.18.5
+        version: 0.18.5
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0

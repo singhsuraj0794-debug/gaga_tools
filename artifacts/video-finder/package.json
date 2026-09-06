@@ -73,5 +73,10 @@
     "vite": "catalog:",
     "wouter": "^3.3.5",
     "zod": "catalog:"
+  },
+  "dependencies": {
+    "@workspace/api-zod": "workspace:*",
+    "papaparse": "^5.5.4",
+    "xlsx": "^0.18.5"
   }
 }
