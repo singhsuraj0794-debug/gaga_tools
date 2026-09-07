@@ -1,4 +1,8 @@
 @import "tailwindcss";
+/* Limit tailwind's content scan to src/ only. Without this, the @tailwindcss/vite
+   plugin scans the entire monorepo (node_modules + api-server + monitoring),
+   which makes the production build extremely slow / appear hung. */
+@source "../src";
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
 

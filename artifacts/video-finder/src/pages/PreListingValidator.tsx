@@ -118,10 +118,48 @@ export default function PreListingValidator() {
   const [apiUrl, setApiUrl] = useState<string>(() =>
     (typeof window !== "undefined" && window.localStorage.getItem("plv_api_url")) || getPrelistingApiBase(),
   );
+  const [apiTest, setApiTest] = useState<"idle" | "testing" | "ok" | "fail">("idle");
+  const [apiTestDetail, setApiTestDetail] = useState<string>("");
+
+  const updateApiUrl = (value: string) => {
+    // Trim and strip trailing slash so the stored value is clean.
+    const cleaned = value.trim().replace(/\/+$/, "");
+    setApiUrl(cleaned);
+  };
+
+  const testApiConnection = async () => {
+    const base = getPrelistingApiBase();
+    setApiTest("testing");
+    setApiTestDetail("Testing connection...");
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      const resp = await fetch(`${base}/api/products/status`, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (resp.ok) {
+        setApiTest("ok");
+        setApiTestDetail(`Connected (HTTP ${resp.status}) — compute is reachable`);
+      } else {
+        setApiTest("fail");
+        setApiTestDetail(`API reachable but returned HTTP ${resp.status}`);
+      }
+    } catch (e: any) {
+      setApiTest("fail");
+      const reason = e?.name === "AbortError" ? "timed out (10s)" : (e?.message || String(e));
+      setApiTestDetail(`Cannot reach API — ${reason}. Start the tunnel and paste its URL.`);
+    }
+  };
+
   useEffect(() => {
     setPrelistingApiBase(apiUrl);
     if (typeof window !== "undefined") window.localStorage.setItem("plv_api_url", apiUrl);
   }, [apiUrl]);
+
+  // Auto-test the saved compute URL once on mount so connectivity is visible immediately.
+  useEffect(() => {
+    testApiConnection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const logRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1727,7 +1765,7 @@ export default function PreListingValidator() {
         setDuplicateStatus("No duplicate products found.");
       }
     } catch (e) {
-      setDuplicateStatus(`Duplicate check failed: ${e}`);
+      setDuplicateStatus(`Duplicate check failed: ${e}. Compute API: ${getPrelistingApiBase()} — ensure the tunnel is running and this URL is correct (use the Test button).`);
     }
   };
 
@@ -2081,16 +2119,35 @@ export default function PreListingValidator() {
               <p className="text-slate-500 mt-1">Upload a Gajab Hub export and validate product listings before upload</p>
             </div>
           </div>
-          <div className="mb-6 flex items-center gap-2 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">
+          <div className="mb-6 flex flex-wrap items-center gap-2 bg-teal-50 border border-teal-200 rounded-lg px-3 py-2">
             <Server className="w-4 h-4 text-teal-600 shrink-0" />
             <span className="text-xs font-medium text-teal-800 shrink-0">Compute API</span>
             <input
               value={apiUrl}
-              onChange={(e) => setApiUrl(e.target.value)}
+              onChange={(e) => updateApiUrl(e.target.value)}
+              onBlur={() => setPrelistingApiBase(apiUrl)}
               placeholder="https://your-tunnel.trycloudflare.com"
               className="flex-1 min-w-0 bg-white border border-teal-200 rounded px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-teal-400"
             />
-            <span className="text-[10px] text-teal-600 shrink-0 hidden sm:inline">paste your tunnel URL (saved in browser)</span>
+            <button
+              onClick={testApiConnection}
+              disabled={apiTest === "testing"}
+              className="shrink-0 inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded border border-teal-300 text-teal-700 bg-white hover:bg-teal-100 disabled:opacity-60"
+            >
+              {apiTest === "testing" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {apiTest === "testing" ? "Testing…" : "Test"}
+            </button>
+            {apiTest === "ok" && (
+              <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium text-green-700 bg-green-50 border border-green-200 rounded px-1.5 py-0.5">
+                <CheckCircle2 className="w-3 h-3" /> {apiTestDetail || "Connected"}
+              </span>
+            )}
+            {apiTest === "fail" && (
+              <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium text-red-700 bg-red-50 border border-red-200 rounded px-1.5 py-0.5" title={apiTestDetail}>
+                <AlertTriangle className="w-3 h-3" /> Not reachable
+              </span>
+            )}
+            <span className="text-[10px] text-teal-600 shrink-0 hidden lg:inline">paste your tunnel URL → Test (saved in browser)</span>
           </div>
           <Card className="border-2 border-dashed border-slate-300 bg-white/50">
             <CardContent className="p-12">
