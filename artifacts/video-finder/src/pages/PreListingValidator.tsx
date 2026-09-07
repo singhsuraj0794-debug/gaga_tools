@@ -122,9 +122,18 @@ export default function PreListingValidator() {
   const [apiTestDetail, setApiTestDetail] = useState<string>("");
 
   const updateApiUrl = (value: string) => {
-    // Trim and strip trailing slash so the stored value is clean.
-    const cleaned = value.trim().replace(/\/+$/, "");
-    setApiUrl(cleaned);
+    // Clean concatenation garbage like "http://localhost:80https://host.trycloudflare.com80":
+    // extract every well-formed http(s) URL in the text and keep the one that is NOT
+    // the localhost placeholder. Then trim and strip a trailing slash.
+    let v = value.trim();
+    const candidates = v.match(/https?:\/\/[a-zA-Z0-9.-]+(?::\d+)?(?:[\/][^\s]*)?/g);
+    if (candidates && candidates.length > 0) {
+      v = candidates.find((u) => !/localhost|127\.0\.0\.1/.test(u)) || candidates[candidates.length - 1];
+    }
+    v = v.replace(/\/+$/, "");
+    // Drop stray digits glued onto the TLD (e.g. "...trycloudflare.com80" from a bad paste).
+    v = v.replace(/(\.[a-z]{2,})\d+$/i, "$1");
+    setApiUrl(v);
   };
 
   const testApiConnection = async () => {
