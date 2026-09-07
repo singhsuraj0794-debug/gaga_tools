@@ -247,57 +247,80 @@ def _build_groups(products, find_fn, n, overlap_info):
 def _detect_stock_hashes(product_hashes: Dict[int, List[Tuple[str, object]]], n: int, threshold: int) -> Set[int]:
     """Detect stock photos using pHash distance clustering.
 
-    Instead of exact-hash matching (which misses near-identical stock photos
-    that differ by a few pixels from compression), this groups pHashes by
-    distance ≤ threshold and marks clusters spanning >15% of products as stock.
+    Uses multi-table LSH (not brute-force O(n^2)) so large sheets with thousands
+    of unique image hashes don't stall. Hashes that land in the same LSH bucket
+    are near-identical (distance <= threshold); clusters spanning >15% of
+    products are treated as stock photos.
     """
-    # Collect all (product_idx, hash_int) pairs
     all_hashes: List[Tuple[int, int]] = []
     for idx, hashes in product_hashes.items():
         for _, h in hashes:
             all_hashes.append((idx, _hash_int(h)))
-
     if not all_hashes:
         return set()
 
-    # Build product set for each hash (deduplicated)
     hash_to_products: Dict[int, Set[int]] = defaultdict(set)
     for idx, hval in all_hashes:
         hash_to_products[hval].add(idx)
 
-    # For each hash, find all OTHER hashes within distance ≤ threshold
-    # These form a "cluster" of near-identical stock photos
     unique_hash_vals = list(hash_to_products.keys())
-    stock_hashes: Set[int] = set()
-    visited: Set[int] = set()
+    if len(unique_hash_vals) < 2:
+        return set()
 
     stock_threshold_count = max(2, int(n * STOCK_PHOTO_THRESHOLD))
 
-    for hval in unique_hash_vals:
-        if hval in visited:
-            continue
-        # BFS: find all hashes within distance ≤ threshold
-        cluster_products: Set[int] = set(hash_to_products[hval])
-        cluster_hashes: Set[int] = {hval}
-        queue = [hval]
-        visited.add(hval)
-        while queue:
-            current = queue.pop(0)
-            for other in unique_hash_vals:
-                if other in visited:
-                    continue
-                if _hamming_distance(current, other) <= threshold:
-                    visited.add(other)
-                    cluster_hashes.add(other)
-                    cluster_products.update(hash_to_products[other])
-                    queue.append(other)
-            # Safety: don't let clusters grow too large
-            if len(cluster_hashes) > 500 or len(cluster_products) > stock_threshold_count:
-                break
+    # Union-find over hashes that collide in any LSH table (near-identical).
+    parent = {h: h for h in unique_hash_vals}
+    rank = {h: 0 for h in unique_hash_vals}
 
-        # If this cluster spans enough products, it's a stock photo
-        if len(cluster_products) > stock_threshold_count:
-            stock_hashes.update(cluster_hashes)
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(x, y):
+        rx, ry = _find(x), _find(y)
+        if rx != ry:
+            if rank[rx] < rank[ry]:
+                rx, ry = ry, rx
+            parent[ry] = rx
+            if rank[rx] == rank[ry]:
+                rank[rx] += 1
+
+    N_TABLES = 4
+    table_buckets = [defaultdict(list) for _ in range(N_TABLES)]
+    for hval in unique_hash_vals:
+        keys = _multi_table_keys(hval, N_TABLES)
+        for t, k in enumerate(keys):
+            table_buckets[t][k].append(hval)
+
+    for t in range(N_TABLES):
+        for bucket in table_buckets[t].values():
+            # Oversized buckets are likely common/generic images — union them.
+            if len(bucket) > 200:
+                base = bucket[0]
+                for h in bucket[1:]:
+                    _union(base, h)
+                continue
+            for i in range(len(bucket)):
+                for j in range(i + 1, len(bucket)):
+                    if _hamming_distance(bucket[i], bucket[j]) <= threshold:
+                        _union(bucket[i], bucket[j])
+
+    # Cluster -> set of products
+    cluster_products: Dict[int, Set[int]] = defaultdict(set)
+    for hval in unique_hash_vals:
+        cluster_products[_find(hval)].update(hash_to_products[hval])
+
+    # A cluster is "stock" if it spans more than the threshold share of products.
+    stock_hashes: Set[int] = set()
+    for root, members in cluster_products.items():
+        if len(members) > stock_threshold_count:
+            # Gather every hash in this cluster (all are near-identical stock)
+            for hval in unique_hash_vals:
+                if _find(hval) == root:
+                    stock_hashes.add(hval)
 
     return stock_hashes
 
@@ -311,7 +334,7 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 4) -> dict:
     sys.stderr.flush()
 
     # Phase 1: Download ALL images and compute pHash
-    print(f"[DUP] Phase 1: Downloading all images ({n} products, 80 workers)...", file=sys.stderr)
+    print(f"[DUP] Phase 1: Downloading all images ({n} products)...", file=sys.stderr)
     sys.stderr.flush()
     all_urls = _collect_urls(products)
     print(f"[DUP]   {len(all_urls)} unique images to prefetch", file=sys.stderr)
@@ -320,11 +343,22 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 4) -> dict:
     print(f"[DUP]   Images prefetched in {time.time()-t0:.1f}s", file=sys.stderr)
     sys.stderr.flush()
 
+    # Parallel product hashing — image files are on disk so workers just read + phash.
     product_hashes: Dict[int, List[Tuple[str, object]]] = {}
-    for i, p in enumerate(products):
-        hashes = _compute_product_hashes(p)
-        if hashes:
-            product_hashes[i] = hashes
+    _hash_lock = __import__("threading").Lock()
+
+    def _hash_product(i_p):
+        i, p = i_p
+        try:
+            return i, _compute_product_hashes(p)
+        except Exception:
+            return i, []
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for i, hashes in pool.map(_hash_product, enumerate(products)):
+            if hashes:
+                with _hash_lock:
+                    product_hashes[i] = hashes
     loaded = len(product_hashes)
     print(f"[DUP] Phase 1 done: {loaded}/{n} hashed ({time.time()-t0:.1f}s)", file=sys.stderr)
     sys.stderr.flush()
