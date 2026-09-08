@@ -136,6 +136,39 @@ export default function PreListingValidator() {
     setApiUrl(v);
   };
 
+  // Auto-discover the current tunnel URL from Supabase Storage. The
+  // start-prelisting-tunnel.sh script publishes the live URL to
+  // monitoring/prelisting-api-url.txt, so any device opens the app and gets the
+  // correct compute URL without manually pasting.
+  const discoverTunnelUrl = async () => {
+    try {
+      const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ||
+        "https://okxyskmjsmtykblrtmyi.supabase.co";
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const resp = await fetch(
+        `${supabaseUrl}/storage/v1/object/public/monitoring/prelisting-api-url.txt`,
+        { signal: ctrl.signal, cache: "no-store" },
+      );
+      clearTimeout(timer);
+      if (!resp.ok) return;
+      const raw = (await resp.text()).trim();
+      let discovered = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.url) discovered = String(parsed.url);
+      } catch { /* raw text fallback */ }
+      discovered = discovered.trim().replace(/\/+$/, "");
+      if (!/^https?:\/\//i.test(discovered)) return;
+      // Prefer the discovered URL when the saved one is empty, localhost, or stale.
+      const current = getPrelistingApiBase();
+      const isDefault = /localhost|127\.0\.0\.1/.test(current) || !current;
+      if (isDefault || current !== discovered) {
+        setApiUrl(discovered);
+      }
+    } catch { /* ignore — user can paste manually */ }
+  };
+
   const testApiConnection = async () => {
     const base = getPrelistingApiBase();
     setApiTest("testing");
@@ -164,9 +197,13 @@ export default function PreListingValidator() {
     if (typeof window !== "undefined") window.localStorage.setItem("plv_api_url", apiUrl);
   }, [apiUrl]);
 
-  // Auto-test the saved compute URL once on mount so connectivity is visible immediately.
+  // On mount: auto-discover the current tunnel URL (published to Supabase by the
+  // tunnel script), then test connectivity so the badge reflects the live URL.
   useEffect(() => {
-    testApiConnection();
+    (async () => {
+      await discoverTunnelUrl();
+      setTimeout(() => testApiConnection(), 300);
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

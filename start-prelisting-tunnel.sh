@@ -8,13 +8,13 @@
 #   2. CLIP verify server  — port 8001 (persistent CLIP/EasyOCR/MiniLM models)
 #   3. cloudflared tunnel  — exposes port 8080 at https://<random>.trycloudflare.com
 #
-# Then copy the tunnel URL into the frontend and deploy:
-#   VITE_PRELISTING_API_URL=https://<random>.trycloudflare.com npx vite build
+# The current tunnel URL is always written to:  /tmp/prelisting-tunnel-url.txt
+# (and printed to the terminal). Paste it into the validator's "Compute API"
+# field. The tunnel auto-reconnects if cloudflared drops, and the URL file is
+# updated on every reconnect.
 #
 # ONE-TIME SETUP:
 #   1. Install cloudflared:  brew install cloudflared
-#   2. (Optional) For a STABLE hostname instead of a random one each run,
-#      create a named tunnel and update TUNNEL_URL below.
 #
 # Requires the API server to be built (dist/index.mjs). If not, run:
 #   (cd artifacts/api-server && node build.mjs)
@@ -26,13 +26,17 @@ cd "$API_DIR"
 
 PORT="${API_PORT:-8080}"
 CLIP_PORT="${CLIP_VERIFY_PORT:-8001}"
+URL_FILE="/tmp/prelisting-tunnel-url.txt"
+API_PID=""
+CLIP_PID=""
+TUNNEL_PID=""
 
 cleanup() {
   echo ""
   echo "Shutting down..."
-  kill "$API_PID" 2>/dev/null || true
-  kill "$CLIP_PID" 2>/dev/null || true
-  kill "$TUNNEL_PID" 2>/dev/null || true
+  [ -n "$API_PID" ] && kill "$API_PID" 2>/dev/null || true
+  [ -n "$CLIP_PID" ] && kill "$CLIP_PID" 2>/dev/null || true
+  [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   exit 0
 }
 trap cleanup EXIT INT TERM
@@ -42,48 +46,101 @@ if ! command -v cloudflared >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "=== 1/3: Starting API server on 127.0.0.1:${PORT} ==="
-if [ ! -f "dist/index.mjs" ]; then
-  echo "    dist/index.mjs not found — building API server..."
-  node build.mjs
+echo "=== 1/3: API server on 127.0.0.1:${PORT} ==="
+if ! curl -s --max-time 2 "http://127.0.0.1:${PORT}/api/products/status" >/dev/null 2>&1; then
+  if [ ! -f "dist/index.mjs" ]; then
+    echo "    dist/index.mjs not found — building API server..."
+    node build.mjs
+  fi
+  PORT="$PORT" node --enable-source-maps ./dist/index.mjs &
+  API_PID=$!
+  sleep 3
+  echo "    started (pid $API_PID)"
+else
+  echo "    already running (reusing it)"
 fi
-PORT="$PORT" node --enable-source-maps ./dist/index.mjs &
-API_PID=$!
-sleep 2
 
-echo "=== 2/3: Starting CLIP verify server on 127.0.0.1:${CLIP_PORT} ==="
+echo "=== 2/3: CLIP verify server on 127.0.0.1:${CLIP_PORT} ==="
 if curl -s --max-time 2 "http://127.0.0.1:${CLIP_PORT}/health" >/dev/null 2>&1; then
   echo "    already running"
 else
   CLIP_VERIFY_PORT="$CLIP_PORT" python3 _clip_verify_server.py &
   CLIP_PID=$!
   sleep 2
+  echo "    started (pid $CLIP_PID)"
 fi
 
-echo "=== 3/3: Starting Cloudflare Tunnel -> 127.0.0.1:${PORT} ==="
-CLOUDFLARED_LOG="$(mktemp -t cloudflared.XXXXXX.log)"
-cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate >"$CLOUDFLARED_LOG" 2>&1 &
-TUNNEL_PID=$!
+echo "=== 3/3: Cloudflare Tunnel -> 127.0.0.1:${PORT} ==="
 
-# Wait for the trycloudflare.com URL to appear in cloudflared's log.
-TUNNEL_URL=""
-for _ in $(seq 1 30); do
-  sleep 1
-  TUNNEL_URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" | head -1 || true)"
-  if [ -n "$TUNNEL_URL" ]; then
-    break
+start_tunnel() {
+  CLOUDFLARED_LOG="$(mktemp -t cloudflared.XXXXXX.log)"
+  cloudflared tunnel --url "http://127.0.0.1:${PORT}" --no-autoupdate >"$CLOUDFLARED_LOG" 2>&1 &
+  TUNNEL_PID=$!
+  # Wait for the trycloudflare.com URL
+  local url=""
+  for _ in $(seq 1 30); do
+    url="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CLOUDFLARED_LOG" | head -1 || true)"
+    if [ -n "$url" ]; then
+      echo "$url" > "$URL_FILE"
+      publish_url "$url"
+      echo "    tunnel live: $url"
+      echo "    (URL saved to $URL_FILE)"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# Publish the current tunnel URL to Supabase Storage so the deployed frontend
+# can auto-fill the Compute API field from any device (no manual pasting).
+publish_url() {
+  local url="$1"
+  local supabase_url supabase_key remote req
+  supabase_url="$(grep -E '^SUPABASE_URL=' "$API_DIR/.env" | head -1 | cut -d= -f2-)"
+  supabase_key="$(grep -E '^SUPABASE_KEY=' "$API_DIR/.env" | head -1 | cut -d= -f2-)"
+  if [ -z "$supabase_url" ] || [ -z "$supabase_key" ]; then
+    return 0
   fi
-done
+  remote="prelisting-api-url.txt"
+  req="$(printf '{"url":"%s"}' "$url")"
+  curl -s -o /dev/null --max-time 10 -X PUT \
+    -H "apikey: $supabase_key" \
+    -H "Authorization: Bearer $supabase_key" \
+    -H "Content-Type: application/json" \
+    --data "$req" \
+    "$supabase_url/storage/v1/object/monitoring/$remote" || true
+  echo "    published to Supabase for auto-discovery"
+}
+
+start_tunnel
 
 echo ""
 echo "    ╔════════════════════════════════════════════════════════════════╗"
 echo "    ║  PRE-LISTING VALIDATOR TUNNEL IS LIVE                          ║"
 echo "    ║                                                               ║"
-echo "    ║  $TUNNEL_URL"
+echo "    ║  $(cat "$URL_FILE")"
 echo "    ║                                                               ║"
-echo "    ║  Build + deploy the frontend with:                             ║"
-echo "    ║    VITE_PRELISTING_API_URL=$TUNNEL_URL npx vite build"
+echo "    ║  Paste that URL into the app's Compute API field → Test        ║"
+echo "    ║  (also saved at $URL_FILE)"
 echo "    ╚════════════════════════════════════════════════════════════════╝"
 echo ""
 
-wait "$TUNNEL_PID"
+# Keep the tunnel alive: if cloudflared exits or the URL goes unreachable,
+# restart it and refresh the URL file.
+while true; do
+  if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+    echo "[$(date '+%H:%M:%S')] tunnel process exited — reconnecting..."
+    start_tunnel || echo "    reconnect failed, retrying..."
+    continue
+  fi
+  url="$(cat "$URL_FILE" 2>/dev/null || true)"
+  if [ -n "$url" ] && ! curl -s -o /dev/null --max-time 8 "$url/api/products/status"; then
+    echo "[$(date '+%H:%M:%S')] tunnel unreachable — reconnecting..."
+    kill "$TUNNEL_PID" 2>/dev/null || true
+    sleep 2
+    start_tunnel || echo "    reconnect failed, retrying..."
+    continue
+  fi
+  sleep 10
+done
