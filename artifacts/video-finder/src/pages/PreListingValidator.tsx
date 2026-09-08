@@ -1141,15 +1141,18 @@ export default function PreListingValidator() {
     pushLog("BATCH", 0, `[TXT] Starting text correction for ${localRows.length} products${useQwen ? " (Qwen VLM ON)" : ""}...`);
 
     const correctProducts = localRows.map((row, idx) => {
-      const r = localResults[idx] || { sku: "" };
-      const hsnItem = _hsnData.current?.get(r.sku);
-      const corr = applied.get(r.sku);
+      const r = localResults[idx] || {};
+      // SKU comes from the ROW (authoritative), not the results array — the
+      // results can be out of sync with rows after duplicate removal.
+      const sku = getSku(row) || r.sku || "";
+      const hsnItem = _hsnData.current?.get(sku);
+      const corr = applied.get(sku);
       const rowImages = getImages(row);
       const title = corr?.title || getTitle(row);
       const description = corr?.description || getDesc(row);
-      pushLog(r.sku, idx + 1, `[TXT] ${r.sku} — title="${title.substring(0, 50)}" imgs=${rowImages.length}`);
+      pushLog(sku, idx + 1, `[TXT] ${sku} — title="${title.substring(0, 50)}" imgs=${rowImages.length}`);
       return {
-        sku: r.sku,
+        sku,
         title,
         description,
         brand: getBrand(row),
@@ -1807,6 +1810,10 @@ export default function PreListingValidator() {
         autoRemoveSkus.forEach((sku) => _allRemovedSkus.current.add(sku));
         setDuplicateStatus(`Found ${allRemoveSkus.length} duplicate(s) in ${allGroups.length} group(s). ${autoRemoveSkus.size} product(s) marked for removal.`);
         setRows((prev) => prev.filter((row) => !autoRemoveSkus.has(getSku(row))));
+        // Keep validation results in sync with the (deduplicated) rows so later
+        // steps that pair rows↔results by index don't misalign.
+        setResults((prev) => prev.filter((r) => !autoRemoveSkus.has(r.sku)));
+        _currentResults.current = _currentResults.current.filter((r) => !autoRemoveSkus.has(r.sku));
       } else {
         setDuplicateStatus("No duplicate products found.");
       }
