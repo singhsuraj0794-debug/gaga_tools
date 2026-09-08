@@ -340,9 +340,11 @@ const CLAIM_EXEMPT_PHRASES = /\b(best\s*friend|bestie|best\s*regards|best\s*wish
 const CLAIM_EXEMPT_CONTEXT = /\b(design|color|colour|random|assorted|mixed|variant|style|pattern|variety|gift|gifts|birthday|party|favor|favors|return\s*gift|kanjak|giveaway|goodie|goody|classroom|reward|special\s*occasion|group\s*celebrat|festive)\b/i;
 
 const MISLEADING_CLAIMS = [
-  "best", "number 1", "#1", "guaranteed", "100% genuine", "100% original",
-  "world's best", "miracle", "instant result", "free gift",
-  "buy 1 get 1", "limited offer", "hurry",
+  "best", "best seller", "bestseller", "best selling", "number 1", "#1", "guaranteed",
+  "100% genuine", "100% original", "world's best", "world class", "miracle",
+  "instant result", "free gift", "buy 1 get 1", "limited offer", "hurry",
+  "premium", "premium quality", "best quality", "top quality", "high quality",
+  "hot selling", "top rated", "top rated quality", "exclusive offer",
   // Operations / marketplace claims — these belong in terms, not product copy
   "free exchange", "free return", "free replacement", "free delivery",
   "free shipping", "money back", "cash on delivery", "cod available",
@@ -975,7 +977,7 @@ export function validateProduct(
         ).trim()
       : descPlain.toLowerCase();
     const descClaim = MISLEADING_CLAIMS.find((c) => descNoBrand.includes(c));
-    const descClaimSafe = descClaim && (CLAIM_EXEMPT_PHRASES.test(descNoBrand) || CLAIM_EXEMPT_CONTEXT.test(descNoBrand));
+    const descClaimSafe = descClaim && CLAIM_EXEMPT_PHRASES.test(descNoBrand);
     const descOps = OPS_PATTERNS.find((r) => r.test(descNoBrand));
     const descOpsSafe = false; // OPS in descriptions always flagged — no context exemption
     if (descClaim && !descClaimSafe) {
