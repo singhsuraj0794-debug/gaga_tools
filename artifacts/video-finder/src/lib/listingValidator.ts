@@ -2044,6 +2044,13 @@ export function applyTitleAccuracyContext(
   titleAccuracyStatus?: "match" | "mismatch" | "unknown",
 ): ValidationResult {
   if (!productTypeLabel && !titleProductTypeLabel) return result;
+
+  // Raw internal category IDs (e.g. "cat_cat_022", "cat_034") carry no human
+  // meaning and must not be surfaced as if they were a real product type.
+  if (isRawTypeId(productTypeLabel || productType) || isRawTypeId(titleProductTypeLabel || titleProductType)) {
+    return result;
+  }
+
   const updated: ValidationResult = {
     ...result,
     checks: result.checks.map((c) => ({ ...c })),
@@ -2093,6 +2100,13 @@ export function applyTitleAccuracyContext(
  * like any other flag — a "needs-change" suggestion becomes a FLAG that the
  * user can dismiss, and export is not silently blocked by it.
  */
+
+// Raw internal category/product-type IDs (e.g. "cat_cat_022", "cat_034") carry
+// no human meaning and must never be surfaced to the user as a product type.
+function isRawTypeId(t?: string): boolean {
+  return !t || /^cat[_-]/i.test(t) || /^[a-z0-9]+_[a-z0-9]+_\d+$/i.test(t) || /^\d+$/.test(t);
+}
+
 export function applyCategoryContext(
   result: ValidationResult,
   categoryStatus: "confirmed" | "needs-change" | "unknown" | undefined,
@@ -2101,6 +2115,8 @@ export function applyCategoryContext(
   marqoConfidence: number | undefined,
 ): ValidationResult {
   if (!categoryStatus || categoryStatus === "unknown") return result;
+  // Don't surface raw internal category IDs (e.g. "cat_cat_002") as labels.
+  if (isRawTypeId(categoryLabel) || isRawTypeId(originalLabel)) return result;
   const updated: ValidationResult = {
     ...result,
     checks: result.checks.map((c) => ({ ...c })),
