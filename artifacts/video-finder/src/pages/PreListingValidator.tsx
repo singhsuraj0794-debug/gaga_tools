@@ -108,7 +108,7 @@ export default function PreListingValidator() {
   const [selectedSellers, setSelectedSellers] = useState<Set<string>>(new Set());
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const _allRemovedSkus = useRef<Set<string>>(new Set());
-  const [useQwen, setUseQwen] = useState(true);
+  const [useQwen, setUseQwen] = useState(false);
   const [revalidating, setRevalidating] = useState(false);
 
   const [dismissedChecks, setDismissedChecks] = useState<Map<string, Set<number>>>(new Map());
