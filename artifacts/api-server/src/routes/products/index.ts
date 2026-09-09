@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { scrapeProducts, getPaginatedProducts } from "../../lib/productScraper";
 import { ScrapeProductsQueryParams } from "@workspace/api-zod";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -938,8 +938,8 @@ router.post("/products/verify-duplicates", async (req, res): Promise<void> => {
     const inputPath = `/tmp/verify_input_${Date.now()}.json`;
     await writeFile(inputPath, JSON.stringify(pairs));
     const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
-      maxBuffer: 100 * 1024 * 1024,
-      timeout: 600000,
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 900000,
     });
     await unlink(inputPath).catch(() => {});
 
@@ -1073,6 +1073,565 @@ router.get("/products/export-duplicates", async (req, res): Promise<void> => {
     res.send(rows.join("\n"));
   } catch (err: any) {
     req.log.error({ err }, "Failed to export duplicates");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/products/hsn-suggest", async (req, res): Promise<void> => {
+  try {
+    const { products } = req.body as {
+      products: { sku?: string; title?: string; description?: string; images?: string[] }[];
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    // Prefer the persistent analysis server (models resident — fast, fits the
+    // tunnel's ~100s request limit). Fall back to the one-shot CLI.
+    const serverResult = await tryAnalysisServer("hsn-suggest", {
+      products,
+      imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc",
+    });
+    if (serverResult) {
+      req.log.info({ count: products.length, mode: "server" }, "HSN suggestion (persistent server)");
+      res.json(serverResult);
+      return;
+    }
+
+    const scriptPath = resolveScript("_hsn_suggest.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/hsn_suggest_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify({ products, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
+
+    req.log.info({ count: products.length }, "Running HSN suggestion (one-shot)");
+
+    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 600000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "HSN suggestion failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/products/clip-verify", async (req, res): Promise<void> => {
+  try {
+    const { products, useQwenVerify } = req.body as {
+      products: { sku: string; firstImageUrl: string; allImageUrls: string[] }[];
+      useQwenVerify?: boolean;
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    const useQwen = useQwenVerify !== false;
+
+    // Prefer the persistent model server (models resident, no per-batch reload).
+    // Fall back to the one-shot CLI when it isn't running.
+    const serverResult = await tryClipVerifyServer(products, useQwen);
+    if (serverResult) {
+      req.log.info({ count: products.length, mode: "server" }, "CLIP verification (persistent server)");
+      res.json(serverResult);
+      return;
+    }
+
+    const scriptPath = resolveScript("_clip_verify.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/clip_verify_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify({ products, useQwenVerify: useQwen, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
+
+    req.log.info({ count: products.length, mode: "one-shot", useQwenVerify: useQwen }, "Running CLIP verification");
+
+    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 1800000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "CLIP verification failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function tryClipVerifyServer(
+  products: { sku: string; firstImageUrl: string; allImageUrls: string[] }[],
+  useQwenVerify: boolean,
+): Promise<unknown | null> {
+  const port = process.env.CLIP_VERIFY_PORT || "8001";
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ products, useQwenVerify }),
+      signal: AbortSignal.timeout(1800000),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null; // server not running — caller falls back to one-shot CLI
+  }
+}
+
+// Proxy to the persistent analysis server (Qwen + HSN + text correction) so the
+// heavy models stay resident and requests finish under the tunnel's ~100s limit.
+async function tryAnalysisServer(path: "hsn-suggest" | "correct-text", payload: Record<string, unknown>): Promise<unknown | null> {
+  const port = process.env.ANALYSIS_PORT || "8003";
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(1800000),
+    });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null; // server not running — caller falls back to one-shot CLI
+  }
+}
+
+// ── Text Correction (MiniLM-powered) ─────────────────────────────────────
+
+router.post("/products/correct-text", async (req, res): Promise<void> => {
+  try {
+    const { products, useQwen } = req.body as {
+      products: {
+        sku: string;
+        title: string;
+        description: string;
+        brand?: string;
+        category?: string;
+        productTypeLabel?: string;
+        images?: string[];
+      }[];
+      useQwen?: boolean;
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    // Prefer the persistent analysis server so Qwen/CLIP stay resident and the
+    // request fits the tunnel's ~100s limit. Fall back to the one-shot CLI.
+    const serverResult = await tryAnalysisServer("correct-text", { products, useQwen: useQwen || false });
+    if (serverResult) {
+      req.log.info({ count: products.length, mode: "server", useQwen: useQwen || false }, "Text correction (persistent server)");
+      res.json(serverResult);
+      return;
+    }
+
+    const scriptPath = resolveScript("_correct_text.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/correct_text_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify({ products, useQwen: useQwen || false, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
+
+    req.log.info({ count: products.length, useQwen: useQwen || false }, "Running text correction (one-shot)");
+
+    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 600000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "Text correction failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// ── ImageGen: Product spec overlay ────────────────────────────────────
+
+router.post("/products/image-gen", async (req, res): Promise<void> => {
+  try {
+    const { products } = req.body as {
+      products: {
+        sku: string;
+        title: string;
+        brand?: string;
+        firstImageUrl?: string;
+        images?: string[];
+        specs: Record<string, string>;
+      }[];
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    const scriptPath = resolveScript("_image_gen.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/image_gen_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify({ products, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
+
+    req.log.info({ count: products.length }, "Running image generation");
+
+    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 300000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "Image generation failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Spec Extraction endpoint ────────────────────────────────────────────────
+router.post("/products/extract-specs", async (req, res): Promise<void> => {
+  try {
+    const { products } = req.body as {
+      products: {
+        sku: string;
+        title: string;
+        description?: string;
+        category?: string;
+        images?: string[];
+      }[];
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    const scriptPath = resolveScript("_spec_extractor.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/spec_extract_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify({ products }));
+
+    req.log.info({ count: products.length }, "Running spec extraction");
+
+    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 300000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "Spec extraction failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/visual-verify ──────────────────────────────────────
+// Stage 1: CLIP flagging (fast, runs on everything)
+// Stage 2: Qwen VLM correction (slow, only on flagged items)
+router.post("/products/visual-verify", async (req, res): Promise<void> => {
+  try {
+    const { products, skipQwen } = req.body as {
+      products: {
+        sku: string;
+        title: string;
+        description?: string;
+        images?: string[];
+      }[];
+      skipQwen?: boolean;
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    const { writeFile, unlink } = await import("node:fs/promises");
+
+    // Stage 1: CLIP flagging
+    const clipScript = resolveScript("_clip_flag.py");
+    const clipInput = `/tmp/clip_flag_input_${Date.now()}.json`;
+    await writeFile(clipInput, JSON.stringify({ products }));
+
+    req.log.info({ count: products.length }, "Running CLIP flagging (Stage 1)");
+    const { stdout: clipStdout } = await execFileAsync("python3", [clipScript, clipInput], {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 300000,
+    });
+    await unlink(clipInput).catch(() => {});
+
+    const clipResults = JSON.parse(clipStdout);
+    const flaggedProducts = clipResults.results.filter((r: any) => r.flagged?.length > 0);
+
+    req.log.info({ total: products.length, flagged: flaggedProducts.length }, "CLIP flagging complete");
+
+    // Stage 2: Qwen correction (only if there are flagged products and not skipped)
+    let qwenResults: any[] = [];
+    if (!skipQwen && flaggedProducts.length > 0) {
+      const qwenScript = resolveScript("_qwen_correct.py");
+      // Merge flagged info back into products for Qwen
+      const qwenInput = products.map((p: any) => {
+        const clipResult = clipResults.results.find((r: any) => r.sku === p.sku);
+        return { ...p, flagged: clipResult?.flagged || [] };
+      });
+
+      const qwenInputPath = `/tmp/qwen_correct_input_${Date.now()}.json`;
+      await writeFile(qwenInputPath, JSON.stringify({ products: qwenInput }));
+
+      req.log.info({ count: flaggedProducts.length }, "Running Qwen correction (Stage 2)");
+      const { stdout: qwenStdout } = await execFileAsync("python3", [qwenScript, qwenInputPath], {
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: 600000, // Qwen is slower
+      });
+      await unlink(qwenInputPath).catch(() => {});
+
+      const qwenData = JSON.parse(qwenStdout);
+      qwenResults = qwenData.results || [];
+    }
+
+    // Merge results
+    const merged = products.map((p: any) => {
+      const clipResult = clipResults.results.find((r: any) => r.sku === p.sku) || {};
+      const qwenResult = qwenResults.find((r: any) => r.sku === p.sku) || {};
+      const flagged = clipResult.flagged || [];
+
+      // Only keep corrections for attributes that were actually flagged
+      const flaggedAttrKeys = new Set(flagged.map((f: any) => `${f.type}:${f.stated}`));
+      const corrections = (qwenResult.corrections || []).filter((c: any) =>
+        flaggedAttrKeys.has(`${c.attribute}:${c.original}`)
+      );
+
+      // Apply only flagged corrections to title/description
+      let correctedTitle = qwenResult.corrected_title || p.title;
+      let correctedDesc = qwenResult.corrected_description || p.description;
+      if (corrections.length === 0 && flagged.length > 0) {
+        // If Qwen failed or returned no valid corrections, keep originals
+        correctedTitle = p.title;
+        correctedDesc = p.description;
+      }
+
+      return {
+        sku: p.sku,
+        stated_colors: clipResult.stated_colors || [],
+        stated_materials: clipResult.stated_materials || [],
+        clip_color_scores: clipResult.clip_color_scores || {},
+        clip_material_scores: clipResult.clip_material_scores || {},
+        flagged,
+        corrections,
+        corrected_title: correctedTitle,
+        corrected_description: correctedDesc,
+        elapsed_ms: (clipResult.elapsed_ms || 0) + (qwenResult.elapsed_ms || 0),
+      };
+    });
+
+    const totalFlagged = merged.filter((m: any) => m.flagged.length > 0).length;
+    const totalCorrected = merged.filter((m: any) => m.corrections.some((c: any) => c.observed)).length;
+
+    res.json({
+      results: merged,
+      summary: {
+        total: products.length,
+        flagged: totalFlagged,
+        corrected: totalCorrected,
+      },
+    });
+  } catch (err: any) {
+    req.log.error({ err }, "Visual verification failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/sheet-duplicates ──────────────────────────────────
+// Find duplicate products within an uploaded sheet by image similarity
+router.post("/products/sheet-duplicates", async (req, res): Promise<void> => {
+  try {
+    const { products, threshold } = req.body as {
+      products: { sku: string; title: string; images: string[] }[];
+      threshold?: number;
+    };
+
+    if (!Array.isArray(products) || products.length < 2) {
+      req.log.warn({ productsLength: Array.isArray(products) ? products.length : "not_array" }, "Sheet duplicates: too few products");
+      res.status(400).json({ error: "At least 2 products required" });
+      return;
+    }
+
+    const scriptPath = resolveScript("_sheet_duplicates.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/sheet_dup_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify(products));
+
+    const args = [scriptPath, inputPath];
+    if (threshold !== undefined) args.push(String(threshold));
+
+    req.log.info({ count: products.length }, "Running sheet duplicate detection");
+
+    const { stdout } = await execFileAsync("python3", args, {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 3600000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "Sheet duplicate detection failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/validate-correction ────────────────────────────────
+// Submit feedback on a correction to measure accuracy
+const VALIDATION_FILE = path.resolve(__parentDirname, "validation_results.json");
+
+async function loadValidations(): Promise<any[]> {
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const data = await readFile(VALIDATION_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+}
+
+async function saveValidations(validations: any[]): Promise<void> {
+  const { writeFile } = await import("node:fs/promises");
+  await writeFile(VALIDATION_FILE, JSON.stringify(validations, null, 2));
+}
+
+router.post("/products/validate-correction", async (req, res): Promise<void> => {
+  try {
+    const { sku, attribute, original, observed, isCorrect, actualValue } = req.body as {
+      sku: string;
+      attribute: string;    // "color" or "material"
+      original: string;     // what listing said
+      observed: string;     // what Qwen said
+      isCorrect: boolean;   // was Qwen right?
+      actualValue?: string; // if wrong, what's the true value
+    };
+
+    if (!sku || !attribute || !original || observed === undefined || isCorrect === undefined) {
+      res.status(400).json({ error: "sku, attribute, original, observed, isCorrect required" });
+      return;
+    }
+
+    const validations = await loadValidations();
+    validations.push({
+      sku,
+      attribute,
+      original,
+      observed,
+      isCorrect,
+      actualValue: actualValue || null,
+      timestamp: new Date().toISOString(),
+    });
+    await saveValidations(validations);
+
+    res.json({ success: true, totalValidations: validations.length });
+  } catch (err: any) {
+    req.log.error({ err }, "Failed to save validation");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/products/validation-stats ────────────────────────────────────
+// Get accuracy metrics from validations
+router.get("/products/validation-stats", async (req, res): Promise<void> => {
+  try {
+    const validations = await loadValidations();
+
+    // Calculate stats
+    const total = validations.length;
+    const correct = validations.filter((v) => v.isCorrect).length;
+    const incorrect = total - correct;
+    const accuracy = total > 0 ? (correct / total * 100).toFixed(1) : "N/A";
+
+    // Breakdown by attribute type
+    const colorValidations = validations.filter((v) => v.attribute === "color");
+    const materialValidations = validations.filter((v) => v.attribute === "material");
+
+    const colorCorrect = colorValidations.filter((v) => v.isCorrect).length;
+    const materialCorrect = materialValidations.filter((v) => v.isCorrect).length;
+
+    // Common errors
+    const errors = validations
+      .filter((v) => !v.isCorrect)
+      .reduce((acc, v) => {
+        const key = `${v.original}->${v.observed}`;
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+  res.json({
+      total,
+      correct,
+      incorrect,
+      accuracy: `${accuracy}%`,
+      byAttribute: {
+        color: {
+          total: colorValidations.length,
+          correct: colorCorrect,
+          accuracy: colorValidations.length > 0
+            ? `${(colorCorrect / colorValidations.length * 100).toFixed(1)}%`
+            : "N/A",
+        },
+        material: {
+          total: materialValidations.length,
+          correct: materialCorrect,
+          accuracy: materialValidations.length > 0
+            ? `${(materialCorrect / materialValidations.length * 100).toFixed(1)}%`
+            : "N/A",
+        },
+      },
+      commonErrors: Object.entries(errors)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 10),
+    });
+  } catch (err: any) {
+    req.log.error({ err }, "Failed to get validation stats");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/qwen-specs ────────────────────────────────────────
+// Use Qwen VLM to extract accurate specs from product image + text
+router.post("/products/qwen-specs", async (req, res): Promise<void> => {
+  try {
+    const { products } = req.body as {
+      products: { sku: string; title: string; description?: string; images: string[] }[];
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    const scriptPath = resolveScript("_qwen_specs.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/qwen_specs_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify({ products }));
+
+    req.log.info({ count: products.length }, "Running Qwen VLM spec extraction");
+
+    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 600000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "Qwen VLM spec extraction failed");
     res.status(500).json({ error: err.message });
   }
 });

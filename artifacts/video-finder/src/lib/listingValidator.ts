@@ -578,6 +578,7 @@ export async function runTextCorrectionBatched(
   apiBase: string = "",
   useQwen: boolean = false,
   onBatch?: (batchIdx: number, totalBatches: number) => void,
+  batchSize: number = BATCH_SIZE,
 ): Promise<CorrectTextResult> {
   return batchCall(
     products,
@@ -586,6 +587,7 @@ export async function runTextCorrectionBatched(
       results: outputs.flatMap((o) => o.results),
     }),
     onBatch,
+    batchSize,
   );
 }
 

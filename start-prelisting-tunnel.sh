@@ -29,6 +29,7 @@ CLIP_PORT="${CLIP_VERIFY_PORT:-8001}"
 URL_FILE="/tmp/prelisting-tunnel-url.txt"
 API_PID=""
 CLIP_PID=""
+ANALYSIS_PID=""
 TUNNEL_PID=""
 
 cleanup() {
@@ -36,6 +37,7 @@ cleanup() {
   echo "Shutting down..."
   [ -n "$API_PID" ] && kill "$API_PID" 2>/dev/null || true
   [ -n "$CLIP_PID" ] && kill "$CLIP_PID" 2>/dev/null || true
+  [ -n "$ANALYSIS_PID" ] && kill "$ANALYSIS_PID" 2>/dev/null || true
   [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
   exit 0
 }
@@ -68,6 +70,16 @@ else
   CLIP_PID=$!
   sleep 2
   echo "    started (pid $CLIP_PID)"
+fi
+
+echo "=== 2b/3: Analysis server (HSN + Qwen text) on 127.0.0.1:${ANALYSIS_PORT:-8003} ==="
+if curl -s --max-time 2 "http://127.0.0.1:${ANALYSIS_PORT:-8003}/health" >/dev/null 2>&1; then
+  echo "    already running"
+else
+  ANALYSIS_PORT="${ANALYSIS_PORT:-8003}" ANALYSIS_WORKERS="${ANALYSIS_WORKERS:-1}" python3 _analysis_server.py &
+  ANALYSIS_PID=$!
+  sleep 2
+  echo "    started (pid $ANALYSIS_PID) — Qwen loads on first use"
 fi
 
 echo "=== 3/3: Cloudflare Tunnel -> 127.0.0.1:${PORT} ==="

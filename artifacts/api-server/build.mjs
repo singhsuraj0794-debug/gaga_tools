@@ -128,6 +128,14 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
   if (pyFiles.length > 0) {
     console.log(`Copied ${pyFiles.length} Python scripts to dist/`);
   }
+
+  const dataFiles = readdirSync(artifactDir).filter(f => /^[a-z].*\.json$/.test(f) && !["package.json", "tsconfig.json", "vercel.json"].includes(f));
+  for (const f of dataFiles) {
+    cpSync(path.resolve(artifactDir, f), path.resolve(distDir, f));
+  }
+  if (dataFiles.length > 0) {
+    console.log(`Copied ${dataFiles.length} JSON data files to dist/`);
+  }
 }
 
 buildAll().catch((err) => {

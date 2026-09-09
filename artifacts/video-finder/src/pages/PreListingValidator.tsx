@@ -1195,7 +1195,7 @@ export default function PreListingValidator() {
       pushLog("BATCH", 0, `[TXT] Calling API for ${correctProducts.length} products (batched)...`);
       const result = await runTextCorrectionBatched(correctProducts, "", useQwen, (bi, tb) => {
         pushLog("BATCH", 0, `[TXT] Batch ${bi}/${tb}...`);
-      });
+      }, useQwen ? 5 : 10);
       pushLog("BATCH", 0, `[TXT] API returned ${result.results.length} results`);
 
       const corrMap = new Map(result.results.map((cr) => [cr.sku, { title: cr.title, description: cr.description, log: cr.log }]));
