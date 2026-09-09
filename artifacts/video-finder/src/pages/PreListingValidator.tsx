@@ -1200,9 +1200,11 @@ export default function PreListingValidator() {
 
       const corrMap = new Map(result.results.map((cr) => [cr.sku, { title: cr.title, description: cr.description, log: cr.log }]));
 
+      let appliedCount = 0;
       const updated = _currentResults.current.map((r) => {
           const corr = corrMap.get(r.sku);
           if (!corr) return r;
+          appliedCount++;
           const next = {
             ...r,
             titleSuggestion: corr.title ?? r.titleSuggestion,
@@ -1220,6 +1222,14 @@ export default function PreListingValidator() {
       });
       _currentResults.current = updated;
       setResults(updated);
+
+      // Diagnostic: how many corrections matched result SKUs.
+      pushLog("BATCH", 0, `[TXT] API returned ${result.results.length} corrections; applied to ${appliedCount} result(s)`);
+      if (appliedCount === 0 && result.results.length > 0) {
+        const apiSkus = result.results.slice(0, 5).map((r) => r.sku).join(", ");
+        const resultSkus = _currentResults.current.slice(0, 5).map((r) => r.sku).join(", ");
+        pushLog("BATCH", 0, `[TXT] ⚠️ SKU mismatch — API skus: ${apiSkus} | result skus: ${resultSkus}`);
+      }
 
       // Detailed per-product logging
       for (const cr of result.results) {
