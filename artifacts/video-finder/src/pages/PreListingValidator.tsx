@@ -137,19 +137,40 @@ export default function PreListingValidator() {
   };
 
   // Auto-discover the current tunnel URL from Supabase Storage. The
-  // start-prelisting-tunnel.sh script publishes the live URL to
-  // monitoring/prelisting-api-url.txt, so any device opens the app and gets the
-  // correct compute URL without manually pasting.
+  // start-prelisting-tunnel.sh script publishes the live URL to a timestamped
+  // file (monitoring/prelisting-api-url-<ts>.txt) — anon keys can INSERT new
+  // files but not overwrite a fixed one, so we list the bucket and read the
+  // newest match. Falls back to the legacy fixed name too.
   const discoverTunnelUrl = async () => {
     try {
       const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ||
         "https://okxyskmjsmtykblrtmyi.supabase.co";
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
-      const resp = await fetch(
-        `${supabaseUrl}/storage/v1/object/public/monitoring/prelisting-api-url.txt`,
-        { signal: ctrl.signal, cache: "no-store" },
-      );
+
+      // Find the newest prelisting-api-url-*.txt object.
+      let bestName = "prelisting-api-url.txt";
+      try {
+        const listResp = await fetch(`${supabaseUrl}/storage/v1/object/list/monitoring`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prefix: "prelisting-api-url", limit: 50 }),
+          signal: ctrl.signal,
+        });
+        if (listResp.ok) {
+          const items: { name?: string; created_at?: string }[] = await listResp.json();
+          const matches = (items || []).filter((i) => i.name && /^prelisting-api-url-\d+\.txt$/.test(i.name));
+          if (matches.length > 0) {
+            matches.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+            bestName = matches[0].name!;
+          }
+        }
+      } catch { /* fall back to fixed name */ }
+
+      const resp = await fetch(`${supabaseUrl}/storage/v1/object/public/monitoring/${bestName}`, {
+        signal: ctrl.signal,
+        cache: "no-store",
+      });
       clearTimeout(timer);
       if (!resp.ok) return;
       const raw = (await resp.text()).trim();

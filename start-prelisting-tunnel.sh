@@ -94,6 +94,9 @@ start_tunnel() {
 
 # Publish the current tunnel URL to Supabase Storage so the deployed frontend
 # can auto-fill the Compute API field from any device (no manual pasting).
+# Uses a timestamped filename because the anon key can INSERT new files but
+# cannot overwrite a fixed one (RLS). The frontend lists the bucket and reads
+# the newest prelisting-api-url-<ts>.txt.
 publish_url() {
   local url="$1"
   local supabase_url supabase_key remote req
@@ -102,15 +105,14 @@ publish_url() {
   if [ -z "$supabase_url" ] || [ -z "$supabase_key" ]; then
     return 0
   fi
-  remote="prelisting-api-url.txt"
-  req="$(printf '{"url":"%s"}' "$url")"
+  remote="prelisting-api-url-$(date +%s).txt"
   curl -s -o /dev/null --max-time 10 -X PUT \
     -H "apikey: $supabase_key" \
     -H "Authorization: Bearer $supabase_key" \
-    -H "Content-Type: application/json" \
-    --data "$req" \
+    -H "Content-Type: text/plain" \
+    --data "$url" \
     "$supabase_url/storage/v1/object/monitoring/$remote" || true
-  echo "    published to Supabase for auto-discovery"
+  echo "    published to Supabase for auto-discovery ($remote)"
 }
 
 start_tunnel
