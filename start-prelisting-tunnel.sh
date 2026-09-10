@@ -140,8 +140,11 @@ echo "    ║  (also saved at $URL_FILE)"
 echo "    ╚════════════════════════════════════════════════════════════════╝"
 echo ""
 
-# Keep the tunnel alive: if cloudflared exits or the URL goes unreachable,
-# restart it and refresh the URL file.
+# Keep the tunnel alive. New trycloudflare.com hostnames can take a few minutes
+# for DNS to propagate, so before reconnecting we poll the URL for up to
+# DNS_WAIT seconds (default 240). Only restart if it's still unreachable after
+# that — this prevents the loop from churning new (also-unpropagated) URLs.
+DNS_WAIT="${DNS_WAIT:-240}"
 while true; do
   if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
     echo "[$(date '+%H:%M:%S')] tunnel process exited — reconnecting..."
@@ -150,10 +153,23 @@ while true; do
   fi
   url="$(cat "$URL_FILE" 2>/dev/null || true)"
   if [ -n "$url" ] && ! curl -s -o /dev/null --max-time 8 "$url/api/products/status"; then
-    echo "[$(date '+%H:%M:%S')] tunnel unreachable — reconnecting..."
-    kill "$TUNNEL_PID" 2>/dev/null || true
-    sleep 2
-    start_tunnel || echo "    reconnect failed, retrying..."
+    echo "[$(date '+%H:%M:%S')] tunnel unreachable — waiting up to ${DNS_WAIT}s for DNS/reachability before reconnecting..."
+    waited=0
+    while [ "$waited" -lt "$DNS_WAIT" ]; do
+      if kill -0 "$TUNNEL_PID" 2>/dev/null && curl -s -o /dev/null --max-time 8 "$url/api/products/status"; then
+        echo "[$(date '+%H:%M:%S')] tunnel is reachable again"
+        break
+      fi
+      sleep 10
+      waited=$((waited + 10))
+    done
+    # If still unreachable after the wait, restart with a fresh URL.
+    if [ "$waited" -ge "$DNS_WAIT" ]; then
+      echo "[$(date '+%H:%M:%S')] still unreachable after ${waited}s — reconnecting..."
+      kill "$TUNNEL_PID" 2>/dev/null || true
+      sleep 2
+      start_tunnel || echo "    reconnect failed, retrying..."
+    fi
     continue
   fi
   sleep 10
