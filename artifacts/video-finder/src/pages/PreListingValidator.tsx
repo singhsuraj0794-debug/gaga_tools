@@ -136,6 +136,25 @@ export default function PreListingValidator() {
     setApiUrl(v);
   };
 
+  // The cloudflared quick tunnel occasionally drops a connection mid-request
+  // ("context canceled"), which surfaces in the browser as "Failed to fetch".
+  // Retry transient network failures before giving up.
+  const fetchWithRetry = async (url: string, options: RequestInit, retries = 2) => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fetch(url, options);
+      } catch (e: any) {
+        lastErr = e;
+        if (attempt === retries || (e?.name !== "TypeError" && !/failed to fetch/i.test(String(e?.message)))) {
+          throw e;
+        }
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  };
+
   // Auto-discover the current tunnel URL from Supabase Storage. The
   // start-prelisting-tunnel.sh script publishes the live URL to a timestamped
   // file (monitoring/prelisting-api-url-<ts>.txt) — anon keys can INSERT new
@@ -1808,7 +1827,7 @@ export default function PreListingValidator() {
           setDuplicateStatus(`[${batchIdx}/${filteredMap.size}] ${label}: scanning images... (${m}m ${s}s elapsed)`);
         }, 5000);
 
-        const resp = await fetch(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, {
+        const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ products: sellerProducts }),
