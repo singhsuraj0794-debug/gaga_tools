@@ -328,6 +328,44 @@ def _detect_stock_hashes(product_hashes: Dict[int, List[Tuple[str, object]]], n:
     return stock_hashes
 
 
+def _find_sku_groups(products: List[dict]) -> List[dict]:
+    """Group products that share the exact same SKU.
+
+    Image-based duplicate detection misses listings that share a SKU but have
+    different images. A repeated SKU is always a duplicate (same product code),
+    so flag it regardless of images.
+    """
+    by_sku: Dict[str, List[int]] = defaultdict(list)
+    for i, p in enumerate(products):
+        sku = (p.get("sku") or "").strip()
+        if sku:
+            by_sku[sku].append(i)
+    groups = []
+    for sku, members in by_sku.items():
+        if len(members) < 2:
+            continue
+        members_sorted = sorted(members, key=lambda idx: -(len(products[idx].get("title", "") or "")))
+        keep_idx = members_sorted[0]
+        keep_p = products[keep_idx]
+        remove_items = []
+        for ri in members_sorted[1:]:
+            p = products[ri]
+            remove_items.append({
+                "sku": p.get("sku", ""),
+                "title": p.get("title", ""),
+                "reason": f"Duplicate SKU '{sku}' — same SKU appears {len(members)} times",
+            })
+        groups.append({
+            "keep": {"sku": keep_p.get("sku", ""), "title": keep_p.get("title", ""), "reason": f"Kept: first occurrence of SKU '{sku}'"},
+            "remove": remove_items,
+            "similarity": 1.0,
+            "match_type": "same_sku",
+            "matched_images": 0,
+            "total_images": 0,
+        })
+    return groups
+
+
 def find_sheet_duplicates(products: List[dict], threshold: int = 4) -> dict:
     if len(products) < 2:
         return {"groups": [], "total_duplicates": 0, "remove_skus": []}
@@ -514,6 +552,17 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 4) -> dict:
                 }
 
     out_groups = _build_groups(products, find, n, overlap_info)
+
+    # Merge in exact-SKU duplicates (listings sharing a SKU but different images).
+    # Avoid double-counting SKUs already caught by the image-based groups.
+    removed_skus = {r["sku"] for g in out_groups for r in g["remove"]}
+    for g in _find_sku_groups(products):
+        if all(r["sku"] in removed_skus for r in g["remove"]):
+            continue  # already covered by image groups
+        out_groups.append(g)
+        for r in g["remove"]:
+            removed_skus.add(r["sku"])
+
     total_dupes = sum(len(g["remove"]) for g in out_groups)
     all_remove_skus = [r["sku"] for g in out_groups for r in g["remove"]]
     print(f"[DUP] Done: {total_dupes} duplicates in {len(out_groups)} groups ({time.time()-t0:.1f}s total)", file=sys.stderr)
