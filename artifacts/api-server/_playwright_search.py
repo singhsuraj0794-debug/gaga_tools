@@ -62,7 +62,11 @@ def search_amazon(title: str) -> dict:
                     const priceSymbol = el.querySelector('.a-price-symbol')?.textContent?.trim() || '₹';
                     const price = priceWhole ? `${priceSymbol}${priceWhole}` : '';
                     const links = el.querySelectorAll('a[href*="/dp/"]');
-                    const link = links[0] ? 'https://www.amazon.in' + links[0].getAttribute('href') : '';
+                    let link = links[0] ? 'https://www.amazon.in' + links[0].getAttribute('href') : '';
+                    // Fallback: construct URL from ASIN when no /dp/ link found
+                    if (!link && asin) {
+                        link = 'https://www.amazon.in/dp/' + asin;
+                    }
                     const imgs = el.querySelectorAll('img.s-image');
                     const img = imgs[0] ? (imgs[0].src || '') : '';
                     return { name: name.slice(0, 300), price, url: link.split('?')[0], image: img, asin };
