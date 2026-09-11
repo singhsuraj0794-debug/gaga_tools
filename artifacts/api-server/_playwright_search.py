@@ -16,6 +16,7 @@ def _get_browser():
         p = sync_playwright().start()
         BROWSER = p.chromium.launch(
             headless=True,
+            executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             args=[
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
@@ -39,7 +40,7 @@ def search_amazon(title: str) -> dict:
         try:
             page.wait_for_selector('[data-asin]:not([data-asin=""]), .s-result-item', timeout=10000)
         except:
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000)
 
         for _ in range(3):
             page.evaluate("window.scrollBy(0, 600)")
@@ -99,7 +100,7 @@ def search_flipkart(title: str) -> dict:
         try:
             page.wait_for_selector('[data-id], a[title]', timeout=10000)
         except:
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000)
 
         products = page.evaluate("""
             () => {
@@ -139,22 +140,34 @@ def search_meesho(title: str) -> dict:
         url = f"https://www.meesho.com/search?q={query}"
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         try:
-            page.wait_for_selector('[data-testid^="product-"], [class*="productCard"]', timeout=10000)
+            page.wait_for_selector('a[href*="/p/"]', timeout=15000)
         except:
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000)
 
         products = page.evaluate("""
             () => {
-                const items = document.querySelectorAll('[data-testid^="product-"], [class*="productCard"], a[href*="/p/"]');
-                return Array.from(items).slice(0, 15).map(el => {
-                    const link = el.tagName === 'A' ? el : el.querySelector('a[href*="/p/"]');
-                    const url = link?.href || '';
-                    const name = (el.querySelector('[class*="title"], [class*="name"], [class*="productName"]')?.textContent || '').trim().slice(0, 300);
-                    const priceEl = el.querySelector('[class*="price"], [class*="amount"]');
-                    const price = priceEl?.textContent?.trim() || '';
+                const items = document.querySelectorAll('a[href*="/p/"]');
+                const seen = new Set();
+                return Array.from(items).map(el => {
+                    const url = (el.href || '').split('?')[0];
+                    if (seen.has(url)) return null;
+                    seen.add(url);
+                    const leaves = [...el.querySelectorAll('p, span, div')].filter(x => x.children.length === 0 && x.textContent.trim());
+                    const texts = leaves.map(x => x.textContent.trim());
+                    let name = '';
+                    for (const t of texts) {
+                        if (t.length > name.length && !/^₹?\\s*[\\d,]+(\\s*%\\s*off)?$/.test(t) && !/^\\d+(\\.\\d+)?$/.test(t) && t.length < 300) {
+                            name = t;
+                        }
+                    }
+                    let price = '';
+                    for (const t of texts) {
+                        const m = t.match(/₹\\s*[\\d,]+/);
+                        if (m) { price = m[0]; break; }
+                    }
                     const img = el.querySelector('img[src*="http"]')?.src || '';
-                    return { name, price, image: img, url };
-                }).filter(p => p.name && p.url);
+                    return { name: name.slice(0, 300), price, image: img, url };
+                }).filter(p => p && p.name && p.url);
             }
         """)
 

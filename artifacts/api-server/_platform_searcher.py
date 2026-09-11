@@ -195,6 +195,26 @@ def _score_match(title: str, name: str, image_url: str, result_image: str,
     return min(score, 100.0)
 
 
+def _text_similarity(title: str, name: str) -> float:
+    """Return 0-1 text similarity between product title and candidate name (ignores image)."""
+    if not title or not name:
+        return 0.0
+    import difflib
+    t = _clean_title(title)
+    n = _clean_title(name)
+    if not t or not n:
+        return 0.0
+    # Use difflib ratio on cleaned strings
+    ratio = difflib.SequenceMatcher(None, t, n).ratio()
+    # Also check token overlap
+    tt = set(t.split())
+    nn = set(n.split())
+    if tt and nn:
+        overlap = len(tt & nn) / len(tt | nn)
+        ratio = max(ratio, overlap)
+    return ratio
+
+
 # ---- AI Model verification (DINOv2 + CLIP) ----
 def _load_dinov2():
     global _dinov2_processor, _dinov2_model
@@ -394,7 +414,7 @@ def _visit_platform_page(url: str, platform: str):
     from playwright.sync_api import sync_playwright
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"], executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                 viewport={"width": 1440, "height": 900},
@@ -490,7 +510,7 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
         if asin_map:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"], executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                     viewport={"width": 1440, "height": 900}, locale="en-IN",
@@ -653,6 +673,9 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
         gate_passed = dinov2_sim is not None and clip_sim is not None and not (dinov2_sim < 0.45 and clip_sim < 0.55)
     else:
         gate_passed = dinov2_sim is not None and clip_sim is not None and dinov2_sim >= 0.60 and clip_sim >= 0.65
+    # Text-search bypass: accept if product name closely matches even when images differ
+    if not gate_passed and best_match and _text_similarity(title, best_match.get("title", "")) >= 0.55:
+        gate_passed = True
 
     if not gate_passed:
         if rev_img_candidates:
@@ -713,7 +736,7 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
         if fk_urls:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"], executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                     viewport={"width": 1440, "height": 900}, locale="en-IN",
@@ -882,6 +905,9 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
         gate_passed = dinov2_sim is not None and clip_sim is not None and not (dinov2_sim < 0.45 and clip_sim < 0.55)
     else:
         gate_passed = dinov2_sim is not None and clip_sim is not None and dinov2_sim >= 0.60 and clip_sim >= 0.65
+    # Text-search bypass: accept if product name closely matches even when images differ
+    if not gate_passed and best_match and _text_similarity(title, best_match.get("title", "")) >= 0.55:
+        gate_passed = True
 
     if not gate_passed:
         if rev_img_candidates:
@@ -1073,18 +1099,10 @@ def search_all(title: str, image_url: str = "", gajab_price: str = "", gajab_url
     # Reverse image search once, share across all platforms
     rev_result = _reverse_image_search(image_url) if image_url else None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-        fut_map = {
-            ex.submit(_search_amazon, title, image_url, gajab_price, gajab_url, rev_result): "amazon",
-            ex.submit(_search_flipkart, title, image_url, gajab_price, gajab_url, rev_result): "flipkart",
-            ex.submit(_search_meesho, title, image_url, gajab_price, gajab_url, rev_result): "meesho",
-        }
-        for fut in concurrent.futures.as_completed(fut_map):
-            platform = fut_map[fut]
-            try:
-                result[platform] = fut.result()
-            except Exception as e:
-                result[platform] = {"status": "failed", "error": str(e)}
+    # Run sequentially to avoid resource contention (Chrome CDP + subprocess Chromium)
+    result["amazon"] = _search_amazon(title, image_url, gajab_price, gajab_url, rev_result)
+    result["flipkart"] = _search_flipkart(title, image_url, gajab_price, gajab_url, rev_result)
+    result["meesho"] = _search_meesho(title, image_url, gajab_price, gajab_url, rev_result)
 
     return result
 
