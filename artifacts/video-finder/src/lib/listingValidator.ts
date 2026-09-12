@@ -574,7 +574,21 @@ async function batchCall<TInput, TOutput>(
   const outputs: TOutput[] = [];
   for (let i = 0; i < batches.length; i++) {
     onBatch?.(i + 1, batches.length);
-    outputs.push(await fn(batches[i]));
+    // Retry transient tunnel drops (TypeError: Failed to fetch / Load failed)
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try {
+        outputs.push(await fn(batches[i]));
+        lastErr = null;
+        break;
+      } catch (e: any) {
+        lastErr = e;
+        const transient = e?.name === "TypeError" || /failed to fetch|load failed|networkerror/i.test(String(e?.message));
+        if (attempt === 2 || !transient) break;
+        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+      }
+    }
+    if (lastErr) throw lastErr;
   }
   return mergeResults(outputs);
 }
@@ -2242,121 +2256,16 @@ export async function exportCorrectedSheet(
       blankrows: true,
     });
 
-    // Feedback-aware export: rebuild the sheet as AOA with a prepended
-    // "Feedback" column and red-highlight affected rows. Inserting a column
-    // shifts every cell, so we must rebuild rather than patch in place.
-    if (normalizedFeedback.size > 0) {
-      return exportWithFeedback(jsonData, {
-        normalizedCorrections,
-        normalizedText,
-        normalizedImages,
-        normalizedOverlay,
-        normalizedSkip,
-        normalizedFeedback,
-      }, file);
-    }
-
-    const rowsToDelete: number[] = [];
-
-    if (jsonData.length >= 2) {
-      const row0Str = (jsonData[0] as unknown[] ?? []).join(" ").toLowerCase();
-      const hasPrefixRow = !row0Str.includes("sku") && !row0Str.includes("product name");
-      const headerIdx = hasPrefixRow ? 1 : 0;
-      const dataStartIdx = hasPrefixRow ? 2 : 1;
-      const headerRow = (jsonData[headerIdx] as unknown[]) ?? [];
-      const headers = headerRow.map((h) => String(h ?? "").trim());
-      const hsnCol = headers.findIndex((h) => normalizeFieldName(h) === "hsn");
-      const taxCol = headers.findIndex((h) => normalizeFieldName(h) === "tax");
-      const skuCol = headers.findIndex((h) => normalizeFieldName(h) === "sku");
-      const titleCol = headers.findIndex((h) => normalizeFieldName(h) === "product name");
-      const descCol = headers.findIndex((h) => normalizeFieldName(h) === "description");
-      const imgCols = Array.from({ length: 10 }, (_, i) => {
-        const expected = `product image ${i + 1}`;
-        return headers.findIndex((h) => normalizeFieldName(h) === expected);
-      });
-
-      for (let i = dataStartIdx; i < jsonData.length; i++) {
-        const raw = jsonData[i] as unknown[];
-        if (!raw || raw.every((c) => !c || String(c).trim() === "")) continue;
-        const sku = normalizeSkuValue(raw[skuCol]);
-
-        // Remove duplicate rows entirely (shift data up so no gaps remain).
-        if (normalizedSkip.has(sku)) {
-          rowsToDelete.push(i);
-          continue;
-        }
-
-        const fix = normalizedCorrections.get(sku);
-        const textFix = normalizedText.get(sku);
-        const imgUrls = normalizedImages.get(sku);
-        const hasFix = Boolean(
-          fix || (textFix && (textFix.title || textFix.description)) || imgUrls,
-        );
-        if (!hasFix) continue;
-
-        if (fix) {
-          if (hsnCol >= 0 && fix.hsn) {
-            sheet[XLSX.utils.encode_cell({ r: i, c: hsnCol })] = { t: "s", v: String(fix.hsn) };
-          }
-          if (taxCol >= 0 && fix.tax) {
-            sheet[XLSX.utils.encode_cell({ r: i, c: taxCol })] = { t: "s", v: String(fix.tax) };
-          }
-        }
-        updatedCount++;
-
-        // Apply title/description text corrections if provided.
-        if (textFix) {
-          if (titleCol >= 0 && textFix.title) {
-            sheet[XLSX.utils.encode_cell({ r: i, c: titleCol })] = { t: "s", v: textFix.title };
-          }
-          if (descCol >= 0 && textFix.description) {
-            sheet[XLSX.utils.encode_cell({ r: i, c: descCol })] = { t: "s", v: textFix.description };
-          }
-        }
-
-        // Apply image corrections: remove duplicates, compact remaining.
-        if (imgUrls) {
-          for (let colIdx = 0; colIdx < imgCols.length; colIdx++) {
-            if (imgCols[colIdx] >= 0) {
-              const addr = XLSX.utils.encode_cell({ r: i, c: imgCols[colIdx] });
-              sheet[addr] = { t: "s", v: imgUrls[colIdx] || "" };
-            }
-          }
-        }
-
-        // Apply overlay image URL to next available image column
-        const overlayUrl = normalizedOverlay.get(sku);
-        if (overlayUrl) {
-          // Count existing images in this row to find the next slot
-          let existingImageCount = 0;
-          for (let ci = 0; ci < imgCols.length; ci++) {
-            if (imgCols[ci] >= 0) {
-              const addr = XLSX.utils.encode_cell({ r: i, c: imgCols[ci] });
-              const cell = sheet[addr];
-              if (cell && cell.v && String(cell.v).trim()) {
-                existingImageCount++;
-              }
-            }
-          }
-          // Write overlay to the next column after existing images
-          const overlayColIdx = existingImageCount;
-          if (overlayColIdx < imgCols.length && imgCols[overlayColIdx] >= 0) {
-            const addr = XLSX.utils.encode_cell({ r: i, c: imgCols[overlayColIdx] });
-            sheet[addr] = { t: "s", v: overlayUrl };
-          }
-        }
-      }
-    }
-
-    // Physically remove duplicate rows while preserving column widths,
-    // merges, row heights and cell styles (no AOA rebuild).
-    if (rowsToDelete.length > 0) {
-      deleteSheetRowsPreserve(sheet, new Set(rowsToDelete));
-    }
-
-    const base = file.name.replace(/\.(xlsx|xls)$/i, "");
-    XLSX.writeFile(wb, `${base}-corrected.xlsx`, { cellStyles: true });
-    return updatedCount;
+    // Always use feedback-aware export — Feedback column is always present
+    // so the reviewer can see every flagged item at a glance.
+    return exportWithFeedback(jsonData, {
+      normalizedCorrections,
+      normalizedText,
+      normalizedImages,
+      normalizedOverlay,
+      normalizedSkip,
+      normalizedFeedback,
+    }, file);
   }
 
   // CSV fallback: rebuild the AOA (CSV has no formatting to preserve).
@@ -2372,8 +2281,8 @@ export async function exportCorrectedSheet(
     return headers.findIndex((h) => normalizeFieldName(h) === expected);
   });
 
-  const aoa: unknown[][] = [prefixRow.length > 0 ? (normalizedFeedback.size > 0 ? ["Feedback", ...prefixRow] : prefixRow) : (normalizedFeedback.size > 0 ? ["Feedback"] : [""])];
-  aoa.push(normalizedFeedback.size > 0 ? ["Feedback", ...headers] : headers);
+  const aoa: unknown[][] = [prefixRow.length > 0 ? ["Feedback", ...prefixRow] : ["Feedback"]];
+  aoa.push(["Feedback", ...headers]);
   for (const row of rows) {
     const out: unknown[] = headers.map((h) => row[h] ?? "");
     if (skuCol >= 0) {
@@ -2416,9 +2325,7 @@ export async function exportCorrectedSheet(
         }
       }
     }
-    if (normalizedFeedback.size > 0) {
-      out.unshift(skuCol >= 0 ? (normalizedFeedback.get(normalizeSkuValue(row[headers[skuCol]])) ?? "") : "");
-    }
+    out.unshift(skuCol >= 0 ? (normalizedFeedback.get(normalizeSkuValue(row[headers[skuCol]])) ?? "") : "");
     aoa.push(out);
   }
 
