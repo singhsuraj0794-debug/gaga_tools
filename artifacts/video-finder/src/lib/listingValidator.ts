@@ -1255,12 +1255,15 @@ export async function validateImages(
 
   for (const { url, img } of imageResults) {
     if (!img || img.naturalWidth === 0) {
+      // WARN only: some CDNs (Meesho/Flixcart) block browser-side loads via
+      // CORS/referrer restrictions. The CLIP server downloads server-side
+      // and will do the definitive image-quality analysis.
       checks.push({
         field: "Product Images",
         check: "Image load failure",
-        passed: false,
-        decision: "REJECT",
-        message: `Image failed to load: ${url.substring(0, 60)}...`,
+        passed: true,
+        decision: "WARN",
+        message: `Image couldn't load in browser (CDN restriction?): ${url.substring(0, 60)}... — CLIP server will verify server-side`,
       });
       imageChecks.push({ url, loaded: false, width: 0, height: 0, isDuplicate: false });
       continue;
