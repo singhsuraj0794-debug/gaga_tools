@@ -111,6 +111,7 @@ export default function PreListingValidator() {
   const [useQwen, setUseQwen] = useState(false);
   const [skipHsn, setSkipHsn] = useState(false);
   const [skipTextCorrection, setSkipTextCorrection] = useState(false);
+  const [crossSellerDuplicates, setCrossSellerDuplicates] = useState(false);
   const [revalidating, setRevalidating] = useState(false);
 
   const [dismissedChecks, setDismissedChecks] = useState<Map<string, Set<number>>>(new Map());
@@ -1808,69 +1809,81 @@ export default function PreListingValidator() {
         return;
       }
 
-      // Group by seller name
-      const sellerMap = new Map<string, typeof products>();
-      for (const p of products) {
-        const key = p.seller || "__no_seller__";
-        if (!sellerMap.has(key)) sellerMap.set(key, []);
-        sellerMap.get(key)!.push(p);
-      }
-
-      // Filter to selected sellers only
-      const selectedSellerArr = [...selectedSellers];
-      const hasSelection = selectedSellerArr.length > 0;
-      const filteredMap = new Map<string, typeof products>();
-      for (const [key, prods] of sellerMap) {
-        if (!hasSelection || selectedSellerArr.includes(key)) {
-          filteredMap.set(key, prods);
-        }
-      }
-
-      const sellerNames = [...filteredMap.keys()].filter((k) => k !== "__no_seller__");
-      const hasSellers = sellerNames.length >= 1;
-
-      if (hasSellers) {
-        setDuplicateStatus(`Checking ${filteredMap.size} seller batch(es), ${products.length} products...`);
-      }
-
+      // Group by seller name (unless cross-seller mode is on)
       const allGroups: any[] = [];
       const allRemoveSkus: string[] = [];
-      let batchIdx = 0;
 
-      for (const [sellerKey, sellerProducts] of filteredMap) {
-        if (sellerProducts.length < 2) continue;
-        batchIdx++;
-
-        const label = sellerKey === "__no_seller__" ? `Batch ${batchIdx}` : sellerKey;
-        setDuplicateStatus(`[${batchIdx}/${filteredMap.size}] Checking ${label} (${sellerProducts.length} products)...`);
-
+      if (crossSellerDuplicates) {
+        // Cross-seller mode: send all products in a single batch
+        setDuplicateStatus(`Checking ALL ${products.length} products (cross-seller mode)...`);
         const startedAt = Date.now();
-        const progressInterval = setInterval(() => {
-          const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-          const m = Math.floor(elapsed / 60);
-          const s = elapsed % 60;
-          setDuplicateStatus(`[${batchIdx}/${filteredMap.size}] ${label}: scanning images... (${m}m ${s}s elapsed)`);
-        }, 5000);
-
         const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ products: sellerProducts }),
+          body: JSON.stringify({ products }),
           signal: AbortSignal.timeout(2700000),
         });
-        clearInterval(progressInterval);
-
         if (!resp.ok) {
           const errBody = await resp.json().catch(() => ({}));
-          throw new Error(`${label}: ${errBody.error || `HTTP ${resp.status}`}`);
+          throw new Error(errBody.error || `HTTP ${resp.status}`);
         }
         const result = await resp.json();
-
-        for (const g of (result.groups || [])) {
-          g.seller = sellerKey !== "__no_seller__" ? sellerKey : undefined;
-        }
         allGroups.push(...(result.groups || []));
         allRemoveSkus.push(...(result.remove_skus || []));
+      } else {
+        // Default: batch by seller
+        const sellerMap = new Map<string, typeof products>();
+        for (const p of products) {
+          const key = p.seller || "__no_seller__";
+          if (!sellerMap.has(key)) sellerMap.set(key, []);
+          sellerMap.get(key)!.push(p);
+        }
+
+        // Filter to selected sellers only
+        const selectedSellerArr = [...selectedSellers];
+        const hasSelection = selectedSellerArr.length > 0;
+        const filteredMap = new Map<string, typeof products>();
+        for (const [key, prods] of sellerMap) {
+          if (!hasSelection || selectedSellerArr.includes(key)) {
+            filteredMap.set(key, prods);
+          }
+        }
+
+        const sellerNames = [...filteredMap.keys()].filter((k) => k !== "__no_seller__");
+        const hasSellers = sellerNames.length >= 1;
+
+        if (hasSellers) {
+          setDuplicateStatus(`Checking ${filteredMap.size} seller batch(es), ${products.length} products...`);
+        }
+
+        let batchIdx = 0;
+        for (const [sellerKey, sellerProducts] of filteredMap) {
+          if (sellerProducts.length < 2) continue;
+          batchIdx++;
+
+          const label = sellerKey === "__no_seller__" ? `Batch ${batchIdx}` : sellerKey;
+          setDuplicateStatus(`[${batchIdx}/${filteredMap.size}] Checking ${label} (${sellerProducts.length} products)...`);
+
+          const startedAt = Date.now();
+          const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ products: sellerProducts }),
+            signal: AbortSignal.timeout(2700000),
+          });
+
+          if (!resp.ok) {
+            const errBody = await resp.json().catch(() => ({}));
+            throw new Error(`${label}: ${errBody.error || `HTTP ${resp.status}`}`);
+          }
+          const result = await resp.json();
+
+          for (const g of (result.groups || [])) {
+            g.seller = sellerKey !== "__no_seller__" ? sellerKey : undefined;
+          }
+          allGroups.push(...(result.groups || []));
+          allRemoveSkus.push(...(result.remove_skus || []));
+        }
       }
 
       setDuplicateGroups(allGroups);
@@ -2327,6 +2340,15 @@ export default function PreListingValidator() {
                     <Button onClick={findSheetDuplicates} size="lg" variant="outline" className="border-rose-300 text-rose-700 hover:bg-rose-50" disabled={rows.length < 2}>
                       <Copy className="w-4 h-4 mr-2" /> Find Duplicates
                     </Button>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none" title="Compare across all sellers (slower but catches cross-seller duplicates)">
+                      <input
+                        type="checkbox"
+                        checked={crossSellerDuplicates}
+                        onChange={(e) => setCrossSellerDuplicates(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                      />
+                      Cross-seller
+                    </label>
                     <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none" title="Use Qwen VLM to extract accurate specs from product images (slower but more accurate)">
                       <input
                         type="checkbox"

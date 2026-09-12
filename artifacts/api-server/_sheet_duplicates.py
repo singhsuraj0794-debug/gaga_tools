@@ -42,9 +42,9 @@ except OSError:
 
 _IMAGE_CACHE: Dict[str, Optional[str]] = {}
 
-STOCK_PHOTO_THRESHOLD = 0.15  # pHash cluster shared by >15% of products = stock
+STOCK_PHOTO_THRESHOLD = 0.30  # pHash cluster shared by >30% of products = stock
 MAX_CANDIDATE_PAIRS = 50000   # safety cap
-MAX_PRODUCTS_IN_BUCKET = 100  # skip LSH buckets larger than this
+MAX_PRODUCTS_IN_BUCKET = 500  # skip LSH buckets larger than this
 
 
 def clean_url(url: str) -> str:
@@ -152,7 +152,7 @@ def _compute_product_hashes(product: dict) -> List[Tuple[str, object]]:
 def compute_image_overlap(
     hashes_a: List[Tuple[str, object]],
     hashes_b: List[Tuple[str, object]],
-    threshold: int = 4,
+    threshold: int = 6,
 ) -> Tuple[int, int]:
     matched = 0
     used_b = set()
@@ -366,7 +366,7 @@ def _find_sku_groups(products: List[dict]) -> List[dict]:
     return groups
 
 
-def find_sheet_duplicates(products: List[dict], threshold: int = 4) -> dict:
+def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     if len(products) < 2:
         return {"groups": [], "total_duplicates": 0, "remove_skus": []}
     t0 = time.time()
@@ -572,7 +572,7 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 4) -> dict:
 
 def main():
     input_path = sys.argv[1] if len(sys.argv) > 1 else "/dev/stdin"
-    threshold = int(sys.argv[2]) if len(sys.argv) > 2 else 4
+    threshold = int(sys.argv[2]) if len(sys.argv) > 2 else 6
     with open(input_path) as f:
         products = json.load(f)
     result = find_sheet_duplicates(products, threshold=threshold)
