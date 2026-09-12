@@ -472,6 +472,29 @@ def check_rule5(image_url: str) -> dict:
             if sub_flagged:
                 any_flagged = True
 
+        # ── CJK / Chinese text overlay detection (OCR-based) ──────────
+        # Chinese overlays are invisible to CLIP's English prompts but EasyOCR
+        # (now loaded with ch_sim) can detect them directly.
+        try:
+            ocr_text = extract_image_text(img)
+            # CJK Unified Ideographs: U+4E00–U+9FFF
+            cjk_chars = [ch for ch in ocr_text if "\u4e00" <= ch <= "\u9fff"]
+            cjk_ratio = len(cjk_chars) / max(len(ocr_text.strip()), 1)
+            # Flag if ≥10% of detected text is CJK (likely a Chinese overlay,
+            # not just a random character on packaging)
+            cjk_flagged = len(cjk_chars) >= 3 and cjk_ratio >= 0.10
+            details.append({
+                "check": "cjk_overlay",
+                "positiveScore": round(cjk_ratio, 4),
+                "negativeScore": 0.0,
+                "ratio": round(cjk_ratio, 4),
+                "flagged": cjk_flagged,
+            })
+            if cjk_flagged:
+                any_flagged = True
+        except Exception:
+            pass  # OCR failure should not break Rule 5
+
         return {
             "hasMarkings": any_flagged,
             "watermarkScore": None,
@@ -554,9 +577,9 @@ def get_ocr_reader():
     with _ocr_lock:
         if _ocr_reader is None:
             import easyocr
-            print("[INFO] Loading EasyOCR reader (first load downloads models)...", file=sys.stderr)
+            print("[INFO] Loading EasyOCR reader (en + ch_sim)...", file=sys.stderr)
             t0 = time.time()
-            _ocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+            _ocr_reader = easyocr.Reader(["en", "ch_sim"], gpu=False, verbose=False)
             print(f"[INFO] EasyOCR ready in {time.time() - t0:.1f}s", file=sys.stderr)
     return _ocr_reader
 

@@ -2018,7 +2018,7 @@ export default function PreListingValidator() {
       setExportStatus("Exporting...");
       const corrections = new Map(hsnSelections);
       const imgCorrections = buildImageCorrections(results);
-      const feedback = buildFeedback(results);
+      const feedback = buildFeedback(results, dismissedChecks);
       const all = await exportCorrectedSheet(file, corrections, textCorrections, imgCorrections, overlayUrls, _allRemovedSkus.current, feedback);
       const removedCount = _allRemovedSkus.current.size;
       const fbCount = feedback.size;
