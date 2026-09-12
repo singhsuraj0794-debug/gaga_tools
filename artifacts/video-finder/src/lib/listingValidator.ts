@@ -97,49 +97,55 @@ export function buildImageCorrections(results: ValidationResult[]): Map<string, 
 }
 
 /**
- * Build per-SKU review feedback for the Feedback column. Flagged when any
- * image has an issue we detected; the comment lists per-image details so the
- * reviewer knows exactly which image is affected and why.
+ * Build per-SKU review feedback for the Feedback column. Includes every
+ * non-passing check (title accuracy, description, ops claims, image rules,
+ * CLIP flags, category) so the reviewer sees every flag in one cell.
  */
 export function buildFeedback(results: ValidationResult[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const res of results) {
-    if (!res.imageChecks || res.imageChecks.length === 0) continue;
     const parts: string[] = [];
-    for (let idx = 0; idx < res.imageChecks.length; idx++) {
-      const ic = res.imageChecks[idx];
-      const label = `Image ${idx + 1}`;
-      if (!ic.loaded) {
-        parts.push(`${label}: Failed to load`);
-        continue;
-      }
-      const issues: string[] = [];
-      if (ic.isDuplicate) {
-        // Only note removal when product has >4 images (minimum 4 kept)
-        const loadedCount = res.imageChecks.filter((x) => x.loaded).length;
-        if (loadedCount > 4) {
-          issues.push("Duplicate — removed on export");
-        } else {
-          issues.push("Duplicate — kept (≤4 images)");
+
+    // ── All non-passing checks (title, description, category, image rules, etc.)
+    for (const c of res.checks) {
+      if (c.passed) continue;
+      // Skip WARN-only items (e.g. client-side image load failures)
+      if (c.decision === "WARN") continue;
+      parts.push(`${c.field}: ${c.message}`);
+    }
+
+    // ── Per-image detail (duplicates, ops claims, content flags, markings)
+    if (res.imageChecks && res.imageChecks.length > 0) {
+      for (let idx = 0; idx < res.imageChecks.length; idx++) {
+        const ic = res.imageChecks[idx];
+        const label = `Image ${idx + 1}`;
+        if (!ic.loaded) continue; // already captured as a check above
+        const issues: string[] = [];
+        if (ic.isDuplicate) {
+          const loadedCount = res.imageChecks.filter((x) => x.loaded).length;
+          if (loadedCount > 4) {
+            issues.push("Duplicate — removed on export");
+          } else {
+            issues.push("Duplicate — kept (≤4 images)");
+          }
+        }
+        if (ic.hasOpsClaim) issues.push(`Ops/marketing claim${ic.ocrText ? ` "${ic.ocrText.trim().slice(0, 80)}"` : ""}`);
+        if (ic.hasContentFlag) issues.push("Prohibited content flag");
+        if (ic.isMarked) issues.push("Promo/marking overlay");
+        if (issues.length > 0) {
+          const short = (ic.url || "").split("/").pop()?.slice(0, 22) || "";
+          parts.push(`${label}${short ? ` (${short})` : ""}: ${issues.join(", ")}`);
         }
       }
-      if (ic.hasOpsClaim) issues.push(`Ops/marketing claim${ic.ocrText ? ` "${ic.ocrText.trim().slice(0, 80)}"` : ""}`);
-      if (ic.hasContentFlag) issues.push("Prohibited content flag");
-      if (ic.isMarked) issues.push("Promo/marking overlay");
-      if (issues.length > 0) {
-        // Keep filename short for readability; full URL is in image columns
-        const short = (ic.url || "").split("/").pop()?.slice(0, 22) || "";
-        parts.push(`${label}${short ? ` (${short})` : ""}: ${issues.join(", ")}`);
+      // Distinct-image summary after dedup
+      const loadedCount = res.imageChecks.filter((ic) => ic.loaded).length;
+      const distinct = res.imageChecks.filter((ic) => ic.loaded && !ic.isDuplicate).length;
+      const dupRemoved = loadedCount > 4 && res.imageChecks.some((ic) => ic.isDuplicate);
+      if (dupRemoved && distinct < 4 && !parts.some((p) => p.includes("distinct"))) {
+        parts.push(`Only ${distinct} distinct image${distinct === 1 ? "" : "s"} after dedup (min 4 required)`);
       }
     }
-    // Summary if remaining distinct images < 4 after dedup (only when dedup actually removed)
-    const loadedCount = res.imageChecks.filter((ic) => ic.loaded).length;
-    const distinct = res.imageChecks.filter((ic) => ic.loaded && !ic.isDuplicate).length;
-    const hasLoaded = res.imageChecks.some((ic) => ic.loaded);
-    const dupRemoved = loadedCount > 4 && res.imageChecks.some((ic) => ic.isDuplicate);
-    if (dupRemoved && distinct < 4 && !parts.some((p) => p.includes("distinct"))) {
-      parts.push(`Only ${distinct} distinct image${distinct === 1 ? "" : "s"} after dedup (min 4 required)`);
-    }
+
     if (parts.length > 0) out.set(res.sku, parts.join(" | "));
   }
   return out;
@@ -1395,80 +1401,6 @@ export async function validateImages(
     });
   }
 
-  // ── RULE 4: First image white background (border sample) ─────────
-  if (loadedImgs.length > 0) {
-    const { img } = loadedImgs[0];
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(img, 0, 0);
-
-        const marginPct = 0.05; // sample outer 5% border
-        const marginX = Math.max(1, Math.floor(img.naturalWidth * marginPct));
-        const marginY = Math.max(1, Math.floor(img.naturalHeight * marginPct));
-
-        let whiteCount = 0;
-        let sampleCount = 0;
-        let avgBrightness = 0;
-
-        const samplePixel = (x: number, y: number) => {
-          const pixel = ctx.getImageData(x, y, 1, 1).data;
-          const b = (pixel[0] + pixel[1] + pixel[2]) / 3;
-          avgBrightness += b;
-          // Near-white: bright AND low saturation (avoid tinted/colored backgrounds)
-          const maxCh = Math.max(pixel[0], pixel[1], pixel[2]);
-          const minCh = Math.min(pixel[0], pixel[1], pixel[2]);
-          if (b >= 230 && maxCh - minCh < 20) whiteCount++;
-          sampleCount++;
-        };
-
-        const step = 4;
-        // Top and bottom borders
-        for (let x = 0; x < img.naturalWidth; x += step) {
-          for (let y = 0; y < marginY; y++) samplePixel(x, y);
-          for (let y = img.naturalHeight - marginY; y < img.naturalHeight; y++) {
-            if (y >= 0) samplePixel(x, y);
-          }
-        }
-        // Left and right borders
-        for (let y = marginY; y < img.naturalHeight - marginY; y += step) {
-          for (let x = 0; x < marginX; x++) samplePixel(x, y);
-          for (let x = img.naturalWidth - marginX; x < img.naturalWidth; x++) {
-            if (x >= 0) samplePixel(x, y);
-          }
-        }
-
-        avgBrightness = sampleCount > 0 ? avgBrightness / sampleCount : 0;
-        const whitePct = sampleCount > 0 ? (whiteCount / sampleCount) * 100 : 0;
-
-        // Robust check: ≥90% of the border strip must be near-white & low-saturation.
-        // Mean/variance is unreliable (product edge or subtle shading inflates variance).
-        const isWhiteBg = whitePct >= 90;
-
-        checks.push({
-          field: "Product Images",
-          check: "RULE 4: White background (1st image)",
-          passed: isWhiteBg,
-          decision: "REJECT",
-          message: isWhiteBg
-            ? `First image has a clean white background (${whitePct.toFixed(0)}% of border is pure white, avg brightness ${avgBrightness.toFixed(0)})`
-            : `First image lacks a clean white background — only ${whitePct.toFixed(0)}% of border is near-white (avg brightness ${avgBrightness.toFixed(0)})`,
-        });
-      }
-    } catch {
-      checks.push({
-        field: "Product Images",
-        check: "RULE 4: White background (1st image)",
-        passed: false,
-        decision: "REJECT",
-        message: "Could not analyze first image for white background (CORS or canvas restriction)",
-      });
-    }
-  }
-
   // ── RULE 5: First image markings (logos/text/watermarks) ─────────
   // Placeholder — requires server-side CLIP, marked as FLAG
   // Will be filled in by runClipVerification() later
@@ -1635,7 +1567,6 @@ export interface ClipVerificationResult {
     rule1?: { passed: boolean; count: number; message: string };
     rule2?: { passed: boolean; distinct: number; total: number; message: string };
     rule3?: { passed: boolean; message: string };
-    rule4?: { passed: boolean; whitePct?: number; message: string };
     rule5: {
       hasMarkings: boolean | null;
       watermarkScore: number | null;
@@ -1747,16 +1678,6 @@ export function mergeClipResults(
       passed: rule3.passed,
       decision: rule3.passed ? "PASS" : "REJECT",
       message: rule3.message,
-    });
-  }
-  const rule4 = clipResult.rule4;
-  if (rule4) {
-    updated.checks.push({
-      field: "Product Images",
-      check: "RULE 4: White background (1st image)",
-      passed: rule4.passed,
-      decision: rule4.passed ? "PASS" : "REJECT",
-      message: rule4.message,
     });
   }
 

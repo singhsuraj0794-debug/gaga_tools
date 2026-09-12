@@ -109,6 +109,8 @@ export default function PreListingValidator() {
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const _allRemovedSkus = useRef<Set<string>>(new Set());
   const [useQwen, setUseQwen] = useState(false);
+  const [skipHsn, setSkipHsn] = useState(false);
+  const [skipTextCorrection, setSkipTextCorrection] = useState(false);
   const [revalidating, setRevalidating] = useState(false);
 
   const [dismissedChecks, setDismissedChecks] = useState<Map<string, Set<number>>>(new Map());
@@ -454,8 +456,7 @@ export default function PreListingValidator() {
         const rule1Issues = clipResult.results?.filter((cr: any) => cr.rule1 && !cr.rule1.passed).length || 0;
         const rule2Issues = clipResult.results?.filter((cr: any) => cr.rule2 && !cr.rule2.passed).length || 0;
         const rule3Issues = clipResult.results?.filter((cr: any) => cr.rule3 && !cr.rule3.passed).length || 0;
-        const rule4Issues = clipResult.results?.filter((cr: any) => cr.rule4 && !cr.rule4.passed).length || 0;
-          pushLog("SYS", 0, `[IMG] Image analysis complete in ${elapsed()} — R1:${rule1Issues} R2:${rule2Issues} R3:${rule3Issues} R4:${rule4Issues} R5:${flagged?.filter((cr: any) => cr.rule5?.flagged).length || 0} flagged`);
+          pushLog("SYS", 0, `[IMG] Image analysis complete in ${elapsed()} — R1:${rule1Issues} R2:${rule2Issues} R3:${rule3Issues} R5:${flagged?.filter((cr: any) => cr.rule5?.flagged).length || 0} flagged`);
       } catch (e) {
         pushLog("SYS", 0, `[IMG] CLIP error: ${e}`);
       }
@@ -538,21 +539,33 @@ export default function PreListingValidator() {
     setProgress(55);
     scrollLogToBottom();
 
-    // ── Step 3: HSN Suggestion ─────────────────────────────────────────
-    setStageLabel("Suggesting HSN codes...");
-    setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: true } : s)));
-    await runStep2_inline();
-    setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: false, done: true, summary: `${_hsnData.current.size} suggested` } : s)));
-    setProgress(75);
-    scrollLogToBottom();
+    // ── Step 3: HSN Suggestion (skippable) ─────────────────────────────
+    if (skipHsn) {
+      setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: false, done: true, summary: "Skipped" } : s)));
+      setProgress(75);
+      pushLog("SYS", 0, "[HSN] Skipped by user");
+    } else {
+      setStageLabel("Suggesting HSN codes...");
+      setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: true } : s)));
+      await runStep2_inline();
+      setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: false, done: true, summary: `${_hsnData.current.size} suggested` } : s)));
+      setProgress(75);
+      scrollLogToBottom();
+    }
 
-    // ── Step 4: Text Corrections ───────────────────────────────────────
-    setStageLabel("Generating text corrections...");
-    setStepLogs((prev) => prev.map((s, i) => (i === 3 ? { ...s, running: true } : s)));
-    await runTextCorrections();
-    const txtCount = _currentResults.current.filter((r: any) => r.descSuggestion || r.titleSuggestion).length;
-    setStepLogs((prev) => prev.map((s, i) => (i === 3 ? { ...s, running: false, done: true, summary: `${txtCount} suggestions` } : s)));
-    setProgress(95);
+    // ── Step 4: Text Corrections (skippable) ───────────────────────────
+    if (skipTextCorrection) {
+      setStepLogs((prev) => prev.map((s, i) => (i === 3 ? { ...s, running: false, done: true, summary: "Skipped" } : s)));
+      setProgress(95);
+      pushLog("SYS", 0, "[TXT] Skipped by user");
+    } else {
+      setStageLabel("Generating text corrections...");
+      setStepLogs((prev) => prev.map((s, i) => (i === 3 ? { ...s, running: true } : s)));
+      await runTextCorrections();
+      const txtCount = _currentResults.current.filter((r: any) => r.descSuggestion || r.titleSuggestion).length;
+      setStepLogs((prev) => prev.map((s, i) => (i === 3 ? { ...s, running: false, done: true, summary: `${txtCount} suggestions` } : s)));
+      setProgress(95);
+    }
 
     // Final normalize
     const finalResults = _currentResults.current.map((result) =>
@@ -1113,41 +1126,53 @@ export default function PreListingValidator() {
     setProgress(45);
     scrollLogToBottom();
 
-    // Step 2: HSN — skip if already fetched, just re-apply context
-    const hsnAlreadyFetched = _hsnData.current.size > 0;
-    setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: true } : s)));
-    if (hsnAlreadyFetched) {
-      setStageLabel("Re-applying HSN context...");
-      // Re-apply HSN context without re-fetching
-      const hsnDataBySku = _hsnData.current;
-      const updated = _currentResults.current.map((res) => {
-        const item = hsnDataBySku.get(res.sku);
-        if (!item) return res;
-        let r = res;
-        if (item.unitVariation && item.unitVariation !== "optional") {
-          r = applyUnitVariationContext(r, item.unitVariation, item.productTypeLabel);
-        }
-        r = applyTitleAccuracyContext(r, item.productType, item.productTypeLabel, item.titleProductType, item.titleProductTypeLabel, item.titleAccuracyStatus);
-          r = applyCategoryContext(r, item.categoryStatus as any, item.categoryV2Label || item.categoryV2, item.originalCategoryV2Label || item.originalCategoryV2, item.marqoConfidence);
-        r = applyValidationHints(r, item.validationHints, item.productType);
-        return r;
-      });
-      _currentResults.current = updated;
-      setResults(updated);
-      setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: false, done: true, summary: "HSN context re-applied (cached)" } : s)));
+    // Step 2: HSN — skippable; skip fetch if already cached, just re-apply context
+    if (skipHsn) {
+      setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: false, done: true, summary: "Skipped" } : s)));
+      setProgress(70);
+      pushLog("SYS", 0, "[HSN] Skipped by user");
     } else {
-      setStageLabel("Suggesting HSN codes...");
-      await runStep2_inline();
-      setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: false, done: true, summary: "done" } : s)));
+      const hsnAlreadyFetched = _hsnData.current.size > 0;
+      setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: true } : s)));
+      if (hsnAlreadyFetched) {
+        setStageLabel("Re-applying HSN context...");
+        // Re-apply HSN context without re-fetching
+        const hsnDataBySku = _hsnData.current;
+        const updated = _currentResults.current.map((res) => {
+          const item = hsnDataBySku.get(res.sku);
+          if (!item) return res;
+          let r = res;
+          if (item.unitVariation && item.unitVariation !== "optional") {
+            r = applyUnitVariationContext(r, item.unitVariation, item.productTypeLabel);
+          }
+          r = applyTitleAccuracyContext(r, item.productType, item.productTypeLabel, item.titleProductType, item.titleProductTypeLabel, item.titleAccuracyStatus);
+            r = applyCategoryContext(r, item.categoryStatus as any, item.categoryV2Label || item.categoryV2, item.originalCategoryV2Label || item.originalCategoryV2, item.marqoConfidence);
+          r = applyValidationHints(r, item.validationHints, item.productType);
+          return r;
+        });
+        _currentResults.current = updated;
+        setResults(updated);
+        setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: false, done: true, summary: "HSN context re-applied (cached)" } : s)));
+      } else {
+        setStageLabel("Suggesting HSN codes...");
+        await runStep2_inline();
+        setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: false, done: true, summary: "done" } : s)));
+      }
+      setProgress(70);
     }
-    setProgress(70);
 
-    // Step 3: Text corrections
-    setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: true } : s)));
-    setStageLabel("Generating text corrections...");
-    await runTextCorrections();
-    setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: false, done: true, summary: "done" } : s)));
-    setProgress(95);
+    // Step 3: Text corrections — skippable
+    if (skipTextCorrection) {
+      setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: false, done: true, summary: "Skipped" } : s)));
+      setProgress(95);
+      pushLog("SYS", 0, "[TXT] Skipped by user");
+    } else {
+      setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: true } : s)));
+      setStageLabel("Generating text corrections...");
+      await runTextCorrections();
+      setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: false, done: true, summary: "done" } : s)));
+      setProgress(95);
+    }
 
     const finalResults = _currentResults.current.map((result) =>
       normalizeDecision(applyDismissals(result)),
@@ -2161,6 +2186,26 @@ export default function PreListingValidator() {
         />
         Use Qwen VLM
       </label>
+      {/* Skip HSN */}
+      <label className="flex items-center gap-1.5 text-xs text-slate-500 mr-2 cursor-pointer select-none" title="Skip HSN code suggestion step entirely">
+        <input
+          type="checkbox"
+          checked={skipHsn}
+          onChange={(e) => setSkipHsn(e.target.checked)}
+          className="w-3.5 h-3.5 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+        />
+        Skip HSN
+      </label>
+      {/* Skip Text Correction */}
+      <label className="flex items-center gap-1.5 text-xs text-slate-500 mr-2 cursor-pointer select-none" title="Skip AI text correction step entirely">
+        <input
+          type="checkbox"
+          checked={skipTextCorrection}
+          onChange={(e) => setSkipTextCorrection(e.target.checked)}
+          className="w-3.5 h-3.5 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+        />
+        Skip Text Fix
+      </label>
       {/* Revalidate */}
       <Button onClick={revalidate} disabled={revalidating} size="sm" className="h-8 text-xs" variant="outline">
         {revalidating ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
@@ -2290,6 +2335,24 @@ export default function PreListingValidator() {
                         className="w-3.5 h-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
                       />
                       Use Qwen VLM
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none" title="Skip HSN code suggestion step entirely">
+                      <input
+                        type="checkbox"
+                        checked={skipHsn}
+                        onChange={(e) => setSkipHsn(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                      />
+                      Skip HSN
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none" title="Skip AI text correction step entirely">
+                      <input
+                        type="checkbox"
+                        checked={skipTextCorrection}
+                        onChange={(e) => setSkipTextCorrection(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-orange-600 focus:ring-orange-500"
+                      />
+                      Skip Text Fix
                     </label>
                     <Button onClick={startValidation} className="bg-teal-600 hover:bg-teal-700" size="lg">
                       <Play className="w-4 h-4 mr-2" /> Validate {rows.length} Products
