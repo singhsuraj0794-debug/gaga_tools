@@ -2022,6 +2022,8 @@ export default function PreListingValidator() {
       const all = await exportCorrectedSheet(file, corrections, textCorrections, imgCorrections, overlayUrls, _allRemovedSkus.current, feedback);
       const removedCount = _allRemovedSkus.current.size;
       const fbCount = feedback.size;
+      const totalFlagged = [...feedback.values()].join("").length;
+      console.log(`[FEEDBACK] ${fbCount} SKUs with feedback out of ${results.length} total. Sample:`, [...feedback.entries()].slice(0, 3));
       setExportStatus(`Exported ${all} product update${all === 1 ? "" : "s"} to corrected sheet.${removedCount > 0 ? ` ${removedCount} duplicate${removedCount > 1 ? "s" : ""} excluded.` : ""}${fbCount > 0 ? ` ${fbCount} product${fbCount > 1 ? "s" : ""} flagged in Feedback column.` : ""}`);
       setHoverMenu(null);
     } catch (e: any) {
