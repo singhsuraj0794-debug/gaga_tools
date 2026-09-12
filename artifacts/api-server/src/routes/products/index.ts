@@ -1133,7 +1133,9 @@ router.post("/products/clip-verify", async (req, res): Promise<void> => {
       return;
     }
 
-    const useQwen = useQwenVerify !== false;
+    // Default OFF: loading Qwen (3B) into the CLIP server on a 16GB Mac OOMs
+    // and crashes it. Only use Qwen when the caller explicitly opts in.
+    const useQwen = useQwenVerify === true;
 
     // Prefer the persistent model server (models resident, no per-batch reload).
     // Fall back to the one-shot CLI when it isn't running.

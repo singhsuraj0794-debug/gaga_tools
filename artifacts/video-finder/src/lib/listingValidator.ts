@@ -624,7 +624,9 @@ export async function runClipVerificationBatched(
     // request and loads CLIP + EasyOCR + MiniLM (~13s) each time. Batching
     // everything into one request avoids reloading those models per batch.
     // First-image OCR keeps memory/CPU bounded even for large batches.
-    100,
+    // Small batch keeps each request under the cloudflared tunnel's ~100s
+    // limit (CLIP is ~8-15s/product; ~6 products ≈ 60-90s).
+    6,
   );
 }
 /** Multi-signal title-accuracy check against the product description. */
@@ -1668,13 +1670,30 @@ export interface ClipVerificationResult {
   }>;
 }
 
+// Retry transient network failures (cloudflared quick tunnel intermittently
+// drops a connection mid-request → "TypeError: Failed to fetch" in the browser).
+async function fetchWithRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (e: any) {
+      lastErr = e;
+      const transient = e?.name === "TypeError" || /failed to fetch|networkerror|load failed/i.test(String(e?.message));
+      if (attempt === retries || !transient) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export async function runClipVerification(
   products: ClipVerificationProduct[],
   apiBase: string = "",
   useQwenVerify: boolean = false,
 ): Promise<ClipVerificationResult> {
   const baseUrl = apiBase || getPrelistingApiBase();
-  const resp = await fetch(`${baseUrl}/api/products/clip-verify`, {
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/clip-verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ products, useQwenVerify }),
