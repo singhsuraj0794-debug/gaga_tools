@@ -97,28 +97,24 @@ export function buildImageCorrections(results: ValidationResult[]): Map<string, 
 }
 
 /**
- * Build per-SKU review feedback for the Feedback column. Includes every
- * flagged check (title accuracy, description, ops claims, image rules,
- * CLIP flags, category) AND dismissed checks (marked with [dismissed]).
- * This ensures the Feedback column is a complete audit trail.
+ * Build per-SKU review feedback for the Feedback column. Only includes
+ * items that are currently flagged or rejected — dismissed and passed
+ * checks are excluded so the column is clean and actionable.
  */
 export function buildFeedback(
   results: ValidationResult[],
-  dismissedChecks?: Map<string, Set<number>>,
+  _dismissedChecks?: Map<string, Set<number>>,
 ): Map<string, string> {
   const out = new Map<string, string>();
   for (const res of results) {
     const parts: string[] = [];
-    const dismissed = dismissedChecks?.get(res.sku);
 
-    // ── All checks: flagged (failed) and dismissed
-    res.checks.forEach((c, idx) => {
-      if (c.decision === "WARN") return; // skip WARN-only
-      const wasDismissed = dismissed?.has(idx) ?? false;
-      if (c.passed && !wasDismissed) return; // truly passed, skip
-      const tag = wasDismissed ? " [dismissed]" : "";
-      parts.push(`${c.field}: ${c.message}${tag}`);
-    });
+    // ── Only actual non-passing checks (rejected / flagged)
+    for (const c of res.checks) {
+      if (c.passed) continue;        // passed or dismissed — skip
+      if (c.decision === "WARN") continue; // warn-only — skip
+      parts.push(`${c.field}: ${c.message}`);
+    }
 
     // ── Per-image detail (duplicates, ops claims, content flags, markings)
     if (res.imageChecks && res.imageChecks.length > 0) {
