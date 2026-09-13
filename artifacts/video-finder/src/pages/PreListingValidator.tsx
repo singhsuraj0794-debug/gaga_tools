@@ -282,6 +282,32 @@ export default function PreListingValidator() {
     const k = _findCol(row, "Brand Name *", "Brand Name", "Business Name");
     return k ? String(row[k] ?? "").trim() : "";
   };
+
+  /** Auto-resolve non-passing checks for a given field when the user applies a correction. */
+  const autoResolveFieldChecks = (sku: string, field: string) => {
+    setResults((prev) => {
+      const next = prev.map((r) => {
+        if (r.sku !== sku) return r;
+        const updatedChecks = r.checks.map((c) =>
+          c.field === field && !c.passed
+            ? { ...c, passed: true, decision: "PASS" as Decision, message: c.message + " (auto-resolved: correction applied)" }
+            : c
+        );
+        const total = updatedChecks.length;
+        const passedC = updatedChecks.filter((c) => c.passed).length;
+        const hasReject = updatedChecks.some((c) => c.decision === "REJECT" && !c.passed);
+        const hasFlag = updatedChecks.some((c) => c.decision === "FLAG" && !c.passed);
+        let newDecision: Decision;
+        let newScore: number;
+        if (hasReject) { newDecision = "REJECT"; newScore = Math.max(0, Math.round((passedC / total) * 6)); }
+        else if (hasFlag) { newDecision = "FLAG"; newScore = Math.min(10, 7 + Math.round((passedC / total) * 3)); }
+        else { newDecision = "PASS"; newScore = 10; }
+        return { ...r, checks: updatedChecks, decision: newDecision, score: newScore, description: field === "Description *" ? r.description : r.description };
+      });
+      _currentResults.current = next;
+      return next;
+    });
+  };
   const getCategory = (row: ListingRow): string => {
     const k = _findCol(row, "Category Name *", "Category Name");
     return k ? String(row[k] ?? "").trim() : "";
@@ -1380,6 +1406,7 @@ export default function PreListingValidator() {
       }));
       const skuSet = new Set(updates.map((u) => u.sku));
       setResults((prev) => prev.map((r) => skuSet.has(r.sku) ? { ...r, titleSuggestion: undefined } : r));
+      for (const u of updates) autoResolveFieldChecks(u.sku, "Product Name *");
     }
     if (newLogs.length > 0) setLogs((prev) => [...prev, ...newLogs]);
     setHoverMenu(null);
@@ -1414,6 +1441,11 @@ export default function PreListingValidator() {
       }));
       const skuSet = new Set(updates.map((u) => u.sku));
       setResults((prev) => prev.map((r) => skuSet.has(r.sku) ? { ...r, descSuggestion: undefined } : r));
+      for (const u of updates) {
+        autoResolveFieldChecks(u.sku, "Description *");
+        // Also update stored description on the result for the expanded row display
+        setResults((prev) => prev.map((r) => r.sku === u.sku ? { ...r, description: u.description } : r));
+      }
     }
     if (newLogs.length > 0) setLogs((prev) => [...prev, ...newLogs]);
     setHoverMenu(null);
@@ -1447,6 +1479,7 @@ export default function PreListingValidator() {
       }));
       const skuSet = new Set(updates.map((u) => u.sku));
       setResults((prev) => prev.map((r) => skuSet.has(r.sku) ? { ...r, titleSuggestion: undefined } : r));
+      for (const u of updates) autoResolveFieldChecks(u.sku, "Product Name *");
     }
     if (newLogs.length > 0) setLogs((prev) => [...prev, ...newLogs]);
     setHoverMenu(null);
@@ -1480,6 +1513,10 @@ export default function PreListingValidator() {
       }));
       const skuSet = new Set(updates.map((u) => u.sku));
       setResults((prev) => prev.map((r) => skuSet.has(r.sku) ? { ...r, descSuggestion: undefined } : r));
+      for (const u of updates) {
+        autoResolveFieldChecks(u.sku, "Description *");
+        setResults((prev) => prev.map((r) => r.sku === u.sku ? { ...r, description: u.description } : r));
+      }
     }
     if (newLogs.length > 0) setLogs((prev) => [...prev, ...newLogs]);
     setHoverMenu(null);
@@ -2255,8 +2292,8 @@ export default function PreListingValidator() {
       }} size="sm" className="h-8 text-xs bg-slate-600 hover:bg-slate-700 text-white" disabled={selectedSkus.size === 0}>
         <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Dismiss All ({selectedSkus.size})
       </Button>
-      {/* Export (only when all pass) */}
-      <Button onClick={exportSheet} size="sm" className="h-8 text-xs bg-teal-600 hover:bg-teal-700" disabled={!allPass}>
+      {/* Export */}
+      <Button onClick={exportSheet} size="sm" className="h-8 text-xs bg-teal-600 hover:bg-teal-700" disabled={results.length === 0}>
         <Download className="w-3.5 h-3.5 mr-1" /> Export Sheet
       </Button>
       {/* ImageGen — generate overlay images with specs */}
@@ -2721,16 +2758,24 @@ export default function PreListingValidator() {
           </div>
         )}
 
-        {/* All-pass banner */}
-        {allPass && (
-          <div className="mb-4 p-4 bg-green-50 border border-green-300 rounded-lg flex items-center gap-3">
-            <CheckCircle2 className="w-6 h-6 text-green-600" />
+        {/* Status banner */}
+        {stats.total > 0 && (
+          <div className={`mb-4 p-4 border rounded-lg flex items-center gap-3 ${
+            allPass ? "bg-green-50 border-green-300" : "bg-amber-50 border-amber-300"
+          }`}>
+            {allPass ? <CheckCircle2 className="w-6 h-6 text-green-600" /> : <AlertTriangle className="w-6 h-6 text-amber-600" />}
             <div>
-              <p className="font-semibold text-green-800">All {stats.total} products passed validation!</p>
-              <p className="text-sm text-green-600">Review the corrections applied, then export the corrected sheet.</p>
+              {allPass ? (
+                <p className="font-semibold text-green-800">All {stats.total} products passed validation!</p>
+              ) : (
+                <p className="font-semibold text-amber-800">{stats.flag + stats.reject} of {stats.total} products flagged — resolve or dismiss, then export.</p>
+              )}
+              <p className={`text-sm ${allPass ? "text-green-600" : "text-amber-600"}`}>
+                {allPass ? "Review the corrections applied, then export the corrected sheet." : "Export is available — flagged items will appear in the Feedback column."}
+              </p>
             </div>
             <div className="flex-1" />
-            <Button onClick={exportSheet} className="bg-green-600 hover:bg-green-700" size="lg">
+            <Button onClick={exportSheet} className={`${allPass ? "bg-green-600 hover:bg-green-700" : "bg-teal-600 hover:bg-teal-700"}`} size="lg">
               <Download className="w-4 h-4 mr-2" /> Export Now
             </Button>
           </div>
@@ -2959,8 +3004,8 @@ export default function PreListingValidator() {
                                               setTextCorrections((prev) => { const next = new Map(prev); next.set(result.sku, { ...next.get(result.sku), title: t }); return next; });
                                               _appliedCorrections.current.set(result.sku, { ..._appliedCorrections.current.get(result.sku), title: t });
                                               setRows((prevRows) => prevRows.map((row) => getSku(row) === result.sku ? { ...row, [_findCol(row, "Product Name *", "Product Name") || "Product Name *"]: t } : row));
-                                              // Clear suggestion from results and show feedback
                                               setResults((prev) => prev.map((r) => r.sku === result.sku ? { ...r, titleSuggestion: undefined } : r));
+                                              autoResolveFieldChecks(result.sku, "Product Name *");
                                               setLogs((prev) => [...prev, { time: new Date().toLocaleTimeString("en-US", { hour12: false }), row: 0, sku: result.sku, productName: `✓ TITLE APPLIED: "${t}"`, result: { sku: "", productName: "", category: "", decision: "PASS", score: 0, checks: [] } }]);
                                             }}>
                                             Apply
@@ -2976,8 +3021,8 @@ export default function PreListingValidator() {
                                               setTextCorrections((prev) => { const next = new Map(prev); next.set(result.sku, { ...next.get(result.sku), description: d }); return next; });
                                               _appliedCorrections.current.set(result.sku, { ..._appliedCorrections.current.get(result.sku), description: d });
                                               setRows((prevRows) => prevRows.map((row) => getSku(row) === result.sku ? { ...row, [_findCol(row, "Description *", "Description") || "Description *"]: d } : row));
-                                              // Clear suggestion from results and show feedback
-                                              setResults((prev) => prev.map((r) => r.sku === result.sku ? { ...r, descSuggestion: undefined } : r));
+                                              setResults((prev) => prev.map((r) => r.sku === result.sku ? { ...r, descSuggestion: undefined, description: d } : r));
+                                              autoResolveFieldChecks(result.sku, "Description *");
                                               setLogs((prev) => [...prev, { time: new Date().toLocaleTimeString("en-US", { hour12: false }), row: 0, sku: result.sku, productName: `✓ DESC APPLIED`, result: { sku: "", productName: "", category: "", decision: "PASS", score: 0, checks: [] } }]);
                                             }}>
                                             Apply
@@ -3084,16 +3129,20 @@ export default function PreListingValidator() {
           </Card>
         )}
 
-        {/* Bottom revalidate/export bar */}
-        {stats.total > 0 && !allPass && (
+        {/* Bottom revalidate bar */}
+        {stats.total > 0 && (
           <div className="flex items-center gap-3 mt-6">
             <Button onClick={revalidate} disabled={revalidating} className="bg-teal-600 hover:bg-teal-700">
               {revalidating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
               Revalidate Corrections
             </Button>
-            <p className="text-sm text-slate-500">
-              {stats.flag + stats.reject} product{stats.flag + stats.reject !== 1 ? "s" : ""} still need attention. Apply corrections above, then revalidate.
-            </p>
+            {allPass ? (
+              <p className="text-sm text-green-600">All products pass. Revalidate after changes, then export.</p>
+            ) : (
+              <p className="text-sm text-slate-500">
+                {stats.flag + stats.reject} product{stats.flag + stats.reject !== 1 ? "s" : ""} still need attention. Apply corrections above, then revalidate.
+              </p>
+            )}
           </div>
         )}
       </div>
