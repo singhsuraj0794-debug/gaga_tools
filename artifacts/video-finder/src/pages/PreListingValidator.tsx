@@ -1267,7 +1267,7 @@ export default function PreListingValidator() {
       const result = await runTextCorrectionBatched(correctProducts, "", useQwen, (bi, tb) => {
         pushLog("BATCH", 0, `[TXT] Batch ${bi}/${tb}...`);
       }, useQwen ? 5 : 10);
-      pushLog("BATCH", 0, `[TXT] API returned ${result.results.length} results`);
+      pushLog("BATCH", 0, `[TXT] API returned ${result.results.length}/${correctProducts.length} results`);
 
       const corrMap = new Map(result.results.map((cr) => [cr.sku, { title: cr.title, description: cr.description, log: cr.log }]));
 
@@ -1322,7 +1322,8 @@ export default function PreListingValidator() {
       }
       const titleCount = result.results.filter((r) => r.title).length;
       const descCount = result.results.filter((r) => r.description).length;
-      pushLog("BATCH", 0, `[TXT] Done — ${titleCount} title suggestions, ${descCount} desc suggestions`);
+      const skipped = correctProducts.length - result.results.length;
+      pushLog("BATCH", 0, `[TXT] Done — ${titleCount} title suggestions, ${descCount} desc suggestions${skipped > 0 ? ` (${skipped} products skipped due to batch failures)` : ""}`);
     } catch (err) {
       pushLog("BATCH", 0, `[TXT] FAILED — ${err instanceof Error ? err.message : String(err)}`);
     }

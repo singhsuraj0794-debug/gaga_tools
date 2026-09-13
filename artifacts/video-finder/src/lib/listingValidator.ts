@@ -587,6 +587,7 @@ async function batchCall<TInput, TOutput>(
     batches.push(items.slice(i, i + batchSize));
   }
   const outputs: TOutput[] = [];
+  const failedBatches: number[] = [];
   for (let i = 0; i < batches.length; i++) {
     onBatch?.(i + 1, batches.length);
     // Retry transient tunnel drops (TypeError: Failed to fetch / Load failed)
@@ -603,7 +604,14 @@ async function batchCall<TInput, TOutput>(
         await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
       }
     }
-    if (lastErr) throw lastErr;
+    if (lastErr) {
+      console.warn(`[batchCall] Batch ${i + 1}/${batches.length} failed after retries:`, lastErr);
+      failedBatches.push(i + 1);
+      // Continue with remaining batches — don't kill the whole operation
+    }
+  }
+  if (failedBatches.length > 0) {
+    console.warn(`[batchCall] ${failedBatches.length} batch(es) failed: ${failedBatches.join(", ")}. Partial results returned.`);
   }
   return mergeResults(outputs);
 }
