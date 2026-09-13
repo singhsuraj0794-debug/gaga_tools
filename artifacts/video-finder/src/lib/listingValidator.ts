@@ -111,11 +111,13 @@ export function buildFeedback(
     const parts: string[] = [];
     const dismissed = dismissedChecks?.get(res.sku);
 
-    // ── Checks: currently flagged OR dismissed
+    // ── Checks: currently flagged OR dismissed (skip data-completeness checks)
     res.checks.forEach((c, idx) => {
+      if (c.passed) return;
       if (c.decision === "WARN") return;
+      // Skip mandatory-field / data-completeness checks — not quality flags
+      if (c.check === "Mandatory field") return;
       const wasDismissed = dismissed?.has(idx) ?? false;
-      if (c.passed && !wasDismissed) return; // naturally passed — skip
       const tag = wasDismissed ? " [dismissed]" : "";
       parts.push(`${c.field}: ${c.message}${tag}`);
     });
