@@ -53,6 +53,7 @@ export interface ImageCheckResult {
 export interface ValidationResult {
   sku: string;
   productName: string;
+  description?: string;
   category: string;
   decision: Decision;
   score: number;
@@ -112,15 +113,21 @@ export function buildFeedback(
     const dismissed = dismissedChecks?.get(res.sku);
 
     // ── Checks: currently flagged OR dismissed (skip data-completeness checks)
+    const debugChecks: string[] = [];
     res.checks.forEach((c, idx) => {
+      const tag0 = `[${idx}] ${c.check}/${c.field} passed=${c.passed} decision=${c.decision}`;
+      debugChecks.push(tag0);
       if (c.decision === "WARN") return;
-      // Skip mandatory-field / data-completeness checks — not quality flags
       if (c.check === "Mandatory field") return;
       const wasDismissed = dismissed?.has(idx) ?? false;
-      if (c.passed && !wasDismissed) return; // naturally passed — skip
+      if (c.passed && !wasDismissed) return;
       const tag = wasDismissed ? " [dismissed]" : "";
       parts.push(`${c.field}: ${c.message}${tag}`);
     });
+    // Log first 3 products for debugging
+    if (results.indexOf(res) < 3) {
+      console.log(`[FEEDBACK_DBG] SKU=${res.sku} checks=${res.checks.length} parts=${parts.length} dismissed=${dismissed?.size ?? 0}`, debugChecks);
+    }
 
     // ── Per-image detail (duplicates, ops claims, content flags, markings)
     if (res.imageChecks && res.imageChecks.length > 0) {
@@ -1164,6 +1171,7 @@ export function validateProduct(
   return {
     sku,
     productName: productName || "(unnamed)",
+    description: rawDescription || undefined,
     category: categoryPath || rawCategory || "(unknown)",
     decision: hasReject ? "REJECT" : decision,
     score,

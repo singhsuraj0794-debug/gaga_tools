@@ -2799,7 +2799,31 @@ export default function PreListingValidator() {
                         {isExpanded && (
                           <tr key={`${idx}-detail`}>
                             <td colSpan={8} className="bg-slate-50 p-4">
-                              <div className="space-y-2">
+                              <div className="space-y-3">
+                                {/* Original Title + Description for cross-verification */}
+                                <div className="bg-white border border-slate-200 rounded p-3 text-xs space-y-2">
+                                  <div>
+                                    <span className="font-semibold text-slate-600">Title:</span>{" "}
+                                    <span className="text-slate-800">{stripHtml(result.productName) || <em className="text-slate-400">empty</em>}</span>
+                                    {result.titleSuggestion && (
+                                      <div className="mt-1 pl-4 text-green-700">
+                                        <span className="font-medium">Suggested:</span> {stripHtml(result.titleSuggestion)}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <span className="font-semibold text-slate-600">Description:</span>{" "}
+                                    <span className="text-slate-800">{stripHtml(result.description || "") || <em className="text-slate-400">empty</em>}</span>
+                                    {result.descSuggestion && (
+                                      <div className="mt-1 pl-4 text-green-700">
+                                        <span className="font-medium">Suggested:</span> {stripHtml(result.descSuggestion)}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex flex-wrap gap-3 pt-1 border-t border-slate-100">
+                                    <span className="text-slate-400">Category: <span className="text-slate-600">{result.category || "—"}</span></span>
+                                  </div>
+                                </div>
                                 {result.checks.map((check, ci) => (
                                   <div key={ci} className={`flex items-start gap-2 text-xs p-2 rounded ${
                                     check.passed ? "bg-green-50 text-green-700" :
