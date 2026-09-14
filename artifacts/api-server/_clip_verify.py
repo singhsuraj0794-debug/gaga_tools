@@ -144,8 +144,10 @@ def get_clip():
         _clip_model.eval()
         if torch.cuda.is_available():
             _clip_model = _clip_model.to("cuda")
+        elif torch.backends.mps.is_available():
+            _clip_model = _clip_model.to("mps")
         t1 = time.time()
-        print(f"[INFO] CLIP model loaded in {t1 - t0:.1f}s", file=sys.stderr)
+        print(f"[INFO] CLIP model loaded in {t1 - t0:.1f}s on {'mps' if torch.backends.mps.is_available() else 'cpu'}", file=sys.stderr)
     return _clip_model, _clip_processor
 
 
@@ -294,8 +296,6 @@ def _get_dinov2():
     _dinov2_device = "mps" if torch.backends.mps.is_available() else (
         "cuda" if torch.cuda.is_available() else "cpu"
     )
-    # Enforce CPU for MPS compatibility issues with some ops
-    _dinov2_device = "cpu"
 
     print(f"[INFO] Loading DINOv2 model: {model_name}", file=sys.stderr)
     _dinov2_processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
