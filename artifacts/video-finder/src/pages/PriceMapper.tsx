@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -107,7 +107,8 @@ const platforms = [
 
 export default function PriceMapper() {
   const [products, setProducts] = useState<GajabProduct[]>([]);
-  const [mappings, setMappings] = useState<PriceMapping[]>([]);
+  const [mappingsMap, setMappingsMap] = useState<Map<string, PriceMapping>>(new Map());
+  const [mappedCount, setMappedCount] = useState(0);
   const [duplicates, setDuplicates] = useState<ProductDuplicate[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -116,6 +117,7 @@ export default function PriceMapper() {
   const [successMsg, setSuccessMsg] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [totalProducts, setTotalProducts] = useState(0);
   const [manualUrls, setManualUrls] = useState<Record<string, {
     amazon: ManualEntry; flipkart: ManualEntry; meesho: ManualEntry;
   }>>({});
@@ -128,20 +130,59 @@ export default function PriceMapper() {
   const [researchMode, setResearchMode] = useState(false);
   const [skipAttempted, setSkipAttempted] = useState(true);
   const batchAbortRef = useRef(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // O(1) lookups
+  const duplicatesSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const d of duplicates) s.add(d.product_id);
+    return s;
+  }, [duplicates]);
+
+  const duplicatesMap = useMemo(() => {
+    const m = new Map<string, ProductDuplicate>();
+    for (const d of duplicates) m.set(d.product_id, d);
+    return m;
+  }, [duplicates]);
 
   useEffect(() => {
-    fetchProducts();
-    fetchMappings();
+    fetchMappedCount();
     fetchDuplicates();
   }, []);
 
-  async function fetchProducts() {
+  useEffect(() => {
+    fetchProducts(page, pageSize, searchQuery, mappingFilter);
+  }, [page, pageSize, mappingFilter]);
+
+  // Debounced search
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setPage(1);
+      fetchProducts(1, pageSize, searchQuery, mappingFilter);
+    }, 400);
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchQuery]);
+
+  async function fetchProducts(pageNum: number, size: number, query: string, filter: string = "all") {
     try {
-      const res = await fetch(`${API_BASE}/api/price-mapper/products`);
+      setLoading(true);
+      const params = new URLSearchParams({
+        page: String(pageNum),
+        pageSize: String(size),
+      });
+      if (query.trim()) params.set("search", query.trim());
+      if (filter && filter !== "all") params.set("filter", filter);
+      const res = await fetch(`${API_BASE}/api/price-mapper/products?${params}`);
       const data = await res.json();
-      const prods = data.products || [];
+      const prods: GajabProduct[] = data.products || [];
       setProducts(prods);
-      setProductIndexMax(prods.length);
+      setTotalProducts(data.total ?? 0);
+      // Fetch mappings only for the current page's products
+      const ids = prods.map(p => p.id).filter(Boolean);
+      if (ids.length > 0) fetchMappingsForIds(ids);
     } catch {
       setError("Failed to load products");
     } finally {
@@ -149,12 +190,17 @@ export default function PriceMapper() {
     }
   }
 
-  async function fetchMappings() {
+  async function fetchMappingsForIds(ids: string[]) {
     try {
-      const res = await fetch(`${API_BASE}/api/price-mapper/mappings`);
+      const res = await fetch(`${API_BASE}/api/price-mapper/mappings?ids=${encodeURIComponent(ids.join(","))}`);
       const data = await res.json();
-      const m = data.mappings || [];
-      setMappings(m);
+      const m: PriceMapping[] = data.mappings || [];
+      if (m.length === 0) return;
+      setMappingsMap(prev => {
+        const next = new Map(prev);
+        for (const mapping of m) next.set(mapping.gajab_product_id, mapping);
+        return next;
+      });
       const urls: Record<string, { amazon: ManualEntry; flipkart: ManualEntry; meesho: ManualEntry }> = {};
       for (const mapping of m) {
         urls[mapping.gajab_product_id] = {
@@ -164,6 +210,16 @@ export default function PriceMapper() {
         };
       }
       setManualUrls(prev => ({ ...prev, ...urls }));
+    } catch {
+      // non-critical
+    }
+  }
+
+  async function fetchMappedCount() {
+    try {
+      const res = await fetch(`${API_BASE}/api/price-mapper/mappings-count`);
+      const data = await res.json();
+      setMappedCount(data.count ?? 0);
     } catch {
       // non-critical
     }
@@ -179,9 +235,8 @@ export default function PriceMapper() {
     }
   }
 
-  async function searchPlatforms(product: GajabProduct) {
-    setSearchingId(product.id);
-    setError("");
+  async function searchPlatforms(product: GajabProduct, silent = false) {
+    if (!silent) { setSearchingId(product.id); setError(""); }
     try {
       const res = await fetch(`${API_BASE}/api/price-mapper/compare`, {
         method: "POST",
@@ -190,18 +245,15 @@ export default function PriceMapper() {
       });
       const data = await res.json();
       if (data.mapping) {
-        setMappings(prev => {
-          const idx = prev.findIndex(m => m.gajab_product_id === product.id);
-          if (idx >= 0) {
-            const next = [...prev];
-            next[idx] = data.mapping;
-            return next;
-          }
-          return [data.mapping, ...prev];
+        setMappingsMap(prev => {
+          const next = new Map(prev);
+          next.set(product.id, data.mapping);
+          return next;
         });
+        if (!silent) fetchMappedCount();
 
         // Auto-populate manual URL fields
-        setManualUrls(prev => ({
+        if (!silent) setManualUrls(prev => ({
           ...prev,
           [product.id]: {
             amazon: { url: data.mapping.amazon_url || prev[product.id]?.amazon?.url || "", price: data.mapping.amazon_price || prev[product.id]?.amazon?.price || "" },
@@ -211,9 +263,43 @@ export default function PriceMapper() {
         }));
       }
     } catch {
-      setError("Search failed");
+      if (!silent) setError("Search failed");
     } finally {
-      setSearchingId(null);
+      if (!silent) setSearchingId(null);
+    }
+  }
+
+  async function searchAllUnmapped() {
+    batchAbortRef.current = false;
+    setBatchSearching(true);
+    setBatchProgress({ current: 0, total: 0 });
+    try {
+      // Fetch ALL unmapped products (server 'unmapped' filter excludes mapped + duplicates)
+      const params = new URLSearchParams({ page: "1", pageSize: "100000", filter: "unmapped" });
+      const res = await fetch(`${API_BASE}/api/price-mapper/products?${params}`);
+      const data = await res.json();
+      const prods: GajabProduct[] = data.products || [];
+
+      setBatchProgress({ current: 0, total: prods.length });
+      const CONCURRENCY = 3;
+      let completed = 0;
+      for (let i = 0; i < prods.length && !batchAbortRef.current; i += CONCURRENCY) {
+        const batch = prods.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (product) => {
+          if (batchAbortRef.current) return;
+          await searchPlatforms(product, true);
+          completed++;
+          setBatchProgress({ current: completed, total: prods.length });
+        }));
+      }
+
+      fetchMappedCount();
+      setSuccessMsg(`Batch search complete: ${completed}/${prods.length} unmapped product(s) processed`);
+      setTimeout(() => setSuccessMsg(""), 3000);
+    } catch {
+      setError("Batch search failed");
+    } finally {
+      setBatchSearching(false);
     }
   }
 
@@ -320,16 +406,13 @@ export default function PriceMapper() {
     }
   }
 
-  const isDuplicate = (productId: string) => duplicates.some(d => d.product_id === productId);
+  const isDuplicate = (productId: string) => duplicatesSet.has(productId);
   function getDuplicateSource(productId: string): ProductDuplicate | undefined {
-    return duplicates.find(d => d.product_id === productId);
+    return duplicatesMap.get(productId);
   }
   const isAttempted = (productId: string) => !!getMapping(productId);
 
-  const filtered = products.filter((p, idx) => {
-    const idxInRange = (idx + 1) >= productIndexMin && (productIndexMax === 0 || (idx + 1) <= productIndexMax);
-    const matchesQuery = p.name.toLowerCase().includes(searchQuery.toLowerCase());
-    if (!idxInRange || !matchesQuery) return false;
+  const filtered = products.filter((p) => {
     const mapping = getMapping(p.id);
     const isMapped = mapping && !!(mapping.amazon_url || mapping.flipkart_url || mapping.meesho_url);
     const isDup = isDuplicate(p.id);
@@ -339,18 +422,18 @@ export default function PriceMapper() {
     return true;
   });
 
-  const totalPages = Math.ceil(filtered.length / pageSize);
-  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const totalPages = Math.ceil(totalProducts / pageSize);
+  const paginated = filtered.slice(0, pageSize);
 
   useEffect(() => {
     setPage(1);
-  }, [searchQuery, pageSize]);
+  }, [pageSize]);
 
   const formatPrice = (price: string | null | undefined) =>
     price || "\u2014";
 
   function getMapping(productId: string) {
-    return mappings.find(m => m.gajab_product_id === productId);
+    return mappingsMap.get(productId);
   }
 
   function setUrl(productId: string, platform: "amazon" | "flipkart" | "meesho", field: "url" | "price", value: string) {
@@ -372,7 +455,8 @@ export default function PriceMapper() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ productId, platform, url: entry.url, price: entry.price }),
     }).then(() => {
-      fetchMappings();
+      fetchMappingsForIds([productId]);
+      fetchMappedCount();
       setSuccessMsg(`${label} price saved!`);
       setTimeout(() => setSuccessMsg(""), 2000);
     });
@@ -531,16 +615,9 @@ export default function PriceMapper() {
               ))}
             </div>
             <span className="text-xs text-slate-400 whitespace-nowrap">
-              {products.filter(p => {
-                const m = getMapping(p.id);
-                return m && !!(m.amazon_url || m.flipkart_url || m.meesho_url);
-              }).length} / {products.filter(p => {
-                const m = getMapping(p.id);
-                return !(m && !!(m.amazon_url || m.flipkart_url || m.meesho_url)) && !isDuplicate(p.id);
-              }).length} / {products.filter(p => isDuplicate(p.id)).length} / {products.length}{" "}
-              mapped / unmapped / dupes / total
-              {" / "}
-              {products.filter(p => !isDuplicate(p.id) && getMapping(p.id)).length} attempted
+              {products.length} shown / {totalProducts} total
+              {" · "}
+              {mappedCount} mapped
             </span>
             <button
               onClick={() => setResearchMode(!researchMode)}
@@ -565,15 +642,19 @@ export default function PriceMapper() {
               </button>
             )}
             <SlidersHorizontal className="h-4 w-4 text-slate-400" />
-            <span className="text-sm text-slate-500">Product #:</span>
+            <span className="text-sm text-slate-500">Jump to product #:</span>
             <Input
               type="number"
               className="w-24 h-8 text-sm"
               placeholder="From"
               min={1}
-              max={products.length}
+              max={totalProducts}
               value={productIndexMin}
-              onChange={e => setProductIndexMin(Number(e.target.value))}
+              onChange={e => {
+                const v = Number(e.target.value);
+                setProductIndexMin(v);
+                if (v > 0) setPage(Math.max(1, Math.floor((v - 1) / pageSize) + 1));
+              }}
             />
             <span className="text-slate-400">–</span>
             <Input
@@ -581,9 +662,13 @@ export default function PriceMapper() {
               className="w-24 h-8 text-sm"
               placeholder="To"
               min={1}
-              max={products.length}
+              max={totalProducts}
               value={productIndexMax || ""}
-              onChange={e => setProductIndexMax(Number(e.target.value))}
+              onChange={e => {
+                const v = Number(e.target.value);
+                setProductIndexMax(v);
+                if (v > 0) setPage(Math.max(1, Math.floor((v - 1) / pageSize) + 1));
+              }}
             />
             <Button
               onClick={searchAllFiltered}
@@ -599,9 +684,19 @@ export default function PriceMapper() {
               ) : (
                 <>
                   <Play className="h-4 w-4 mr-2" />
-                  {researchMode ? "Re-Search All Filtered" : "Search All Filtered"}
+                  {researchMode ? "Re-Search This Page" : "Search This Page"}
                 </>
               )}
+            </Button>
+            <Button
+              onClick={searchAllUnmapped}
+              disabled={batchSearching}
+              size="sm"
+              variant="outline"
+              className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+            >
+              <Play className="h-4 w-4 mr-2" />
+              Map ALL Unmapped
             </Button>
             {batchSearching && (
               <Button onClick={abortBatchSearch} size="sm" variant="outline" className="text-red-600 border-red-200">
@@ -790,7 +885,7 @@ export default function PriceMapper() {
                     ))}
                   </select>
                   <span>
-                    {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} of {filtered.length}
+                    {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, totalProducts)} of {totalProducts}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
