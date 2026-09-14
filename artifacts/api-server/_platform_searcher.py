@@ -259,23 +259,62 @@ def _fetch_image_pil(url: str):
     _IMAGE_CACHE[url] = None
     return None
 
+_DINO_EMB_CACHE = {}
+
+def _get_dinov2_emb(url: str):
+    if url in _DINO_EMB_CACHE:
+        return _DINO_EMB_CACHE[url]
+    _load_dinov2()
+    if _dinov2_model is None:
+        return None
+    img = _fetch_image_pil(url)
+    if img is None:
+        _DINO_EMB_CACHE[url] = None
+        return None
+    try:
+        import torch
+        inputs = _dinov2_processor(images=img, return_tensors="pt")
+        with torch.no_grad():
+            f = _dinov2_model(**inputs).last_hidden_state.mean(dim=1)
+        _DINO_EMB_CACHE[url] = f
+        return f
+    except Exception:
+        return None
+
 def _get_dinov2_sim(url1: str, url2: str):
     _load_dinov2()
     if _dinov2_model is None:
         return None
-    img1 = _fetch_image_pil(url1)
-    img2 = _fetch_image_pil(url2)
-    if img1 is None or img2 is None:
+    f1 = _get_dinov2_emb(url1)
+    f2 = _get_dinov2_emb(url2)
+    if f1 is None or f2 is None:
         return None
     try:
         import torch
-        inputs1 = _dinov2_processor(images=img1, return_tensors="pt")
-        inputs2 = _dinov2_processor(images=img2, return_tensors="pt")
-        with torch.no_grad():
-            f1 = _dinov2_model(**inputs1).last_hidden_state.mean(dim=1)
-            f2 = _dinov2_model(**inputs2).last_hidden_state.mean(dim=1)
         sim = torch.nn.functional.cosine_similarity(f1, f2).item()
         return max(0.0, min(1.0, sim))
+    except Exception:
+        return None
+
+_CLIP_EMB_CACHE = {}
+
+def _get_clip_emb(url: str):
+    if url in _CLIP_EMB_CACHE:
+        return _CLIP_EMB_CACHE[url]
+    _load_clip()
+    if _clip_model is None:
+        return None
+    img = _fetch_image_pil(url)
+    if img is None:
+        _CLIP_EMB_CACHE[url] = None
+        return None
+    try:
+        import torch
+        inputs = _clip_processor(images=img, return_tensors="pt")
+        with torch.no_grad():
+            f = _clip_model.get_image_features(**inputs)
+        _CLIP_EMB_CACHE[url] = f
+        return f
     except Exception:
         return None
 
@@ -283,17 +322,12 @@ def _get_clip_sim(url1: str, url2: str):
     _load_clip()
     if _clip_model is None:
         return None
-    img1 = _fetch_image_pil(url1)
-    img2 = _fetch_image_pil(url2)
-    if img1 is None or img2 is None:
+    f1 = _get_clip_emb(url1)
+    f2 = _get_clip_emb(url2)
+    if f1 is None or f2 is None:
         return None
     try:
         import torch
-        inputs1 = _clip_processor(images=img1, return_tensors="pt")
-        inputs2 = _clip_processor(images=img2, return_tensors="pt")
-        with torch.no_grad():
-            f1 = _clip_model.get_image_features(**inputs1)
-            f2 = _clip_model.get_image_features(**inputs2)
         sim = torch.nn.functional.cosine_similarity(f1, f2).item()
         return max(0.0, min(1.0, sim))
     except Exception:
@@ -311,6 +345,60 @@ def _compute_verified_score(base_score: float, image_url: str, result_image: str
     if model_scores:
         final_score = max(final_score, max(model_scores))
     return final_score, dinov2_sim or 0.0, clip_sim or 0.0
+
+def _pick_best_visual(title: str, image_url: str, gajab_price: str, candidates: list, top_n: int = 5):
+    """Text-rank all candidates, then visually verify top-N and pick the best.
+
+    Returns (best_match_dict, final_score, dinov2, clip). The best_match_dict has
+    keys url/price/title/image/score (same shape as the old best_match).
+    Selection ranks by visual similarity (primary) + text score (secondary), so the
+    visually-identical product wins even when its text score is lower.
+    """
+    scored = []
+    for p in candidates:
+        score = _score_match(title, p.get("name", ""), image_url, p.get("image", ""), gajab_price, p.get("price", ""))
+        if p.get("__revimg", False):
+            score += 30
+        scored.append((score, p))
+    scored.sort(key=lambda x: -x[0])
+
+    # Candidates worth verifying: top-N by text score that have images
+    to_verify = [(s, p) for s, p in scored[:top_n] if p.get("image")]
+
+    best = None
+    best_key = -1.0
+    best_final = 0.0
+    best_d, best_c = None, None
+    for score, p in to_verify:
+        d, c = _get_dinov2_sim(image_url, p.get("image", "")), _get_clip_sim(image_url, p.get("image", ""))
+        vis = max(x for x in [d if d is not None else 0, c if c is not None else 0] if x is not None) if (d is not None or c is not None) else 0
+        key = vis * 100 + score * 0.25
+        if key > best_key:
+            best_key = key
+            best = p
+            best_d, best_c = d, c
+
+    if best is None:
+        # No candidate images at all — fall back to text-best
+        if not scored:
+            return None, 0.0, None, None
+        score, p = scored[0]
+        best = p
+        best_final = score
+        best_d = best_c = None
+    else:
+        best_final, best_d, best_c = _compute_verified_score(
+            next(s for s, p in scored if p is best), image_url, best.get("image", "")
+        )
+
+    best_match = {
+        "url": best.get("url", ""),
+        "price": best.get("price", ""),
+        "title": (best.get("name", "") or "")[:300],
+        "image": best.get("image", ""),
+        "score": round(best_final, 1),
+    }
+    return best_match, best_final, best_d, best_c
 
 
 def _make_query(title: str, gajab_url: str = "") -> str:
@@ -615,20 +703,9 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
     best_match = None
     best_score = 0
 
-    for p in candidates:
-        is_rev = p.get("__revimg", False)
-        score = _score_match(title, p.get("name", ""), image_url, p.get("image", ""), gajab_price, p.get("price", ""))
-        if is_rev:
-            score += 30
-        if score > best_score:
-            best_score = score
-            best_match = {
-                "url": p.get("url", ""),
-                "price": p.get("price", ""),
-                "title": p.get("name", "")[:300],
-                "image": p.get("image", ""),
-                "score": round(score, 1),
-            }
+    best_match, best_score, _vd, _vc = _pick_best_visual(title, image_url, gajab_price, candidates)
+    if best_match is None:
+        best_score = 0
 
     if not best_match:
         # No text search match — try rev img candidates directly
@@ -666,9 +743,7 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
         _cache_result(cache_key, result)
         return result
 
-    final_score, dinov2_sim, clip_sim = _compute_verified_score(
-        best_score, image_url, best_match.get("image", "")
-    )
+    final_score, dinov2_sim, clip_sim = best_score, (_vd if _vd is not None else 0.0), (_vc if _vc is not None else 0.0)
 
     # Conditional gate: strict (text-only) vs relaxed (visual candidates exist)
     if rev_img_found:
@@ -847,20 +922,9 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
     best_match = None
     best_score = 0
 
-    for p in candidates:
-        is_rev = p.get("__revimg", False)
-        score = _score_match(title, p.get("name", ""), image_url, p.get("image", ""), gajab_price, p.get("price", ""))
-        if is_rev:
-            score += 30
-        if score > best_score:
-            best_score = score
-            best_match = {
-                "url": p.get("url", ""),
-                "price": p.get("price", ""),
-                "title": p.get("name", "")[:300],
-                "image": p.get("image", ""),
-                "score": round(score, 1),
-            }
+    best_match, best_score, _vd, _vc = _pick_best_visual(title, image_url, gajab_price, candidates)
+    if best_match is None:
+        best_score = 0
 
     if not best_match:
         # No text search match — try rev img candidates directly
@@ -898,9 +962,7 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
         _cache_result(cache_key, result)
         return result
 
-    final_score, dinov2_sim, clip_sim = _compute_verified_score(
-        best_score, image_url, best_match.get("image", "")
-    )
+    final_score, dinov2_sim, clip_sim = best_score, (_vd if _vd is not None else 0.0), (_vc if _vc is not None else 0.0)
 
     # Conditional gate: strict (text-only) vs relaxed (visual candidates exist)
     if rev_img_found:
@@ -1034,20 +1096,9 @@ def _search_meesho(title: str, image_url: str = "", gajab_price: str = "", gajab
     best_score = 0
     candidates = data["products"]
 
-    for p in candidates:
-        is_rev = p.get("__revimg", False)
-        score = _score_match(title, p.get("name", ""), image_url, p.get("image", ""), gajab_price, p.get("price", ""))
-        if is_rev:
-            score += 30
-        if score > best_score:
-            best_score = score
-            best_match = {
-                "url": p.get("url", ""),
-                "price": p.get("price", ""),
-                "title": p.get("name", "")[:300],
-                "image": p.get("image", ""),
-                "score": round(score, 1),
-            }
+    best_match, best_score, _vd, _vc = _pick_best_visual(title, image_url, gajab_price, candidates)
+    if best_match is None:
+        best_score = 0
 
     if not best_match:
         result = {
@@ -1058,9 +1109,7 @@ def _search_meesho(title: str, image_url: str = "", gajab_price: str = "", gajab
         _cache_result(cache_key, result)
         return result
 
-    final_score, dinov2_sim, clip_sim = _compute_verified_score(
-        best_score, image_url, best_match.get("image", "")
-    )
+    final_score, dinov2_sim, clip_sim = best_score, (_vd if _vd is not None else 0.0), (_vc if _vc is not None else 0.0)
 
     if dinov2_sim is None or clip_sim is None or (dinov2_sim < 0.50 and clip_sim < 0.60):
         result = {
