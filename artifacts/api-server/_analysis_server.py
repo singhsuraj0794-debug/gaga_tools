@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from concurrent.futures import ThreadPoolExecutor
 
 PORT = int(os.environ.get("ANALYSIS_PORT", "8003"))
-MAX_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "2"))
+MAX_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "4"))
 
 _models_ready = False
 

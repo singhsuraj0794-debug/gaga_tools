@@ -93,16 +93,18 @@ RULE6_CONFIDENCE_MARGIN = 2.5
 # ─── Image loading ───────────────────────────────────────────────────────────
 
 _image_bytes_cache: Dict[str, bytes] = {}
+_image_pil_cache: Dict[str, "Image.Image"] = {}
 _IMAGE_CACHE_MAX = 300
 
 
 def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
-    """Load image from URL or local path. Downloaded bytes are cached so a
-    product's image is fetched once and reused across rules (each image is
-    otherwise downloaded once per rule: duplicates, resolution, white bg,
-    markings, content, OCR — ~5x redundant fetches)."""
+    """Load image from URL or local path. PIL images are cached so the same
+    URL is never downloaded or decoded twice across all callers."""
     try:
         if source.startswith(("http://", "https://")):
+            cached = _image_pil_cache.get(source)
+            if cached is not None:
+                return cached
             data = _image_bytes_cache.get(source)
             if data is None:
                 headers = {
@@ -113,8 +115,12 @@ def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
                 data = resp.content
                 if len(_image_bytes_cache) >= _IMAGE_CACHE_MAX:
                     _image_bytes_cache.clear()
+                    _image_pil_cache.clear()
                 _image_bytes_cache[source] = data
-            return Image.open(io.BytesIO(data)).convert("RGB")
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+            if len(_image_pil_cache) < _IMAGE_CACHE_MAX:
+                _image_pil_cache[source] = img
+            return img
         else:
             return Image.open(source).convert("RGB")
     except Exception as e:

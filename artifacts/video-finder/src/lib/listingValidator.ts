@@ -573,7 +573,7 @@ export async function runTextCorrection(
   return resp.json();
 }
 
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 5;
 
 async function batchCall<TInput, TOutput>(
   items: TInput[],
