@@ -1081,6 +1081,8 @@ export function validateProduct(
     } else {
       addCheck("Description *", "Product attributes", true, "Key product attributes present in description", "PASS");
     }
+  } else if (isChildRow) {
+    addCheck("Description *", "HTML structure", true, "Description inherited from parent (child/variant row)", "PASS");
   } else {
     addCheck("Description *", "HTML structure", false, "Description is empty — Gajab requires a detailed HTML description", "REJECT");
   }
