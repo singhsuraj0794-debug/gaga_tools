@@ -16,3 +16,15 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+  notify-failure:
+    if: ${{ always() && needs.native-android.result == 'failure' }}
+    runs-on: ubuntu-latest
+    needs: [native-android]
+    steps:
+      - name: Slack alert on native job failure
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" -H "Content-Type: application/json" \
+            -d "{\"text\":\"<!channel> ❌ *Native App Monitor job FAILED* (run ${{ github.run_number }})\nAndroid monitoring wrote no data this cycle. Most recent failure cause: runner/checkout crash or emulator/Appium error.\nLogs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

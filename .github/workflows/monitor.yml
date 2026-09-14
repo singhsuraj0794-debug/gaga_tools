@@ -2,7 +2,7 @@ name: Synthetic Monitor
 
 on:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "*/30 * * * *"   # every 30 min — GitHub merges/drops scheduled ticks under load; doubling cadence restores ~hourly coverage
   workflow_dispatch:
 
 jobs:
@@ -150,3 +150,15 @@ jobs:
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+
+  notify-failure:
+    if: ${{ always() && needs.result == 'failure' }}
+    runs-on: ubuntu-latest
+    needs: [monitor-india, runner-check, lighthouse-india, lighthouse-us, browser]
+    steps:
+      - name: Slack alert on workflow job failure
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK_URL" -H "Content-Type: application/json" \
+            -d "{\"text\":\"⚠️ *Synthetic Monitor job FAILED* (run ${{ github.run_number }}). A job crashed before run_monitor.py could write results. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
