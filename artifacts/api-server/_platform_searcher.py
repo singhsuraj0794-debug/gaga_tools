@@ -5,6 +5,7 @@ Searches Amazon.in via scrape.do, marks Flipkart/Meesho as blocked.
 """
 import concurrent.futures
 import hashlib
+import html as html_mod
 import io
 import json
 import os
@@ -315,7 +316,8 @@ def _compute_verified_score(base_score: float, image_url: str, result_image: str
 def _make_query(title: str, gajab_url: str = "") -> str:
     """Extract core search terms, prioritizing model/SKU numbers."""
     # First, try to find model/SKU numbers (e.g. "12049-1B", "DH666-15")
-    model_match = re.search(r'(\b[\dA-Za-z]{3,}[-/][\dA-Za-z]+\b)', title)
+    # Must contain a digit to avoid matching hyphenated English words like "Multi-Utility"
+    model_match = re.search(r'(\b(?=[\dA-Za-z]*\d)[\dA-Za-z]{3,}[-/][\dA-Za-z]+\b)', title)
     if model_match:
         return model_match.group(1)
 
@@ -1119,7 +1121,7 @@ if __name__ == "__main__":
         if action == "search":
             if input_str.startswith("{"):
                 params = json.loads(input_str)
-                title = params.get("title", "")
+                title = html_mod.unescape(params.get("title", ""))
                 image_url = params.get("image", "")
                 gajab_price = params.get("price", "")
                 gajab_url = params.get("url", "")
@@ -1166,7 +1168,7 @@ if __name__ == "__main__":
                 image_url = ""
                 gajab_price = ""
                 gajab_url = ""
-            result = search_all(title, image_url, gajab_price, gajab_url)
+            result = search_all(html_mod.unescape(title), image_url, gajab_price, gajab_url)
             sys.stdout.write(json.dumps(result) + "\n")
             sys.stdout.flush()
         else:
