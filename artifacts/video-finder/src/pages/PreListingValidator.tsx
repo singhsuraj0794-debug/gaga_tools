@@ -167,16 +167,25 @@ export default function PreListingValidator() {
     try {
       const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ||
         "https://okxyskmjsmtykblrtmyi.supabase.co";
+      const supabaseKey = (import.meta.env?.VITE_SUPABASE_KEY as string | undefined) ||
+        "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp";
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
 
-      // Find the newest prelisting-api-url-*.txt object.
+      // Supabase Storage treats `prefix` as a FOLDER path, not a filename
+      // prefix — so `prefix: "prelisting-api-url"` returns []. Also the list
+      // endpoint requires auth headers. List the bucket root and filter by
+      // name client-side to find the newest published tunnel URL.
       let bestName = "prelisting-api-url.txt";
       try {
         const listResp = await fetch(`${supabaseUrl}/storage/v1/object/list/monitoring`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prefix: "prelisting-api-url", limit: 50 }),
+          headers: {
+            "Content-Type": "application/json",
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+          },
+          body: JSON.stringify({ prefix: "", limit: 1000 }),
           signal: ctrl.signal,
         });
         if (listResp.ok) {
