@@ -1276,6 +1276,21 @@ export async function validateImages(
   const checks: CheckResult[] = [];
   const imageChecks: ImageCheckResult[] = [];
 
+  // Parent rows are content containers in variant sheets — the actual product
+  // images live on the child rows. Exempt them from image rules so they aren't
+  // REJECTed for having zero images.
+  const _rel = str(getField(row, "Relationship *")).toLowerCase();
+  if (_rel === "parent") {
+    checks.push({
+      field: "Product Images",
+      check: "Image rules",
+      passed: true,
+      decision: "PASS",
+      message: "Parent row — images are validated on the child/variant rows",
+    });
+    return { checks, imageChecks };
+  }
+
   // ── Collect image URLs ───────────────────────────────────────────
   const imageUrls: string[] = [];
   for (const field of IMAGE_FIELDS) {
