@@ -108,8 +108,8 @@ export default function PreListingValidator() {
   const [selectedSellers, setSelectedSellers] = useState<Set<string>>(new Set());
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const _allRemovedSkus = useRef<Set<string>>(new Set());
-  const [useQwen, setUseQwen] = useState(false);
-  const [skipHsn, setSkipHsn] = useState(false);
+  const [useQwen, setUseQwen] = useState(true);
+  const [skipHsn, setSkipHsn] = useState(true);
   const [skipTextCorrection, setSkipTextCorrection] = useState(false);
   const [crossSellerDuplicates, setCrossSellerDuplicates] = useState(false);
   const [revalidating, setRevalidating] = useState(false);
@@ -1263,11 +1263,17 @@ export default function PreListingValidator() {
     }
 
     try {
-      pushLog("BATCH", 0, `[TXT] Calling API for ${correctProducts.length} products (batched)...`);
+      const _txtBase = getPrelistingApiBase();
+      pushLog("BATCH", 0, `[TXT] API base: ${_txtBase}`);
+      pushLog("BATCH", 0, `[TXT] Calling API for ${correctProducts.length} products (batched, size ${useQwen ? 5 : 10}, Qwen ${useQwen ? "ON" : "off"})...`);
+      let _failCount = 0;
       const result = await runTextCorrectionBatched(correctProducts, "", useQwen, (bi, tb) => {
         pushLog("BATCH", 0, `[TXT] Batch ${bi}/${tb}...`);
-      }, useQwen ? 5 : 10);
-      pushLog("BATCH", 0, `[TXT] API returned ${result.results.length}/${correctProducts.length} results`);
+      }, useQwen ? 5 : 10, (bi, tb, err) => {
+        _failCount++;
+        pushLog("BATCH", 0, `[TXT] ⚠️ Batch ${bi}/${tb} FAILED — ${err instanceof Error ? err.message : String(err)}`);
+      });
+      pushLog("BATCH", 0, `[TXT] API returned ${result.results.length}/${correctProducts.length} results${_failCount > 0 ? ` (${_failCount} batch(es) failed)` : ""}`);
 
       const corrMap = new Map(result.results.map((cr) => [cr.sku, { title: cr.title, description: cr.description, log: cr.log }]));
 
@@ -1295,7 +1301,9 @@ export default function PreListingValidator() {
       setResults(updated);
 
       // Diagnostic: how many corrections matched result SKUs.
-      pushLog("BATCH", 0, `[TXT] API returned ${result.results.length} corrections; applied to ${appliedCount} result(s)`);
+      const withTitle = result.results.filter((r) => r.title).length;
+      const withDesc = result.results.filter((r) => r.description).length;
+      pushLog("BATCH", 0, `[TXT] API corrections: ${withTitle} title, ${withDesc} desc; applied to ${appliedCount} result(s)`);
       if (appliedCount === 0 && result.results.length > 0) {
         const apiSkus = result.results.slice(0, 5).map((r) => r.sku).join(", ");
         const resultSkus = _currentResults.current.slice(0, 5).map((r) => r.sku).join(", ");

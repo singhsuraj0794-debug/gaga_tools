@@ -581,6 +581,7 @@ async function batchCall<TInput, TOutput>(
   mergeResults: (outputs: TOutput[]) => TOutput,
   onBatch?: (batchIdx: number, totalBatches: number) => void,
   batchSize: number = BATCH_SIZE,
+  onFail?: (batchIdx: number, totalBatches: number, err: unknown) => void,
 ): Promise<TOutput> {
   const batches: TInput[][] = [];
   for (let i = 0; i < items.length; i += batchSize) {
@@ -607,6 +608,7 @@ async function batchCall<TInput, TOutput>(
     if (lastErr) {
       console.warn(`[batchCall] Batch ${i + 1}/${batches.length} failed after retries:`, lastErr);
       failedBatches.push(i + 1);
+      onFail?.(i + 1, batches.length, lastErr);
       // Continue with remaining batches — don't kill the whole operation
     }
   }
@@ -622,6 +624,7 @@ export async function runTextCorrectionBatched(
   useQwen: boolean = false,
   onBatch?: (batchIdx: number, totalBatches: number) => void,
   batchSize: number = BATCH_SIZE,
+  onFail?: (batchIdx: number, totalBatches: number, err: unknown) => void,
 ): Promise<CorrectTextResult> {
   return batchCall(
     products,
@@ -631,6 +634,7 @@ export async function runTextCorrectionBatched(
     }),
     onBatch,
     batchSize,
+    onFail,
   );
 }
 
