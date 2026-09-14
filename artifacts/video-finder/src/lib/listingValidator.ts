@@ -779,18 +779,40 @@ export function validateProduct(
     }
   }
 
-  // a) Mandatory field presence — only for columns that exist in the sheet
-  for (const field of MANDATORY_FIELDS) {
-    if (!hasColumn(row, field)) continue; // column absent from file — skip, don't REJECT
-    const val = getField(row, field);
-    const passed = !isEmpty(val);
+  // a) Mandatory field presence — only for columns that exist in the sheet.
+  // Child/variant rows inherit title, description, category, brand and HSN from
+  // their parent, so their own mandatory cells are legitimately empty. Skipping
+  // the presence check avoids thousands of false REJECTs on variant sheets.
+  const relationshipRaw = str(getField(row, "Relationship *")).toLowerCase();
+  const parentSkuRaw = str(getField(row, "Parent Sku *"));
+  const isChildRow =
+    relationshipRaw === "child" ||
+    (!!parentSkuRaw &&
+      parentSkuRaw !== sku &&
+      relationshipRaw !== "parent" &&
+      relationshipRaw !== "simple");
+
+  if (isChildRow) {
     addCheck(
-      field,
-      "Mandatory field",
-      passed,
-      passed ? `${field} is present` : `${field} is empty or missing`,
-      "REJECT",
+      "Relationship *",
+      "Variant inheritance",
+      true,
+      `Child/variant row — title, description, category and HSN inherited from parent "${parentSkuRaw || "?"}"`,
+      "PASS",
     );
+  } else {
+    for (const field of MANDATORY_FIELDS) {
+      if (!hasColumn(row, field)) continue; // column absent from file — skip, don't REJECT
+      const val = getField(row, field);
+      const passed = !isEmpty(val);
+      addCheck(
+        field,
+        "Mandatory field",
+        passed,
+        passed ? `${field} is present` : `${field} is empty or missing`,
+        "REJECT",
+      );
+    }
   }
 
   // b) HSN code sanity check
@@ -1095,33 +1117,38 @@ export function validateProduct(
 
   // e) Variant / relationship consistency
   const relationship = str(getField(row, "Relationship *"));
+  const relationshipLc = relationship.toLowerCase();
   const parentSku = str(getField(row, "Parent Sku *"));
 
-  if (relationship === "Simple") {
+  // Parent-type rows reference themselves; child-type rows reference a parent.
+  const isParentType = relationship === "Simple" || relationshipLc === "parent";
+  const isChildType = relationship === "Variant" || relationshipLc === "child";
+
+  if (isParentType) {
     if (parentSku !== sku) {
       addCheck(
         "Relationship *",
-        "Simple variant parent match",
+        "Parent SKU match",
         false,
-        `Relationship is "Simple" but Parent Sku "${parentSku}" does not match Sku "${sku}"`,
+        `Relationship is "${relationship}" but Parent Sku "${parentSku}" does not match Sku "${sku}"`,
         "FLAG",
       );
     } else {
       addCheck(
         "Relationship *",
-        "Simple variant parent match",
+        "Parent SKU match",
         true,
-        `Simple product, Parent Sku matches Sku`,
+        `"${relationship}" product, Parent Sku matches Sku`,
         "PASS",
       );
     }
-  } else if (relationship === "Variant") {
+  } else if (isChildType) {
     if (parentSku === sku) {
       addCheck(
         "Relationship *",
-        "Variant parent differs",
+        "Child parent differs",
         false,
-        `Relationship is "Variant" but Parent Sku equals Sku — should reference a different parent`,
+        `Relationship is "${relationship}" but Parent Sku equals Sku — should reference a different parent`,
         "FLAG",
       );
     } else {
@@ -1131,17 +1158,17 @@ export function validateProduct(
       if (!parentExists) {
         addCheck(
           "Relationship *",
-          "Variant parent exists",
+          "Child parent exists",
           false,
-          `Variant parent SKU "${parentSku}" not found in uploaded batch`,
+          `Child parent SKU "${parentSku}" not found in uploaded batch`,
           "REJECT",
         );
       } else {
         addCheck(
           "Relationship *",
-          "Variant parent exists",
+          "Child parent exists",
           true,
-          `Variant parent SKU "${parentSku}" found in batch`,
+          `Child parent SKU "${parentSku}" found in batch`,
           "PASS",
         );
       }
