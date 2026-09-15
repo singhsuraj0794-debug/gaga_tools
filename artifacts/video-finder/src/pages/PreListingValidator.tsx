@@ -1274,11 +1274,11 @@ export default function PreListingValidator() {
     try {
       const _txtBase = getPrelistingApiBase();
       pushLog("BATCH", 0, `[TXT] API base: ${_txtBase}`);
-      pushLog("BATCH", 0, `[TXT] Calling API for ${correctProducts.length} products (batched, size ${useQwen ? 5 : 10}, Qwen ${useQwen ? "ON" : "off"})...`);
+      pushLog("BATCH", 0, `[TXT] Calling API for ${correctProducts.length} products (batched, size ${useQwen ? 2 : 10}, Qwen ${useQwen ? "ON" : "off"})...`);
       let _failCount = 0;
       const result = await runTextCorrectionBatched(correctProducts, "", useQwen, (bi, tb) => {
         pushLog("BATCH", 0, `[TXT] Batch ${bi}/${tb}...`);
-      }, useQwen ? 5 : 10, (bi, tb, err) => {
+      }, useQwen ? 2 : 10, (bi, tb, err) => {
         _failCount++;
         pushLog("BATCH", 0, `[TXT] ⚠️ Batch ${bi}/${tb} FAILED — ${err instanceof Error ? err.message : String(err)}`);
       });

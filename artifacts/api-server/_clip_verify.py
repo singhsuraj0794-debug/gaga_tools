@@ -78,6 +78,14 @@ RULE5_CHECKS = [
 # Minimum ratio of positive_score / (positive_score + negative_score) to flag
 RULE5_CONFIDENCE_MARGIN = 0.60
 
+# Global minimum overlay confidence required to flag ANY overlay sub-check.
+# The user-facing rule is: an image is only flagged for an overlay when the
+# detection confidence is 65% or higher. This acts as a floor on top of each
+# sub-check's own threshold, so noisy signals (notably the OCR-based CJK
+# overlay check, which previously fired at just 10% CJK text) stop producing
+# false positives. Override with OVERLAY_FLAG_THRESHOLD=0.xx if needed.
+OVERLAY_FLAG_THRESHOLD = float(os.environ.get("OVERLAY_FLAG_THRESHOLD", "0.65"))
+
 # ─── Rule 6 prompts: content moderation ──────────────────────────────────────
 # Kept deliberately specific; CLIP zero-shot is noisy for moderation, so the
 # confidence margin is high to avoid false positives on ordinary products.
@@ -465,13 +473,16 @@ def check_rule5(image_url: str) -> dict:
             total = positive_score + negative_score
             ratio = positive_score / total if total > 0 else 0.0
 
-            sub_flagged = positive_score > threshold and ratio >= RULE5_CONFIDENCE_MARGIN
+            # Apply the global 65% floor on top of the sub-check's own threshold.
+            effective_threshold = max(threshold, OVERLAY_FLAG_THRESHOLD)
+            sub_flagged = positive_score > effective_threshold and ratio >= RULE5_CONFIDENCE_MARGIN
 
             details.append({
                 "check": check_name,
                 "positiveScore": round(positive_score, 4),
                 "negativeScore": round(negative_score, 4),
                 "ratio": round(ratio, 4),
+                "threshold": round(effective_threshold, 2),
                 "flagged": sub_flagged,
             })
 
@@ -486,14 +497,16 @@ def check_rule5(image_url: str) -> dict:
             # CJK Unified Ideographs: U+4E00–U+9FFF
             cjk_chars = [ch for ch in ocr_text if "\u4e00" <= ch <= "\u9fff"]
             cjk_ratio = len(cjk_chars) / max(len(ocr_text.strip()), 1)
-            # Flag if ≥10% of detected text is CJK (likely a Chinese overlay,
-            # not just a random character on packaging)
-            cjk_flagged = len(cjk_chars) >= 3 and cjk_ratio >= 0.10
+            # Overlays must meet the same 65% confidence floor as the CLIP
+            # overlay checks — a handful of Chinese characters on legitimate
+            # packaging must not flag the image.
+            cjk_flagged = len(cjk_chars) >= 3 and cjk_ratio >= OVERLAY_FLAG_THRESHOLD
             details.append({
                 "check": "cjk_overlay",
                 "positiveScore": round(cjk_ratio, 4),
                 "negativeScore": 0.0,
                 "ratio": round(cjk_ratio, 4),
+                "threshold": round(OVERLAY_FLAG_THRESHOLD, 2),
                 "flagged": cjk_flagged,
             })
             if cjk_flagged:
