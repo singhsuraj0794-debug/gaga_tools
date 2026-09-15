@@ -1002,26 +1002,9 @@ export function validateProduct(
       addCheck("Product Name *", "Prohibited content", true, "No prohibited wording detected", "PASS");
     }
 
-    // Unit count / variation is mandatory ONLY for products that come in
-    // variants or packs (apparel sizes, footwear sizes, consumables, sets).
-    // Single-SKU articles (cable, charger, appliance, bottle, holder, etc.)
-    // are exempt. Eligibility is inferred from title + description context.
-    const desc = stripHtml(str(getField(row, "Description *")));
-    const eligibility = inferUnitVariationEligibility(productName, desc);
-    if (eligibility.exempt) {
-      addCheck("Product Name *", "Unit count/variation", true, `Unit count/variation not applicable (${eligibility.reason})`, "PASS");
-    } else {
-      const hasUnitOrVariation =
-        /\b(pack|set|pair|piece|pieces|pcs|count|pcs\.)\s+of\s+\d+\b/i.test(productName) ||
-        /\b\d+\s*(ml|g|kg|l|oz|gm|mg|inch|inches|cm|mm|foot|feet|lt)\b/i.test(productName) ||
-        /\b(color|colour|size|variant|shade)\b/i.test(productName) ||
-        /\b(black|white|red|blue|green|pink|brown|golden|silver|grey|navy|beige|purple|maroon|multi|multicolor)\b/i.test(productName);
-      if (hasUnitOrVariation) {
-        addCheck("Product Name *", "Unit count/variation", true, "Unit count or variation (pack/color/size) present in title", "PASS");
-      } else {
-        addCheck("Product Name *", "Unit count/variation", false, "No unit count (pack of N) or variation (color/size) found in title", "FLAG");
-      }
-    }
+    // NOTE: The "Unit count/variation" (pack of N / colour / size) check was
+    // removed at the user's request — it produced too many false flags on
+    // legitimate single-SKU titles. No replacement flag is emitted here.
   }
 
   // c-b) Description checks: must be HTML-formatted, properly structured,
