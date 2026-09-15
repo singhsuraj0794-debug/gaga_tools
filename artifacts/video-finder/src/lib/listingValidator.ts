@@ -442,6 +442,18 @@ const PROHIBITED_TERMS = [
   "defam", "hate", "racist",
 ];
 
+/**
+ * Find a prohibited term as a WHOLE WORD. A plain substring search flagged
+ * legitimate words ("unisex" contains "sex", "sexy"? no — but "Sussex",
+ * "Middlesex", "unisex" all do). Word-boundary matching avoids those.
+ */
+function findProhibitedTerm(lowerText: string): string | undefined {
+  return PROHIBITED_TERMS.find((t) => {
+    const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${esc}\\b`, "i").test(lowerText);
+  });
+}
+
 /** Standard punctuation and accented Latin characters that are normal in
  *  product names and should never be flagged as unusual symbols. */
 const KNOWN_SAFE_CHARS = new Set([
@@ -970,7 +982,7 @@ export function validateProduct(
     }
 
     // Prohibited content: explicit / defamatory / obscene / unlawful wording
-    const banned = PROHIBITED_TERMS.find((t) => titleLower.includes(t));
+    const banned = findProhibitedTerm(titleLower);
     if (banned) {
       addCheck("Product Name *", "Prohibited content", false, `Title may contain prohibited wording ("${banned}")`, "REJECT");
     } else {
@@ -1062,7 +1074,7 @@ export function validateProduct(
     }
 
     // Prohibited content
-    const descBanned = PROHIBITED_TERMS.find((t) => descPlain.toLowerCase().includes(t));
+    const descBanned = findProhibitedTerm(descPlain.toLowerCase());
     if (descBanned) {
       addCheck("Description *", "Prohibited content", false, `Description may contain prohibited wording ("${descBanned}")`, "REJECT");
     } else {

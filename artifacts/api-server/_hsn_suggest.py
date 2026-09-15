@@ -1605,6 +1605,11 @@ def correct_product_text(
     # ── TITLE ──────────────────────────────────────────────────────────
     if title and title.strip():
         t = _strip_mechanical(title)
+        # Did mechanical cleanup (URL, junk symbols, ALLCAPS) actually change
+        # anything? If so, a correction is worth suggesting even when the
+        # cleaned title is short (e.g. "Water Bottle www.x.com best price"
+        # -> "Aqua Bottle").
+        mechanical_changed = t != title
         t = _strip_all_claims(t)
         if _is_allcaps(t):
             t = _to_title_case(t)
@@ -1698,9 +1703,10 @@ def correct_product_text(
             out_title = t if t and t != _strip_mechanical(title) else None
         elif t != title:
             # Mechanical changes (URL removed, ALLCAPS fixed) but no
-            # claims — only suggest if the result has enough substance.
+            # claims — suggest when the result has enough substance, or when
+            # cleanup genuinely changed the text (URL/junk removed).
             words = t.strip().split()
-            if len(words) >= 3:
+            if len(words) >= 3 or (mechanical_changed and len(words) >= 2):
                 out_title = t
         elif len(t.strip().split()) < 3 and (brand or product_type_label):
             # Too-short title: rebuild from brand + product type so the title
@@ -2321,6 +2327,13 @@ def correct_product_text(
             base = _GLOBAL_CLAIM_PATTERNS.sub(" ", base)
             base = re.sub(r"\s{2,}", " ", base).strip()
             base = re.sub(r"\s*:\s*:", ":", base)  # orphaned colons from domain removal
+            # Tidy fragments left behind by claim removal so we never emit
+            # junk like "<p> shirt. . !</p>".
+            base = re.sub(r"(?:\s*[.,!?]){2,}", ".", base)   # collapse repeated punctuation
+            base = re.sub(r">\s*[.,!?]+\s*<", "><", base)    # drop empty sentences
+            base = re.sub(r"\s+([.,!?])", r"\1", base)       # no space before punctuation
+            base = re.sub(r">\s+([.,!?])", ">", base)
+            base = re.sub(r"\s{2,}", " ", base).strip()
             if spec_items:
                 result_desc = base + "\n<h4>Specifications</h4>\n<ul>" + "\n".join(spec_items) + "</ul>"
             else:
