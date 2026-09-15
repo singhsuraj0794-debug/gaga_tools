@@ -151,26 +151,23 @@ while true; do
     start_tunnel || echo "    reconnect failed, retrying..."
     continue
   fi
-  url="$(cat "$URL_FILE" 2>/dev/null || true)"
-  if [ -n "$url" ] && ! curl -s -o /dev/null --max-time 8 "$url/api/products/status"; then
-    echo "[$(date '+%H:%M:%S')] tunnel unreachable — waiting up to ${DNS_WAIT}s for DNS/reachability before reconnecting..."
-    waited=0
-    while [ "$waited" -lt "$DNS_WAIT" ]; do
-      if kill -0 "$TUNNEL_PID" 2>/dev/null && curl -s -o /dev/null --max-time 8 "$url/api/products/status"; then
-        echo "[$(date '+%H:%M:%S')] tunnel is reachable again"
-        break
-      fi
-      sleep 10
-      waited=$((waited + 10))
-    done
-    # If still unreachable after the wait, restart with a fresh URL.
-    if [ "$waited" -ge "$DNS_WAIT" ]; then
-      echo "[$(date '+%H:%M:%S')] still unreachable after ${waited}s — reconnecting..."
+  # NOTE: We deliberately do NOT curl the public URL from this host to decide
+  # whether the tunnel is healthy. Cloudflare quick tunnels frequently don't
+  # resolve back to their own origin machine while DNS propagates, so a local
+  # curl failure is NOT evidence the tunnel is down. Restarting on that signal
+  # mints a brand-new URL and resets propagation — an endless reconnect loop
+  # that keeps breaking the link the user pasted. cloudflared already retries
+  # the edge connection internally; only a dead process needs a fresh tunnel.
+  # If the log shows sustained edge-registration errors, then restart once.
+  if [ -n "${CLOUDFLARED_LOG:-}" ] && [ -f "$CLOUDFLARED_LOG" ]; then
+    recent_errs=$(tail -50 "$CLOUDFLARED_LOG" 2>/dev/null | grep -ci "Register tunnel connection error" || true)
+    if [ "${recent_errs:-0}" -ge 12 ]; then
+      echo "[$(date '+%H:%M:%S')] tunnel flapping (${recent_errs} register errors in last 50 log lines) — reconnecting..."
       kill "$TUNNEL_PID" 2>/dev/null || true
       sleep 2
       start_tunnel || echo "    reconnect failed, retrying..."
+      continue
     fi
-    continue
   fi
-  sleep 10
+  sleep 15
 done
