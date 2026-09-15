@@ -1465,6 +1465,46 @@ _GLOBAL_PROHIBITED = re.compile(
     re.IGNORECASE,
 )
 
+
+def _strip_claim_sentences(text: str) -> str:
+    """Remove whole sentences that are essentially promotional claims.
+
+    Word-level claim removal leaves fragments ("<p> shirt. . !</p>"), so for
+    descriptions we drop claim-only sentences and only scrub claims inline from
+    sentences that also carry product content. If that would empty the
+    description, the original text is kept.
+    """
+    def _plain(s: str) -> str:
+        return re.sub(r"<[^>]+>", " ", s).strip()
+
+    def _nwords(s: str) -> int:
+        return len(re.findall(r"[A-Za-z0-9]+", s))
+
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    kept: list[str] = []
+    for p in parts:
+        plain = _plain(p)
+        if not plain:
+            kept.append(p)
+            continue
+        if not _GLOBAL_CLAIM_PATTERNS.search(plain):
+            kept.append(p)
+            continue
+        remaining = _GLOBAL_CLAIM_PATTERNS.sub(" ", plain).strip()
+        rem_words = _nwords(remaining)
+        all_words = _nwords(plain)
+        # Sentence is essentially all claim (no meaningful product content)
+        # or mostly claim -> drop it entirely.
+        if all_words == 0 or rem_words <= 1 or rem_words / all_words < 0.4:
+            continue
+        kept.append(p)
+
+    out = re.sub(r"\s{2,}", " ", " ".join(kept)).strip()
+    # Never let claim removal empty a description that had content.
+    if not _plain(out) and _plain(text):
+        return text
+    return out
+
 def _strip_all_claims(text: str) -> str:
     """Remove ALL flagged content: domains, ops claims, misleading claims,
     prohibited terms, and mechanical noise from any text."""
@@ -2324,7 +2364,7 @@ def correct_product_text(
             # Strip domain references and claims from HTML text
             base = _URL_RE.sub(" ", base)
             base = re.sub(r"(?:[:\s]+(?:at|from|on)\s*\S+\.(?:com|in|net)\b\s*:?\s*)", " ", base, flags=re.IGNORECASE)
-            base = _GLOBAL_CLAIM_PATTERNS.sub(" ", base)
+            base = _strip_claim_sentences(base)
             base = re.sub(r"\s{2,}", " ", base).strip()
             base = re.sub(r"\s*:\s*:", ":", base)  # orphaned colons from domain removal
             # Tidy fragments left behind by claim removal so we never emit

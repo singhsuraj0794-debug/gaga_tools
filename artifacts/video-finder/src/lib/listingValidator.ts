@@ -443,14 +443,27 @@ const PROHIBITED_TERMS = [
 ];
 
 /**
- * Find a prohibited term as a WHOLE WORD. A plain substring search flagged
- * legitimate words ("unisex" contains "sex", "sexy"? no — but "Sussex",
- * "Middlesex", "unisex" all do). Word-boundary matching avoids those.
+ * Terms that are legitimate in specific product categories and must NOT be
+ * treated as prohibited there (e.g. "nude" is a standard cosmetics shade,
+ * "naked" appears in food names like "naked cake").
  */
-function findProhibitedTerm(lowerText: string): string | undefined {
+const PROHIBITED_CONTEXT_EXEMPTIONS: Record<string, RegExp> = {
+  nude: /beauty|cosmetic|makeup|make-up|personal care|skin|lip|nail|shade|foundation|lipstick|polish/i,
+  naked: /cake|food|bakery|juice|drink|snack/i,
+};
+
+/**
+ * Find a prohibited term as a WHOLE WORD and in the right context.
+ * - Whole-word matching stops "unisex" / "Sussex" from matching "sex".
+ * - Context exemptions stop "nude" flagging in cosmetics and "naked" in food.
+ */
+function findProhibitedTerm(lowerText: string, categoryLower = ""): string | undefined {
   return PROHIBITED_TERMS.find((t) => {
     const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`\\b${esc}\\b`, "i").test(lowerText);
+    if (!new RegExp(`\\b${esc}\\b`, "i").test(lowerText)) return false;
+    const exempt = PROHIBITED_CONTEXT_EXEMPTIONS[t];
+    if (exempt && exempt.test(categoryLower)) return false;
+    return true;
   });
 }
 
@@ -982,7 +995,7 @@ export function validateProduct(
     }
 
     // Prohibited content: explicit / defamatory / obscene / unlawful wording
-    const banned = findProhibitedTerm(titleLower);
+    const banned = findProhibitedTerm(titleLower, rawCategory.toLowerCase());
     if (banned) {
       addCheck("Product Name *", "Prohibited content", false, `Title may contain prohibited wording ("${banned}")`, "REJECT");
     } else {
@@ -1074,7 +1087,7 @@ export function validateProduct(
     }
 
     // Prohibited content
-    const descBanned = findProhibitedTerm(descPlain.toLowerCase());
+    const descBanned = findProhibitedTerm(descPlain.toLowerCase(), rawCategory.toLowerCase());
     if (descBanned) {
       addCheck("Description *", "Prohibited content", false, `Description may contain prohibited wording ("${descBanned}")`, "REJECT");
     } else {
