@@ -33,8 +33,26 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from concurrent.futures import ThreadPoolExecutor
 
+# This process runs BOTH torch models (CLIP / DINOv2 / Marqo for image
+# attributes) AND MLX models (Qwen2.5-VL for text correction) in one Python
+# process. Mixing torch-MPS and MLX-Metal on the same Apple GPU aborts with:
+#   MPSNDArray ... Error: buffer is not large enough. Must be 9216 bytes
+# which segfaults the server and forces the slow one-shot CLI fallback.
+# Force torch onto CPU so MLX alone owns the Metal device.
+try:
+    import torch as _torch
+    _torch.backends.mps.is_available = lambda: False
+    _torch.backends.mps.is_built = lambda: False
+except Exception:
+    pass
+
 PORT = int(os.environ.get("ANALYSIS_PORT", "8003"))
-MAX_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "4"))
+# MUST stay 1: MLX (Qwen) uses the Metal GPU and is not safe to call from
+# multiple threads — concurrent access aborts with
+#   AGXG16GFamilyCommandBuffer ... 'A command encoder is already encoding'
+# which kills the server. CLIP/DINOv2/Marqo run on CPU here (see torch guard
+# above) so a single worker keeps the GPU to one caller.
+MAX_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "1"))
 
 _models_ready = False
 
