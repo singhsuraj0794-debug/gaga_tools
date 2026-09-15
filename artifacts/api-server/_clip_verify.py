@@ -98,7 +98,13 @@ RULE6_PROMPTS = [
 ]
 
 # Bad prompt must beat clean by this ratio (high bar — false positives are costly)
-RULE6_CONFIDENCE_MARGIN = 2.5
+RULE6_CONFIDENCE_MARGIN = 3.5
+
+# ...AND the bad prompt must reach this absolute probability. Without it a
+# near-tie (e.g. clean 0.20 / gore 0.51) could flag a perfectly normal product
+# photo just because CLIP didn't strongly match the "clean" prompt — the main
+# source of "no gore in this image" false positives.
+RULE6_MIN_BAD_SCORE = 0.30
 
 # ─── Image loading ───────────────────────────────────────────────────────────
 
@@ -558,7 +564,10 @@ def check_rule6(image_url: str) -> dict:
         max_bad_score = max(scores[p] for p in bad_prompts)
         max_bad_label = max(bad_prompts, key=lambda p: scores[p])
 
-        flagged = max_bad_score > clean_score * RULE6_CONFIDENCE_MARGIN
+        flagged = (
+            max_bad_score > clean_score * RULE6_CONFIDENCE_MARGIN
+            and max_bad_score >= RULE6_MIN_BAD_SCORE
+        )
 
         return {
             "url": image_url,
