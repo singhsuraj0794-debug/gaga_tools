@@ -23,6 +23,15 @@ logger = logging.getLogger(__name__)
 
 PROXY = os.environ.get("SCRAPER_PROXY", "")
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "")
+# scrape.do — residential-proxy fetcher. The local IP is blocked by Amazon
+# (both curl_cffi and Playwright get the "to discuss automated access" page),
+# and the ScraperAPI quota can run out, so scrape.do is the reliable fallback.
+SCRAPE_DO_TOKEN = os.environ.get("SCRAPE_DO_TOKEN", "")
+# Dedicated scraper Chrome (started by start-chrome-scraper.sh) which routes
+# through the Webshare proxy. This is the SAME technique the Flipkart scraper
+# uses as its primary fetch: a real, non-automated browser over CDP. No external
+# scraping API required.
+SCRAPE_CDP_URL = os.environ.get("SCRAPE_CDP_URL", "http://localhost:9223")
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -154,17 +163,52 @@ EXTRACT_JS = r"""() => {
 }"""
 
 
+def _via_scrape_do(url: str) -> dict:
+    """Fetch a product page through scrape.do (residential proxy + JS render)."""
+    if not SCRAPE_DO_TOKEN:
+        return _blocked("scrape.do token not configured")
+    import requests
+    from urllib.parse import quote
+
+    target = f"https://api.scrape.do/?token={SCRAPE_DO_TOKEN}&url={quote(url, safe='')}"
+    try:
+        resp = requests.get(target, timeout=90)
+        text = resp.text
+        if resp.status_code != 200:
+            return _blocked(f"scrape.do HTTP {resp.status_code}")
+        if len(text) < 10000 or _is_bot_page(text, url):
+            return _blocked("scrape.do returned non-product page")
+        return _parse_html(text, url)
+    except Exception as e:
+        return _blocked(f"scrape.do error: {e}")
+
+
 def scrape(url: str, attempt: int = 1, max_attempts: int = 3) -> dict:
     ua = USER_AGENTS[(attempt - 1) % len(USER_AGENTS)]
 
+    # PRIMARY: the proxy-enabled Chrome over CDP — a real, non-automated
+    # browser, exactly the technique the Flipkart scraper uses. Amazon blocks
+    # this machine's direct requests, so the browser is the reliable path.
+    result = _try_playwright(url, ua)
+    if result and result.get("status") == "success":
+        return result
+
+    # Fallback: direct fetch (works from un-flagged IPs).
     html = _try_direct(url, ua)
-    if html:
+    # The direct fetch can return HTTP 200 with a tiny bot/consent page; without
+    # this check _parse_html would extract the page <title> and report success.
+    if html and not _is_bot_page(html, url):
         parsed = _parse_html(html, url)
         if parsed.get("status") == "success":
             return parsed
 
-    result = _try_playwright(url, ua)
-    if result and result.get("status") == "success":
+    # Last-resort cloud fetchers (only used if the local browser is unavailable).
+    result = _via_scrape_do(url)
+    if result.get("status") == "success":
+        return result
+
+    result = _via_scraping_service(url)
+    if result.get("status") == "success":
         return result
 
     if attempt < max_attempts:
@@ -193,21 +237,96 @@ def _is_bot_page(html: str, url: str = "") -> bool:
     return False
 
 
+# Amazon serves these titles for non-product pages (homepage, sign-in, the
+# "sorry" error page). When we see one, the /dp/<ASIN> path redirected and we
+# must retry — previously these were returned as a "successful" scrape that
+# contained only the homepage title + meta description.
+_GENERIC_TITLE_MARKERS = (
+    "online shopping site in india",
+    "amazon.in: online shopping",
+    "amazon.in: shop online",
+    "amazon.com: online shopping",
+    "amazon.com. spend less",
+    "shop online for mobiles",
+    "sorry! something went wrong",
+    "amazon.com: sign in",
+    "amazon.in: sign in",
+)
+
+
+def _extract_asin(url: str) -> str:
+    for pat in (
+        r"/(?:dp|gp/product|gp/aw/d|product)/([A-Z0-9]{10})",
+        r"\b([A-Z0-9]{10})\b",
+    ):
+        m = re.search(pat, url, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
+    return ""
+
+
+def _looks_like_product_page(result: dict, html: str = "", url: str = "") -> bool:
+    """True only if the fetched page is a real product detail page.
+
+    Guards against Amazon redirecting an ASIN request to the homepage, a
+    sign-in page, or a soft-block page — which previously produced a
+    'successful' scrape with just a title and one-line description.
+    """
+    title = (result.get("title") or "").strip().lower()
+    if not title or len(title) < 8:
+        return False
+    if any(mk in title for mk in _GENERIC_TITLE_MARKERS):
+        return False
+    if html:
+        asin = _extract_asin(url)
+        has_title_el = "producttitle" in html.lower()
+        asin_in_html = bool(asin) and asin in html.upper()
+        if not has_title_el and not asin_in_html:
+            return False
+    return True
+
+
+
 def _try_playwright(url: str, ua: str = "") -> dict | None:
-    """Fetch + extract via Playwright headless Chromium. Returns result dict or None."""
+    """Fetch + extract via the proxy-enabled Chrome CDP (real browser).
+
+    Primary technique, identical in spirit to the Flipkart scraper: connect to
+    the dedicated scraper Chrome over CDP (port 9223, Webshare residential
+    proxy) so Amazon's bot detection sees a real browser. Falls back to a local
+    headless Chromium only if the CDP endpoint isn't reachable.
+    """
+    use_cdp = False
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"{SCRAPE_CDP_URL}/json/version", timeout=5)
+        use_cdp = True
+    except Exception:
+        use_cdp = False
+
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
-            context = browser.new_context(
-                user_agent=ua or USER_AGENTS[0],
-                viewport={"width": 1440, "height": 900},
-                locale="en-IN",
-            )
-            page = context.new_page()
+            if use_cdp:
+                browser = p.chromium.connect_over_cdp(SCRAPE_CDP_URL)
+                context = browser.new_context(
+                    user_agent=ua or USER_AGENTS[0],
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-IN",
+                )
+                page = context.new_page()
+                owns_browser = False
+            else:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                )
+                context = browser.new_context(
+                    user_agent=ua or USER_AGENTS[0],
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-IN",
+                )
+                page = context.new_page()
+                owns_browser = True
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2000)
@@ -303,10 +422,15 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                     pass
             finally:
                 context.close()
-                browser.close()
+                # Never close the shared Chrome when connected over CDP.
+                if owns_browser:
+                    browser.close()
 
             if data and data.get("title"):
-                return _result_from_dom(data)
+                dom_result = _result_from_dom(data)
+                if _looks_like_product_page(dom_result, html, url):
+                    return dom_result
+                return _blocked("Not a product page (Amazon redirected or soft-blocked)")
             return _parse_html(html, url)
     except Exception:
         return None
@@ -552,6 +676,8 @@ def _parse_html(html: str, url: str) -> dict:
 
     if not result["title"]:
         return _blocked("Could not extract product data")
+    if not _looks_like_product_page(result, html, url):
+        return _blocked("Not a product page (Amazon redirected or soft-blocked)")
     result["status"] = "success"
     return result
 
