@@ -24,7 +24,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 API_DIR="$SCRIPT_DIR/artifacts/api-server"
 cd "$API_DIR"
 
-PORT="${API_PORT:-8080}"
+# Default 8090 (not 8080): another local tool (~/.local/ws/server.mjs) occupies
+# 8080 and silently hijacks the tunnel — requests then 404 and text correction
+# returns nothing. Override with API_PORT=xxxx.
+PORT="${API_PORT:-8090}"
 CLIP_PORT="${CLIP_VERIFY_PORT:-8001}"
 URL_FILE="/tmp/prelisting-tunnel-url.txt"
 API_PID=""
