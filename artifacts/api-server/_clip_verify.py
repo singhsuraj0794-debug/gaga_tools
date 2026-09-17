@@ -131,10 +131,11 @@ def _get_http_session():
         from urllib3.util.retry import Retry
 
         retry = Retry(
-            total=4,
-            connect=4,
+            total=6,
+            connect=6,   # retries connection/DNS failures ("Failed to resolve host")
             read=3,
-            backoff_factor=0.6,
+            other=3,
+            backoff_factor=1.0,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["GET", "HEAD"],
         )
