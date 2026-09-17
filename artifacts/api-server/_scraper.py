@@ -246,7 +246,7 @@ def _try_next_data(html: str) -> dict | None:
         "title": _clean(title[:500]),
         "description": _clean(description[:2000]) if description else None,
         "meta_description": _clean(description[:2000]) if description else None,
-        "images": imgs[:10],
+        "images": _filter_live_images(imgs)[:10],
         "price": str(price) if price else None,
         "dimensions": _find_spec(specs, ["dimension", "size"]),
         "weight": _find_spec(specs, ["weight"]),
@@ -314,7 +314,7 @@ def _try_jsonld(html: str) -> dict | None:
             "title": _clean(name[:500]),
             "description": _clean(desc[:2000]) if desc else None,
             "meta_description": _clean(desc[:2000]) if desc else None,
-            "images": imgs[:10] if imgs else _extract_images_from_html(html),
+            "images": _filter_live_images(imgs if imgs else _extract_images_from_html(html))[:10],
             "price": str(price) if price else None,
             "dimensions": None,
             "weight": None,
@@ -355,7 +355,7 @@ def _regex_fallback(html: str) -> dict:
         "status": "success" if title else "failed",
         "title": _clean(title[:500]) if title else None,
         "description": None,
-        "images": imgs[:10],
+        "images": _filter_live_images(imgs)[:10],
         "price": price,
         "dimensions": None,
         "weight": None,
@@ -726,6 +726,44 @@ def _dedupe_product_images(urls: list[str]) -> list[str]:
         if k not in best or _resolution_of(u) > _resolution_of(best[k]):
             best[k] = u
     return list(best.values())
+
+
+def _filter_live_images(urls: list[str], limit: int = 10) -> list[str]:
+    """Keep only image URLs that actually resolve.
+
+    Flipkart's raw page data contains legacy / CDN-transform image URLs
+    (underscore slugs like '.../xif0q/earring/...' with '_resized_original_')
+    that 404 today, alongside the live ones. Without this check the scraper
+    wrote ~82% dead URLs into the sheet, and validation then failed with
+    'Image failed to load'. Runs checks concurrently to stay fast.
+    """
+    if not urls:
+        return []
+    import requests
+    from concurrent.futures import ThreadPoolExecutor
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Referer": "https://www.flipkart.com/",
+    }
+
+    def _ok(u: str) -> str | None:
+        for method in ("head", "get"):
+            try:
+                if method == "head":
+                    r = requests.head(u, headers=headers, timeout=8, allow_redirects=True)
+                else:
+                    r = requests.get(u, headers=headers, timeout=8, stream=True)
+                if r.status_code == 200:
+                    return u
+            except Exception:
+                continue
+        return None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        found = list(ex.map(_ok, urls))
+    live = [u for u in found if u]
+    return live[:limit]
 
 
 def _valid_image_url(u: str) -> bool:
