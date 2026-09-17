@@ -113,6 +113,39 @@ _image_pil_cache: Dict[str, "Image.Image"] = {}
 _IMAGE_CACHE_MAX = 300
 
 
+_http_session = None
+
+
+def _get_http_session():
+    """Shared requests session with a pooled adapter + retries.
+
+    fetch_all_products downloads thousands of CDN images; plain requests.get()
+    opens a fresh connection each time and under load fails with
+    'HTTPSConnectionPool ... Max retries exceeded'. A pooled session with
+    automatic retry on transient errors fixes those false 'Failed to load'
+    results for images that are actually live.
+    """
+    global _http_session
+    if _http_session is None:
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+
+        retry = Retry(
+            total=4,
+            connect=4,
+            read=3,
+            backoff_factor=0.6,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "HEAD"],
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=32, pool_maxsize=32)
+        s = requests.Session()
+        s.mount("https://", adapter)
+        s.mount("http://", adapter)
+        _http_session = s
+    return _http_session
+
+
 def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
     """Load image from URL or local path. PIL images are cached so the same
     URL is never downloaded or decoded twice across all callers."""
@@ -124,9 +157,11 @@ def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
             data = _image_bytes_cache.get(source)
             if data is None:
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                 }
-                resp = requests.get(source, headers=headers, timeout=timeout)
+                if "flixcart" in source or "flipkart" in source:
+                    headers["Referer"] = "https://www.flipkart.com/"
+                resp = _get_http_session().get(source, headers=headers, timeout=timeout)
                 resp.raise_for_status()
                 data = resp.content
                 if len(_image_bytes_cache) >= _IMAGE_CACHE_MAX:
