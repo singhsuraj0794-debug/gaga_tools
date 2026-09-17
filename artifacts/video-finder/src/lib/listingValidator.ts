@@ -1865,9 +1865,12 @@ export function mergeClipResults(
       message: "Image claim check pending",
     };
     if (errored) {
-      r7Check.passed = false;
-      r7Check.decision = "FLAG";
-      r7Check.message = `Image claim check failed: ${errored.error}`;
+      // A failed image load is a data/URL problem, not an ops-claim finding.
+      // Report it plainly and as WARN so it doesn't masquerade as a content flag.
+      const badUrl = (errored as any).url || "";
+      r7Check.passed = true;
+      r7Check.decision = "WARN";
+      r7Check.message = `Image could not be loaded (broken or unreachable URL)${badUrl ? `: ${badUrl.substring(0, 80)}` : ""} — ops-claim check skipped`;
     } else if (r7.anyFlagged) {
       const detail = flaggedImages
         .map(

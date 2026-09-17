@@ -696,26 +696,59 @@ def _get_text(node: dict) -> str:
     return ""
 
 
+_IMG_EXT_RE = re.compile(r"\.(?:jpg|jpeg|png|webp|avif)(?:$|\?)", re.IGNORECASE)
+
+
+def _valid_image_url(u: str) -> bool:
+    """True only for a real image URL (has a path segment AND an image extension).
+
+    Guards against bare CDN hostnames like 'https://rukminim2.flixcart.com'
+    that the old regex captured and which later failed to load during
+    validation ('Image claim check failed: Image failed to load').
+    """
+    if not u or not u.startswith(("http://", "https://")):
+        return False
+    rest = u.split("//", 1)[-1]
+    # must have a "/path" after the host
+    if "/" not in rest:
+        return False
+    path = u.split("?", 1)[0]
+    return bool(_IMG_EXT_RE.search(path))
+
+
 def _extract_images(product_data: dict, html: str) -> list[str]:
     imgs = product_data.get("images", [])
     if isinstance(imgs, list) and imgs:
         result = []
         for i in imgs:
             if isinstance(i, str):
-                result.append(i if i.startswith("http") else f"https:{i}")
+                u = i if i.startswith("http") else f"https:{i}"
             elif isinstance(i, dict):
-                u = i.get("url", i.get("src", ""))
-                if u:
-                    result.append(u if u.startswith("http") else f"https:{u}")
+                u = i.get("url", i.get("src", "")) or ""
+                if u and not u.startswith("http"):
+                    u = f"https:{u}"
+            else:
+                continue
+            if _valid_image_url(u):
+                result.append(u)
         return result
     return _extract_images_from_html(html)
 
 
 def _extract_images_from_html(html: str) -> list[str]:
-    urls = re.findall(r'https://rukminim[^"\'\\\s]+(?:\.(?:jpg|jpeg|png|webp))?', html)
+    # Require a real path + image extension. The old pattern made the extension
+    # optional, so it also matched bare hostnames ("https://rukminim2.flixcart.com")
+    # which then failed to load during validation.
+    urls = re.findall(
+        r'https://rukminim[\w.-]*/[^"\'\\\s]+\.(?:jpg|jpeg|png|webp|avif)(?:\?[^"\'\\\s]*)?',
+        html,
+        re.IGNORECASE,
+    )
     seen = set()
     unique = []
     for u in urls:
+        if not _valid_image_url(u):
+            continue
         u_clean = u.split("?")[0]
         if u_clean not in seen:
             seen.add(u_clean)
