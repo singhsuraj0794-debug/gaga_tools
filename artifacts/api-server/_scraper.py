@@ -699,6 +699,35 @@ def _get_text(node: dict) -> str:
 _IMG_EXT_RE = re.compile(r"\.(?:jpg|jpeg|png|webp|avif)(?:$|\?)", re.IGNORECASE)
 
 
+def _base_image_key(u: str) -> str:
+    """Collapse a Flipkart image URL to its identity, ignoring the resolution
+    segment and query string:
+      /image/480/640/xif0q/ring/a.jpeg?q=20  ->  /image/xif0q/ring/a.jpeg
+    """
+    no_q = str(u).split("?", 1)[0]
+    return re.sub(r"/image/\d+/\d+/", "/image/", no_q)
+
+
+def _resolution_of(u: str) -> int:
+    m = re.search(r"/image/(\d+)/(\d+)/", str(u))
+    return int(m.group(1)) * int(m.group(2)) if m else 0
+
+
+def _dedupe_product_images(urls: list[str]) -> list[str]:
+    """Keep ONE URL per distinct product image (highest resolution wins).
+
+    The scraper used to emit every srcset variant as a separate image, so a
+    product with 3 real photos showed up as 8 "images" that were really the
+    same 3 at different sizes — which the validator then flagged as duplicates.
+    """
+    best: dict[str, str] = {}
+    for u in urls:
+        k = _base_image_key(u)
+        if k not in best or _resolution_of(u) > _resolution_of(best[k]):
+            best[k] = u
+    return list(best.values())
+
+
 def _valid_image_url(u: str) -> bool:
     """True only for a real image URL (has a path segment AND an image extension).
 
@@ -731,7 +760,7 @@ def _extract_images(product_data: dict, html: str) -> list[str]:
                 continue
             if _valid_image_url(u):
                 result.append(u)
-        return result
+        return _dedupe_product_images(result)
     return _extract_images_from_html(html)
 
 
@@ -749,11 +778,11 @@ def _extract_images_from_html(html: str) -> list[str]:
     for u in urls:
         if not _valid_image_url(u):
             continue
-        u_clean = u.split("?")[0]
-        if u_clean not in seen:
-            seen.add(u_clean)
+        if u.split("?")[0] not in seen:
+            seen.add(u.split("?")[0])
             unique.append(u)
-    return unique[:10]
+    # Collapse srcset resolution variants down to one URL per distinct image.
+    return _dedupe_product_images(unique)[:10]
 
 
 def _clean(s: str) -> str:
