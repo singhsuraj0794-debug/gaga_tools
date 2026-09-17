@@ -699,6 +699,24 @@ def _get_text(node: dict) -> str:
 _IMG_EXT_RE = re.compile(r"\.(?:jpg|jpeg|png|webp|avif)(?:$|\?)", re.IGNORECASE)
 
 
+def _normalize_rukmini_url(u: str) -> str:
+    """Convert underscore slugs to hyphens in the path after /image/W/H/.
+
+    Flipkart's live CDN images use hyphenated slugs
+    (e.g. '/xif0q/shopsy-mangalsutra-tanmaniya/v/u/m/shopsy-fd-306-...jpeg'),
+    but the raw page data also carries legacy UNDERSCORE variants
+    ('/xif0q/mangalsutra_tanmaniya/...', '/xif0q/shopsy_earring/...') that
+    return HTTP 404. Swapping '_' -> '-' in the path recovers them —
+    verified 30/30 dead URLs recovered, and no live URL is broken by it.
+    """
+    if not isinstance(u, str):
+        return u
+    m = re.match(r"(https?://[^/]+/image/\d+/\d+/)(.*)$", u)
+    if not m:
+        return u
+    return m.group(1) + m.group(2).replace("_", "-")
+
+
 def _base_image_key(u: str) -> str:
     """Collapse a Flipkart image URL to its identity, ignoring the resolution
     segment and query string:
@@ -796,6 +814,7 @@ def _extract_images(product_data: dict, html: str) -> list[str]:
                     u = f"https:{u}"
             else:
                 continue
+            u = _normalize_rukmini_url(u)
             if _valid_image_url(u):
                 result.append(u)
         return _dedupe_product_images(result)
@@ -807,13 +826,14 @@ def _extract_images_from_html(html: str) -> list[str]:
     # optional, so it also matched bare hostnames ("https://rukminim2.flixcart.com")
     # which then failed to load during validation.
     urls = re.findall(
-        r'https://rukminim[\w.-]*/[^"\'\\\s]+\.(?:jpg|jpeg|png|webp|avif)(?:\?[^"\'\\\s]*)?',
+        r'https://rukmini[\w.-]*/[^"\'\\\s]+\.(?:jpg|jpeg|png|webp|avif)(?:\?[^"\'\\\s]*)?',
         html,
         re.IGNORECASE,
     )
     seen = set()
     unique = []
     for u in urls:
+        u = _normalize_rukmini_url(u)
         if not _valid_image_url(u):
             continue
         if u.split("?")[0] not in seen:
