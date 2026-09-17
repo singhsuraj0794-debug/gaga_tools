@@ -645,9 +645,21 @@ def get_ocr_reader():
             import easyocr
             print("[INFO] Loading EasyOCR reader (en + ch_sim)...", file=sys.stderr)
             t0 = time.time()
-            _ocr_reader = easyocr.Reader(["en", "ch_sim"], gpu=False, verbose=False)
+            # gpu=True uses Apple Metal (MPS) and is ~2.2x faster than CPU
+            # (1.35s vs 3.0s per image). Fall back to CPU if the GPU path
+            # is unavailable on this machine.
+            try:
+                _ocr_reader = easyocr.Reader(["en", "ch_sim"], gpu=True, verbose=False)
+                print("[INFO] EasyOCR ready (GPU/MPS)", file=sys.stderr)
+            except Exception as e:
+                print(f"[INFO] EasyOCR GPU unavailable ({str(e)[:60]}) — using CPU", file=sys.stderr)
+                _ocr_reader = easyocr.Reader(["en", "ch_sim"], gpu=False, verbose=False)
             print(f"[INFO] EasyOCR ready in {time.time() - t0:.1f}s", file=sys.stderr)
     return _ocr_reader
+
+
+_ocr_text_cache: Dict[int, str] = {}
+_OCR_CACHE_MAX = 400
 
 
 def extract_image_text(img: Image.Image) -> str:
@@ -655,15 +667,33 @@ def extract_image_text(img: Image.Image) -> str:
     line. Words close in vertical position are grouped into one line and lines
     are joined with newlines, so sentence/claim-splitting downstream can treat
     each text block independently (merging everything into one string hides
-    that structure and suppresses detection)."""
+    that structure and suppresses detection).
+
+    Results are cached by image content. Rule 5 (CJK overlay) and Rule 7 (ops
+    claims) both OCR the SAME first image; without this cache EasyOCR ran twice
+    per product (~4s wasted each), which was the dominant cost of the whole
+    image-analysis step.
+    """
     import numpy as np
+
+    key = hash(img.tobytes())
+    cached = _ocr_text_cache.get(key)
+    if cached is not None:
+        return cached
+
     reader = get_ocr_reader()
     arr = np.array(img.convert("RGB"))
     results = reader.readtext(arr, detail=0)
     if not results:
-        return ""
-    lines = [str(line).strip() for line in results if line]
-    return "\n".join(l for l in lines if l)
+        text = ""
+    else:
+        lines = [str(line).strip() for line in results if line]
+        text = "\n".join(l for l in lines if l)
+
+    if len(_ocr_text_cache) >= _OCR_CACHE_MAX:
+        _ocr_text_cache.clear()
+    _ocr_text_cache[key] = text
+    return text
 
 
 def check_ops_on_image(image_url: str) -> dict:
