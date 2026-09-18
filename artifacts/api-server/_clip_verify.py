@@ -895,8 +895,61 @@ def check_rule3(image_urls: List[str]) -> dict:
 # Rule 4 removed — white-background check dropped per product-team request.
 
 
+def _available_memory_gb() -> Optional[float]:
+    """Approximate free physical memory.
+
+    macOS does not support SC_AVPHYS_PAGES, so parse `vm_stat` (free +
+    inactive pages, which is what the OS can hand out without paging).
+    """
+    try:
+        import re as _re
+        import subprocess
+
+        out = subprocess.check_output(["vm_stat"], text=True, timeout=5)
+        page_size = 4096
+        m = _re.search(r"page size of (\d+)", out)
+        if m:
+            page_size = int(m.group(1))
+        free = inactive = 0
+        for line in out.splitlines():
+            if line.startswith("Pages free:"):
+                free = int(_re.sub(r"\D", "", line.split(":", 1)[1]) or 0)
+            elif line.startswith("Pages inactive:"):
+                inactive = int(_re.sub(r"\D", "", line.split(":", 1)[1]) or 0)
+        if free or inactive:
+            return (free + inactive) * page_size / 1e9
+    except Exception:
+        pass
+    # Fallback: sysconf where supported (Linux).
+    try:
+        return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 1e9
+    except Exception:
+        return None
+
+
+def _maybe_release_memory(threshold_gb: float = 1.5) -> bool:
+    """Drop caches under memory pressure so long runs degrade gracefully.
+
+    When free memory gets low the OS starts paging, which turns image
+    analysis from ~1s/product into tens of seconds. Releasing our caches
+    (they only cost a re-download) keeps the working set small.
+    """
+    avail = _available_memory_gb()
+    if avail is None or avail >= threshold_gb:
+        return False
+    _image_pil_cache.clear()
+    _image_bytes_cache.clear()
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+    return True
+
+
 def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
     """Process multiple products."""
+    _maybe_release_memory()
     results = []
 
     for i, product in enumerate(products):

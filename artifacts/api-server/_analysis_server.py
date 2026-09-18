@@ -57,14 +57,19 @@ MAX_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "1"))
 _models_ready = False
 
 
-def _ensure_models():
-    """Load the models used by text-correction + HSN once (lazy, on first use)."""
+def _ensure_models(use_qwen: bool = False):
+    """Warm the models actually needed by this request.
+
+    Qwen2.5-VL-3B costs ~3GB resident. It is only needed when the caller asks
+    for Qwen text correction, so loading it eagerly (as before) wasted ~3GB
+    during image-only runs and pushed the 16GB machine into swap — the cause of
+    'fast at first, then slow'. It now loads lazily on first real use.
+    """
     global _models_ready
-    if _models_ready:
+    if not use_qwen or _models_ready:
         return
-    print("[ANALYSIS] Loading models...", file=sys.stderr)
+    print("[ANALYSIS] Loading Qwen (first Qwen request)...", file=sys.stderr)
     t0 = time.time()
-    # Qwen2.5-VL-3B (shared loader — loads exactly once in this process)
     from _qwen_model import get_model as qwen_get_model
     qwen_get_model()
     print(f"[ANALYSIS]   Qwen loaded in {time.time()-t0:.1f}s", file=sys.stderr)
@@ -136,9 +141,9 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length) or b"{}")
             t0 = time.time()
             if self.path == "/correct-text":
-                _ensure_models()
                 products = data.get("products", [])
                 use_qwen = data.get("useQwen", False)
+                _ensure_models(use_qwen=bool(use_qwen))
                 result = _run_correct_text(products, use_qwen)
             else:
                 products = data.get("products", [])
