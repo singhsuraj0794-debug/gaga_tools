@@ -474,11 +474,28 @@ export default function PreListingValidator() {
       const s = Math.floor((performance.now() - t0) / 1000);
       return `${Math.floor(s/60)}m ${s%60}s`;
     };
+    // Coalesce log writes. Calling setLogs per batch re-rendered the whole
+    // (growing) log list on every batch — O(n^2), which is why image analysis
+    // started fast and then crawled after ~20 batches. Buffer entries and flush
+    // a few times a second instead, and keep the list bounded.
+    const _logBuffer: LogEntry[] = [];
+    let _logTimer: ReturnType<typeof setTimeout> | null = null;
+    const _flushLogs = () => {
+      _logTimer = null;
+      if (_logBuffer.length === 0) return;
+      const pending = _logBuffer.splice(0, _logBuffer.length);
+      setLogs((prev) => {
+        const next = prev.concat(pending);
+        return next.length > 600 ? next.slice(next.length - 600) : next;
+      });
+    };
     const pushLog = (sku: string, row: number, msg: string) => {
-      setLogs((prev) => [...prev, {
+      _logBuffer.push({
         time: now(), row, sku, productName: msg,
         result: { sku: "", productName: "", category: "", decision: "PASS", score: 0, checks: [] },
-      }]);
+      });
+      if (_logTimer) return;
+      _logTimer = setTimeout(_flushLogs, 250);
     };
 
     pushLog("SYS", 0, `[START] Validation began at ${now()} for ${rows.length} products`);
@@ -635,6 +652,7 @@ export default function PreListingValidator() {
     setSelectedSkus(withIssues);
 
     pushLog("SYS", 0, `[DONE] Validation complete in ${elapsed()} — ${withIssues.size} products need attention`);
+    _flushLogs(); // flush any buffered entries before handing off to review
     setProgress(100);
     setStageLabel("Complete");
     setStageElapsed(elapsed());
@@ -2661,7 +2679,7 @@ export default function PreListingValidator() {
                 {logs.length === 0 && progress < 5 && (
                   <div className="text-slate-500">Waiting for validation to start...</div>
                 )}
-                {logs.map((log, i) => {
+                {logs.slice(-250).map((log, i) => {
                   const isInfo = log.sku === "SYS";
                   const dot = isInfo ? "[SYS]" :
                     log.result.decision === "PASS" ? "[OK]" :
@@ -3143,7 +3161,7 @@ export default function PreListingValidator() {
             </CardHeader>
             <CardContent>
               <div ref={logRef} className="bg-slate-900 text-green-400 font-mono text-xs rounded-lg p-4 max-h-96 overflow-y-auto space-y-1">
-                {logs.map((log, i) => {
+                {logs.slice(-250).map((log, i) => {
                   const issues = log.result.checks?.filter((c) => !c.passed);
                   const brief = issues?.slice(0, 2).map((c) => c.message).join("; ");
                   const message = log.productName || log.result.productName || "Validation event";
