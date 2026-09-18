@@ -33,10 +33,66 @@ class ScraperHandler(BaseHTTPRequestHandler):
             self._handle_extract()
         elif self.path == "/search":
             self._handle_search()
+        elif self.path.startswith("/api/"):
+            # Reverse-proxy the pre-listing compute API (port 8090) through the
+            # SAME permanent ngrok domain as the scraper. That gives the
+            # validator a Compute API URL that never changes:
+            #   https://<permanent-domain>/api/...
+            self._proxy_api()
         else:
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b'{"error":"not found"}')
+
+    def do_GET(self):
+        if self.path.startswith("/api/"):
+            self._proxy_api()
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'{"error":"not found"}')
+
+    def _proxy_api(self):
+        """Forward /api/* to the local pre-listing API server on port 8090."""
+        import urllib.request
+        import urllib.error
+
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else None
+        target = "http://127.0.0.1:8090" + self.path
+        headers = {"Content-Type": self.headers.get("Content-Type", "application/json")}
+        req = urllib.request.Request(target, data=body, method=self.command, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=1800) as resp:
+                payload = resp.read()
+                self.send_response(resp.status)
+                self.send_header("Content-Type", resp.headers.get("Content-Type", "application/json"))
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(payload)
+        except urllib.error.HTTPError as e:
+            payload = e.read() if hasattr(e, "read") else b"{}"
+            self.send_response(e.code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload)
+        except Exception as e:
+            msg = json.dumps({"error": f"proxy failed: {e}"}).encode()
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type,ngrok-skip-browser-warning")
+        self.end_headers()
 
     def _handle_extract(self):
         try:

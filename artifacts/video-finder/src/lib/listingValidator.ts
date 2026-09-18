@@ -2,11 +2,28 @@ import * as XLSX from "xlsx";
 import Papa from "papaparse";
 
 // Base URL for the pre-listing validator compute API (HSN, CLIP, text correction).
-// Defaults to the build-time env var, then localhost for local dev. The app can
-// override it at runtime via setPrelistingApiBase() (see PreListingValidator.tsx),
-// so a changing Cloudflare Tunnel URL doesn't require a rebuild.
+// Defaults to the build-time env var, then the PERMANENT ngrok domain that the
+// local machine serves (scraper + compute API through one stable URL), then
+// localhost for local dev. The app can override it at runtime via
+// setPrelistingApiBase() (see PreListingValidator.tsx).
 const DEFAULT_API_BASE: string =
-  (import.meta.env?.VITE_PRELISTING_API_URL as string | undefined) || "http://localhost:8080";
+  (import.meta.env?.VITE_PRELISTING_API_URL as string | undefined) ||
+  "https://headphone-shudder-lavender.ngrok-free.dev";
+
+/**
+ * ngrok's free tier serves an interstitial HTML page to browser requests unless
+ * this header is present. The compute API is exposed through the permanent
+ * ngrok domain, so every API call must send it.
+ */
+export function withApiHeaders(init: RequestInit = {}): RequestInit {
+  return {
+    ...init,
+    headers: {
+      ...((init.headers as Record<string, string>) || {}),
+      "ngrok-skip-browser-warning": "true",
+    },
+  };
+}
 
 let _prelistingApiBase: string = DEFAULT_API_BASE;
 
@@ -587,11 +604,11 @@ export async function runTextCorrection(
   useQwen: boolean = false,
 ): Promise<CorrectTextResult> {
   const baseUrl = apiBase || getPrelistingApiBase();
-  const resp = await fetch(`${baseUrl}/api/products/correct-text`, {
+  const resp = await fetch(`${baseUrl}/api/products/correct-text`, withApiHeaders({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ products, useQwen }),
-  });
+  }));
   if (!resp.ok) {
     throw new Error(`Text correction failed: ${resp.status} ${resp.statusText}`);
   }
@@ -1721,12 +1738,12 @@ export async function runClipVerification(
   useQwenVerify: boolean = false,
 ): Promise<ClipVerificationResult> {
   const baseUrl = apiBase || getPrelistingApiBase();
-  const resp = await fetchWithRetry(`${baseUrl}/api/products/clip-verify`, {
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/clip-verify`, withApiHeaders({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ products, useQwenVerify }),
     signal: AbortSignal.timeout(1800000),
-  });
+  }));
 
   if (!resp.ok) {
     throw new Error(`CLIP verification failed: ${resp.status} ${resp.statusText}`);
@@ -2001,11 +2018,11 @@ export async function runHsnSuggestion(
   apiBase: string = "",
 ): Promise<HsnSuggestResult> {
   const baseUrl = apiBase || getPrelistingApiBase();
-  const resp = await fetch(`${baseUrl}/api/products/hsn-suggest`, {
+  const resp = await fetch(`${baseUrl}/api/products/hsn-suggest`, withApiHeaders({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ products }),
-  });
+  }));
 
   if (!resp.ok) {
     throw new Error(`HSN suggestion failed: ${resp.status} ${resp.statusText}`);

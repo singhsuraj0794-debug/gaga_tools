@@ -214,6 +214,11 @@ export default function PreListingValidator() {
       if (!/^https?:\/\//i.test(discovered)) return;
       // Prefer the discovered URL when the saved one is empty, localhost, or stale.
       const current = getPrelistingApiBase();
+      // The permanent ngrok domain is the stable, preferred endpoint — never
+      // replace it with a transient Supabase-published quick-tunnel URL.
+      if (/ngrok-free\.dev|ngrok\.io/.test(current)) {
+        return;
+      }
       const isDefault = /localhost|127\.0\.0\.1/.test(current) || !current;
       if (isDefault || current !== discovered) {
         setApiUrl(discovered);
