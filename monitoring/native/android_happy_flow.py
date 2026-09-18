@@ -95,6 +95,46 @@ def tap_center(driver, el, duration: int = 100) -> bool:
             return False
 
 
+def dismiss_blocking_dialogs(driver) -> bool:
+    """Dismiss app-update / promo modals that cover the UI.
+
+    A forced 'Update App?' modal (e.g. "Version 1.0.30 is available") blocks
+    every tap, so the whole happy flow fails even though the app is logged in.
+    Tap outside the dialog (it is centred) and fall back to the Back button.
+    """
+    dismissed = False
+    blocking_markers = (
+        "Update App", "Would you like to update", "would you like to update",
+        "Rate this app", "Rate the app", "Enjoying Gajab",
+    )
+    for _ in range(3):
+        present = False
+        for m in blocking_markers:
+            if find_desc(driver, m, timeout=2) is not None:
+                present = True
+                break
+        if not present:
+            break
+        # Tap well above the centred dialog (its box starts mid-screen).
+        try:
+            size = driver.get_window_size()
+            driver.tap([(size["width"] // 2, int(size["height"] * 0.16))], 120)
+            time.sleep(1.2)
+        except Exception:
+            pass
+        still = any(find_desc(driver, m, timeout=1) is not None for m in blocking_markers)
+        if still:
+            try:
+                driver.back()
+                time.sleep(1.2)
+            except Exception:
+                pass
+        if not any(find_desc(driver, m, timeout=1) is not None for m in blocking_markers):
+            dismissed = True
+            break
+    return dismissed
+
+
 def run_flow() -> list[dict]:
     driver = connect()
     store = SupabaseStore()
@@ -107,6 +147,12 @@ def run_flow() -> list[dict]:
             pass
         driver.activate_app(APP_PACKAGE)
         time.sleep(5)
+
+        # An app-update / promo modal can cover the whole UI and block every
+        # tap (seen: "Update App? Version 1.0.30 is available"). Clear it
+        # before measuring anything.
+        if dismiss_blocking_dialogs(driver):
+            print("[flow] dismissed a blocking dialog (update/promo modal)")
 
         # Start full-screen recording
         try:
