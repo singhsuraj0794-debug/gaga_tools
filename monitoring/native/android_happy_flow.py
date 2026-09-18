@@ -68,6 +68,34 @@ def find_desc(driver, substring: str, timeout: int = 20):
     return find(driver, f'//*[contains(@content-desc, "{substring}")]', timeout)
 
 
+# The current Gajab build exposes only testID-based content-descs — no visible
+# text ("Suraj", "Asking Price", "Start Bargaining" are NOT in the UI tree).
+# These helpers match the app's own testIDs so checks work either way.
+def has_testid(driver, testid: str, timeout: int = 8) -> bool:
+    return find_desc(driver, testid, timeout) is not None
+
+
+def has_any_testid(driver, testids, timeout: int = 8) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for t in testids:
+            if find_desc(driver, t, timeout=1) is not None:
+                return True
+        time.sleep(0.5)
+    return False
+
+
+HOME_READY_TESTIDS = (
+    "dashboard_bazaar_tab", "dashboard_categories_tab",
+    "home_category_0_item", "product_template1_product_0_card",
+)
+PRODUCT_CARD_TESTIDS = (
+    "product_template1_product_0_card", "product_template1_product_1_card",
+    "product_template2_product_0_card", "product_card",
+)
+CATEGORY_CARD_TESTIDS = ("category_template_item_0_card", "home_category_0_item")
+
+
 def screenshot(driver, label: str) -> str | None:
     try:
         b64 = driver.get_screenshot_as_base64()
@@ -162,20 +190,27 @@ def run_flow() -> list[dict]:
 
         # ── Step 1: home load ──
         t0 = time.time()
-        logged_in = find_desc(driver, "Suraj", timeout=12) is not None
+        # Newer builds expose no text for the profile name, so accept the home
+        # testIDs (dashboard tabs / first product card) as "logged in + loaded".
+        logged_in = (
+            find_desc(driver, "Suraj", timeout=8) is not None
+            or has_any_testid(driver, HOME_READY_TESTIDS, timeout=8)
+        )
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_home_load", "status": "pass" if logged_in else "fail",
-                        "detail": "logged in (profile visible)" if logged_in else "profile not found",
+                        "detail": "logged in (home visible)" if logged_in else "profile not found",
                         "duration_ms": duration, "screenshot": screenshot(driver, "home")})
 
         # ── Step 2: home products populate ──
         t0 = time.time()
-        products = find_desc(driver, "Asking Price", timeout=15) is not None
+        products = find_desc(driver, "Asking Price", timeout=15) is not None \
+            or has_any_testid(driver, PRODUCT_CARD_TESTIDS, timeout=5)
         if not products:
             # Products may be below fold or loading slowly — scroll down
             driver.swipe(540, 1800, 540, 1000, 600)
             time.sleep(2)
-            products = find_desc(driver, "Asking Price", timeout=10) is not None
+            products = find_desc(driver, "Asking Price", timeout=10) is not None \
+                or has_any_testid(driver, PRODUCT_CARD_TESTIDS, timeout=5)
         if not products:
             # Try alternate indicators
             products = find_desc(driver, "Trending", timeout=5) is not None or \
@@ -404,6 +439,8 @@ def run_flow() -> list[dict]:
             bargains_tab.click()
             time.sleep(3)
         my_bargains_ok = find_desc(driver, "My Bargains", timeout=10) is not None or \
+                         has_any_testid(driver, ("mybargain_card_0", "mybargain_product_tap_0",
+                                                 "mybargain_bargain_again_button", "mybargain_offer_status_0"), timeout=6) or \
                          find_desc(driver, "Bargain More", timeout=5) is not None or \
                          find_desc(driver, "Buy Now", timeout=5) is not None
         duration = int((time.time() - t0) * 1000)
@@ -428,6 +465,8 @@ def run_flow() -> list[dict]:
             alerts_tab.click()
             time.sleep(3)
         alerts_ok = find_desc(driver, "Alerts", timeout=5) is not None or \
+                    has_any_testid(driver, ("alerts_filter_tab_all", "alerts_notification_card_0",
+                                            "alerts_filter_tab_orders"), timeout=6) or \
                     find_desc(driver, "Notification", timeout=5) is not None or \
                     find_desc(driver, "Orders", timeout=5) is not None or \
                     find_desc(driver, "No alerts", timeout=5) is not None
