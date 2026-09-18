@@ -147,6 +147,25 @@ def _get_http_session():
     return _http_session
 
 
+def _alternate_image_urls(source: str):
+    """Yield fallback URLs for a Flipkart CDN image that may 404.
+
+    Flipkart's live CDN images use HYPHENATED slugs; many sheets (and older
+    scrapes) contain legacy UNDERSCORE variants that return 404. Swapping
+    '_' -> '-' in the path recovers them, so the validator works even on
+    sheets that were not repaired at the source.
+    """
+    try:
+        m = re.match(r"(https?://[^/]+/image/\d+/\d+/)(.*)$", source)
+        if not m:
+            return
+        alt = m.group(1) + m.group(2).replace("_", "-")
+        if alt != source:
+            yield alt
+    except Exception:
+        return
+
+
 def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
     """Load image from URL or local path. PIL images are cached so the same
     URL is never downloaded or decoded twice across all callers."""
@@ -162,7 +181,18 @@ def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
                 }
                 if "flixcart" in source or "flipkart" in source:
                     headers["Referer"] = "https://www.flipkart.com/"
-                resp = _get_http_session().get(source, headers=headers, timeout=timeout)
+                session = _get_http_session()
+                resp = session.get(source, headers=headers, timeout=timeout)
+                # Auto-recover legacy underscore URL variants that 404.
+                if resp.status_code == 404:
+                    for alt in _alternate_image_urls(source):
+                        try:
+                            alt_resp = session.get(alt, headers=headers, timeout=timeout)
+                            if alt_resp.status_code == 200:
+                                resp = alt_resp
+                                break
+                        except Exception:
+                            continue
                 resp.raise_for_status()
                 data = resp.content
                 if len(_image_bytes_cache) >= _IMAGE_CACHE_MAX:
