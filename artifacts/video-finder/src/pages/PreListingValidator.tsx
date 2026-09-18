@@ -42,6 +42,7 @@ import {
   stripHtml,
   descriptionPassesAttributes,
   getPrelistingApiBase,
+  withApiHeaders,
   setPrelistingApiBase,
   type ValidationResult,
   type ListingRow,
@@ -247,7 +248,9 @@ export default function PreListingValidator() {
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 10000);
-      const resp = await fetch(`${base}/api/products/status`, { signal: ctrl.signal });
+      // Must send the ngrok header or the free-tier interstitial (HTML, no
+      // CORS) is served and the browser reports the API as unreachable.
+      const resp = await fetch(`${base}/api/products/status`, withApiHeaders({ signal: ctrl.signal }));
       clearTimeout(timer);
       if (resp.ok) {
         setApiTest("ok");
