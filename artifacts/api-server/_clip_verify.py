@@ -110,7 +110,13 @@ RULE6_MIN_BAD_SCORE = 0.30
 
 _image_bytes_cache: Dict[str, bytes] = {}
 _image_pil_cache: Dict[str, "Image.Image"] = {}
-_IMAGE_CACHE_MAX = 300
+# Memory bounds. A decoded 1125x1500 RGB PIL image is ~5MB, so caching 300 of
+# them costs ~1.5GB. Combined with Qwen (~3GB) + CLIP + EasyOCR that pushed the
+# 16GB machine into swap during long runs — which is why image analysis started
+# fast and then slowed to a crawl. Caches are now small LRUs: the bytes cache
+# avoids re-downloading, and a few decoded images cover a product's rules.
+_IMAGE_CACHE_MAX = 150          # raw bytes (~30MB)
+_IMAGE_PIL_CACHE_MAX = 24       # decoded PIL images (~120MB)
 
 
 _http_session = None
@@ -195,13 +201,15 @@ def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
                             continue
                 resp.raise_for_status()
                 data = resp.content
+                # LRU: evict the oldest entry rather than clearing everything
+                # (clearing caused re-download bursts and memory spikes).
                 if len(_image_bytes_cache) >= _IMAGE_CACHE_MAX:
-                    _image_bytes_cache.clear()
-                    _image_pil_cache.clear()
+                    _image_bytes_cache.pop(next(iter(_image_bytes_cache)), None)
                 _image_bytes_cache[source] = data
             img = Image.open(io.BytesIO(data)).convert("RGB")
-            if len(_image_pil_cache) < _IMAGE_CACHE_MAX:
-                _image_pil_cache[source] = img
+            if len(_image_pil_cache) >= _IMAGE_PIL_CACHE_MAX:
+                _image_pil_cache.pop(next(iter(_image_pil_cache)), None)
+            _image_pil_cache[source] = img
             return img
         else:
             return Image.open(source).convert("RGB")
