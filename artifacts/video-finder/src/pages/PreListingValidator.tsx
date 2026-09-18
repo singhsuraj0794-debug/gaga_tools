@@ -118,9 +118,23 @@ export default function PreListingValidator() {
   const [correctionFeedback, setCorrectionFeedback] = useState<Map<string, boolean>>(new Map());
 
   // ── Compute API URL (runtime-configurable; survives tunnel restarts) ───────
-  const [apiUrl, setApiUrl] = useState<string>(() =>
-    (typeof window !== "undefined" && window.localStorage.getItem("plv_api_url")) || getPrelistingApiBase(),
-  );
+  const [apiUrl, setApiUrl] = useState<string>(() => {
+    const fallback = getPrelistingApiBase();
+    if (typeof window === "undefined") return fallback;
+    const stored = window.localStorage.getItem("plv_api_url");
+    // Ignore a stale quick-tunnel URL: cloudflared quick tunnels rotate and go
+    // dead, which surfaces as "Failed to load" on every image. Migrate to the
+    // permanent default (the ngrok domain) automatically.
+    if (stored && /trycloudflare\.com/.test(stored) && !/trycloudflare\.com/.test(fallback)) {
+      window.localStorage.removeItem("plv_api_url");
+      return fallback;
+    }
+    if (stored && /localhost|127\.0\.0\.1/.test(stored)) {
+      window.localStorage.removeItem("plv_api_url");
+      return fallback;
+    }
+    return stored || fallback;
+  });
   const [apiTest, setApiTest] = useState<"idle" | "testing" | "ok" | "fail">("idle");
   const [apiTestDetail, setApiTestDetail] = useState<string>("");
 
