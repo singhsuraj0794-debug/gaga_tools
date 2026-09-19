@@ -24,7 +24,7 @@ RCA_TEMPLATES: dict[str, dict] = {
             "severity": "high",
         },
         "slow": {
-            "summary": "Home page took >10s to load (502 error or slow server response)",
+            "summary": "Home page load exceeded its time budget (slow server response)",
             "probable_causes": [
                 "Backend server returned HTTP 502 Bad Gateway",
                 "CDN or origin server latency",
@@ -56,7 +56,7 @@ RCA_TEMPLATES: dict[str, dict] = {
     },
     "category_load": {
         "slow": {
-            "summary": "Category page took >5s to load",
+            "summary": "Category page load exceeded its time budget",
             "probable_causes": [
                 "API calls for product listing are slow",
                 "Large number of product images loading without optimization",
@@ -72,7 +72,7 @@ RCA_TEMPLATES: dict[str, dict] = {
     },
     "product_detail_load": {
         "slow": {
-            "summary": "Product detail page took >5s to load",
+            "summary": "Product detail page load exceeded its time budget",
             "probable_causes": [
                 "Product data API (gateway) response slow",
                 "Large product images not optimized",

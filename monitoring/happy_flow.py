@@ -255,12 +255,19 @@ def _do_bargain_flow(page, results: list):
 
     log("Step 4d — Setting offer price via slider")
     slider_result = {"found": False}
-    for retry in range(5):
+    # The modal can take a moment to mount (and a pincode/location dialog may
+    # briefly cover it), so retry longer than the old 5x1s and dismiss any
+    # overlay between attempts.
+    for retry in range(12):
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
         slider_result = page.evaluate("""() => {
             const ranges = document.querySelectorAll('input[type="range"]');
             for (const r of ranges) {
                 const box = r.getBoundingClientRect();
-                if (box.width > 50 && parseFloat(r.max) > 1) {
+                if (box.width > 20 && parseFloat(r.max) >= 1) {
                     const target = 2.0;
                     const propsKey = Object.keys(r).find(k => k.startsWith('__reactProps$'));
                     if (propsKey) {
