@@ -49,6 +49,12 @@ def connect() -> webdriver.Remote:
     options.no_reset = True
     options.auto_grant_permissions = True
     options.new_command_timeout = 600
+    # App launch on a cold/slow emulator regularly exceeded the default 20s
+    # adbExecTimeout, so activate_app()/start-activity threw and the whole run
+    # aborted ("adbExec timeout ... timed out after 20000ms"). Give adb room.
+    options.adb_exec_timeout = 120000
+    options.uiautomator2_server_launch_timeout = 120000
+    options.uiautomator2_server_install_timeout = 120000
     driver = webdriver.Remote(APPIUM_URL, options=options)
     driver.update_settings({"waitForIdleTimeout": 0, "waitForSelectorTimeout": 0})
     return driver
@@ -173,8 +179,26 @@ def run_flow() -> list[dict]:
             driver.terminate_app(APP_PACKAGE)
         except Exception:
             pass
-        driver.activate_app(APP_PACKAGE)
-        time.sleep(5)
+        # Launch with retries + fallback. A cold emulator can take longer than
+        # adb's timeout to start the activity; retrying beats aborting the run.
+        launched = False
+        for attempt in range(3):
+            try:
+                driver.activate_app(APP_PACKAGE)
+                launched = True
+                break
+            except Exception as e:
+                print(f"[flow] activate_app attempt {attempt+1} failed: {str(e)[:120]}")
+                try:
+                    driver.start_activity(APP_PACKAGE, APP_ACTIVITY)
+                    launched = True
+                    break
+                except Exception as e2:
+                    print(f"[flow] start_activity failed: {str(e2)[:120]}")
+                time.sleep(5)
+        if not launched:
+            print("[flow] could not launch app after retries — continuing anyway")
+        time.sleep(6)
 
         # An app-update / promo modal can cover the whole UI and block every
         # tap (seen: "Update App? Version 1.0.30 is available"). Clear it
