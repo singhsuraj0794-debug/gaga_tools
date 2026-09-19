@@ -296,26 +296,41 @@ def run_flow() -> list[dict]:
         CAT_NAMES = ["Sporting Goods", "Kitchen & Dining", "Household Appliances",
                      "Lawn & Garden", "Home & Kitchen", "Toys & Games", "Gaming",
                      "Beauty & Health", "Electronics", "Fashion Accessories"]
-        for name in CAT_NAMES:
-            els = driver.find_elements("xpath", f'//*[contains(@content-desc, "{name}") or contains(@text, "{name}")]')
-            for el in els:
-                try:
-                    rect = el.rect
-                    if rect["y"] > 200:  # below the search/header area
-                        cat_link = el
-                        break
-                except Exception:
-                    continue
+        # Prefer the app's own category testIDs (no visible text is exposed).
+        for tid in ("home_category_0_item", "home_category_1_item", "home_category_2_item",
+                    "category_item_105_button", "category_item_53_button",
+                    "category_item_58_button", "category_item_70_button"):
+            cat_link = find_desc(driver, tid, timeout=2)
             if cat_link:
                 break
+        if not cat_link:
+            for name in CAT_NAMES:
+                els = driver.find_elements("xpath", f'//*[contains(@content-desc, "{name}") or contains(@text, "{name}")]')
+                for el in els:
+                    try:
+                        rect = el.rect
+                        if rect["y"] > 200:
+                            cat_link = el
+                            break
+                    except Exception:
+                        continue
+                if cat_link:
+                    break
         if cat_link:
             tap_center(driver, cat_link)
             time.sleep(4)
         # Collect product cards — try multiple selectors since different category pages
         # use different layouts. Filter out filter/sort elements and header area.
         cat_cards = []
+        # Try 0: the app's own product-card testIDs (no visible text exposed).
+        for tid in ("product_template1_product_0_card", "product_template1_product_1_card",
+                    "product_template2_product_0_card", "product_template2_product_1_card"):
+            el = find_desc(driver, tid, timeout=2)
+            if el:
+                cat_cards.append(el)
         # Try 1: clickable ImageViews with non-empty content-desc (home page products)
-        cat_cards = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
+        if len(cat_cards) < 3:
+            cat_cards += driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
         # Try 2: if few found, also try clickable ViewGroups/FrameLayouts in product grid area
         if len(cat_cards) < 3:
             extras = driver.find_elements("xpath", '//android.view.ViewGroup[@clickable="true"]')
@@ -356,7 +371,8 @@ def run_flow() -> list[dict]:
                     driver.back()
                     time.sleep(2)
                     continue
-                bargain_btn = find_desc(driver, "Start Bargaining", timeout=3)
+                bargain_btn = find_desc(driver, "Start Bargaining", timeout=3) or \
+                                find_desc(driver, "pdp_commonsheet_bargain_button", timeout=2)
                 if bargain_btn:
                     chosen = prod
                     break
@@ -376,11 +392,14 @@ def run_flow() -> list[dict]:
         slid = False
         # Tap Start Bargaining (retry until the modal opens) — the tap is flaky on RN
         for attempt in range(5):
-            sb = find_desc(driver, "Start Bargaining", timeout=5)
+            sb = find_desc(driver, "Start Bargaining", timeout=5) or \
+                 find_desc(driver, "pdp_commonsheet_bargain_button", timeout=1)
             if sb:
                 tap_center(driver, sb)
                 time.sleep(3)
-            offer_btn = find_desc(driver, "Offer Your Price", timeout=6) or find_desc(driver, "Make an Offer", timeout=3)
+            offer_btn = find_desc(driver, "Offer Your Price", timeout=6) or \
+                        find_desc(driver, "pdp_bargains_offer_your_price_button", timeout=1) or \
+                        find_desc(driver, "Make an Offer", timeout=3)
             if offer_btn:
                 break
         # Slide the price down via the clickable price markers (e.g. 538, 568, 598, ...)
@@ -392,6 +411,16 @@ def run_flow() -> list[dict]:
                     time.sleep(1)
                     slid = True
                     break
+            if not slid:
+                # Newer build uses preset chips instead of price text nodes.
+                for chip in ("pdp_bargains_preset_chip_29", "pdp_bargains_preset_chip_28",
+                             "pdp_bargains_preset_chip_30"):
+                    marker = find_desc(driver, chip, timeout=1)
+                    if marker:
+                        tap_center(driver, marker)
+                        time.sleep(1)
+                        slid = True
+                        break
             tap_center(driver, offer_btn)
             time.sleep(4)
         duration = int((time.time() - t0) * 1000)
@@ -626,7 +655,8 @@ def run_flow() -> list[dict]:
                     driver.back()
                     time.sleep(2)
                     continue
-                b2_bargain_btn = find_desc(driver, "Start Bargaining", timeout=5)
+                b2_bargain_btn = find_desc(driver, "Start Bargaining", timeout=5) or \
+                                     find_desc(driver, "pdp_commonsheet_bargain_button", timeout=2)
                 if b2_bargain_btn:
                     break
                 driver.back()
@@ -642,7 +672,8 @@ def run_flow() -> list[dict]:
             # open bargain modal with retry
             for _ in range(4):
                 try:
-                    sb = find_desc(driver, "Start Bargaining", timeout=4)
+                    sb = find_desc(driver, "Start Bargaining", timeout=4) or \
+                         find_desc(driver, "pdp_commonsheet_bargain_button", timeout=1)
                     if sb:
                         sb.click()
                         time.sleep(3)
