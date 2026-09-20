@@ -745,65 +745,78 @@ def _load_session() -> dict | None:
 
 
 def _pick_random_product(page) -> str | None:
-    """Pick a product that has the Start Bargaining button — check all products, not just visible ones."""
-    try:
-        page.goto("https://gajab.com/product-list/all", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
-        time.sleep(1)
-        all_links = page.locator("a[href*='/product-detail/']")
-        count = all_links.count()
-        if count == 0:
-            log("No product links found on category page")
-            return None
-        log(f"Checking {min(count, 20)} of {count} products for bargain button...")
-        import random
-        indices = list(range(count))
-        random.shuffle(indices)
-        for idx in indices[:20]:
-            url = all_links.nth(idx).get_attribute("href")
-            if url and not url.startswith("http"):
-                url = "https://gajab.com" + url
-            page.goto(url, timeout=15000, wait_until="domcontentloaded")
-            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
-            time.sleep(0.5)
-            # Dismiss any pincode/location dialog that blocks the bargain UI (mobile especially)
-            for _ in range(3):
-                try:
-                    page.keyboard.press("Escape")
-                    time.sleep(0.3)
-                except Exception:
-                    break
-            # Wait for the price section to render
-            try:
-                page.wait_for_selector("#varient-price", timeout=15000)
-            except Exception:
-                pass
-            has_btn = page.evaluate("""() => {
-                const vp = document.getElementById('varient-price');
-                if (!vp) return false;
-                // Check the price section and the whole page for the bargaining button
-                const candidates = [vp, ...vp.querySelectorAll('div'), document.body];
-                for (const root of candidates) {
-                    if (!root) continue;
-                    const btns = root.querySelectorAll('button, a');
-                    for (const btn of btns) {
-                        const t = (btn.textContent || '').trim().toLowerCase();
-                        if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
-                            return true;
-                        }
+    """Pick a product that has the Start Bargaining button.
+
+    Tries SEVERAL category listings (not just /all) and checks more products per
+    page. The first listing could be exhausted or contain no bargainable items,
+    which made 'Bargain 2' fail with 'No product found'.
+    """
+    import random
+
+    CATEGORY_URLS = [
+        "https://gajab.com/product-list/all",
+        "https://gajab.com/product-list/home-kitchen",
+        "https://gajab.com/product-list/toys-games",
+        "https://gajab.com/product-list/fashion-accessories",
+        "https://gajab.com/product-list/electronics",
+    ]
+
+    def _has_bargain_button() -> bool:
+        return bool(page.evaluate("""() => {
+            const vp = document.getElementById('varient-price');
+            const roots = [vp, document.body].filter(Boolean);
+            for (const root of roots) {
+                const btns = root.querySelectorAll('button, a');
+                for (const btn of btns) {
+                    const t = (btn.textContent || '').trim().toLowerCase();
+                    if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
+                        return true;
                     }
                 }
-                return false;
-            }""")
-            if has_btn:
-                log(f"Found product with bargaining button: {url}")
-                return url
-        log(f"No product with bargaining button found in {min(count, 20)} checked")
-        return None
-    except Exception as e:
-        log(f"Product selection failed: {e}")
-        return None
+            }
+            return false;
+        }"""))
 
+    for cat_url in CATEGORY_URLS:
+        try:
+            page.goto(cat_url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
+            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+            time.sleep(1)
+            all_links = page.locator("a[href*='/product-detail/']")
+            count = all_links.count()
+            if count == 0:
+                log(f"  no product links on {cat_url} - trying next category")
+                continue
+            log(f"  checking {min(count, 30)} of {count} products on {cat_url} for bargain button...")
+            indices = list(range(count))
+            random.shuffle(indices)
+            for idx in indices[:30]:
+                url = all_links.nth(idx).get_attribute("href")
+                if url and not url.startswith("http"):
+                    url = "https://gajab.com" + url
+                try:
+                    page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                    page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+                except Exception:
+                    continue
+                time.sleep(0.5)
+                for _ in range(3):
+                    try:
+                        page.keyboard.press("Escape")
+                        time.sleep(0.3)
+                    except Exception:
+                        break
+                try:
+                    page.wait_for_selector("#varient-price", timeout=12000)
+                except Exception:
+                    pass
+                if _has_bargain_button():
+                    log(f"  found bargainable product: {url}")
+                    return url
+            log(f"  no bargainable product on {cat_url} - trying next category")
+        except Exception as e:
+            log(f"  category {cat_url} failed: {str(e)[:80]}")
+    return None
 
 def _do_second_bargain(page, results: list):
     """Second bargain flow: pick random product, offer 70% lower price, accept counter-offer."""
