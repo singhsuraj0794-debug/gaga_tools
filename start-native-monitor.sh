@@ -25,6 +25,17 @@ for i in $(seq 1 60); do
   sleep 3
 done
 
+# Disable animations. Without this the app's UI thread never goes idle and
+# UIAutomator cannot read the accessibility tree:
+#   "Timed out after 10091ms waiting for the root AccessibilityNodeInfo in the
+#    active window ... the application is being idle long enough"
+# which made EVERY element lookup time out (steps took 20-105s and all failed).
+echo "=== Disabling device animations ==="
+"$ADB" shell settings put global window_animation_scale 0 2>/dev/null || true
+"$ADB" shell settings put global transition_animation_scale 0 2>/dev/null || true
+"$ADB" shell settings put global animator_duration_scale 0 2>/dev/null || true
+echo "  window=$(  "$ADB" shell settings get global window_animation_scale 2>/dev/null | tr -d '\r') transition=$(  "$ADB" shell settings get global transition_animation_scale 2>/dev/null | tr -d '\r') animator=$(  "$ADB" shell settings get global animator_duration_scale 2>/dev/null | tr -d '\r')"
+
 echo "=== Ensuring Appium server is running ==="
 if ! curl -s http://localhost:4723/status >/dev/null 2>&1; then
   echo "Starting Appium..."

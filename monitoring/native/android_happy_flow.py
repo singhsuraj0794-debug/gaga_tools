@@ -169,7 +169,26 @@ def dismiss_blocking_dialogs(driver) -> bool:
     return dismissed
 
 
+def disable_animations() -> None:
+    """Turn off device animations.
+
+    With animations on, the app's UI thread never goes idle and UIAutomator
+    cannot fetch the accessibility tree ("Timed out ... waiting for the root
+    AccessibilityNodeInfo ... the application is being idle long enough"),
+    which makes every element lookup time out. Also applied by
+    start-native-monitor.sh; repeated here so a manual run is covered too.
+    """
+    import subprocess
+    for key in ("window_animation_scale", "transition_animation_scale", "animator_duration_scale"):
+        try:
+            subprocess.run(["adb", "shell", "settings", "put", "global", key, "0"],
+                           capture_output=True, timeout=10)
+        except Exception:
+            pass
+
+
 def run_flow() -> list[dict]:
+    disable_animations()
     driver = connect()
     store = SupabaseStore()
     results = []
@@ -201,10 +220,26 @@ def run_flow() -> list[dict]:
         time.sleep(6)
 
         # An app-update / promo modal can cover the whole UI and block every
-        # tap (seen: "Update App? Version 1.0.30 is available"). Clear it
-        # before measuring anything.
-        if dismiss_blocking_dialogs(driver):
-            print("[flow] dismissed a blocking dialog (update/promo modal)")
+        # tap (seen: "Update App? Version 1.0.31 is available"). The app exposes
+        # only testIDs — no text — so we cannot detect it by its label. Instead:
+        # wait for the home testIDs and, if they never appear, tap the scrim
+        # ABOVE the centred dialog to dismiss whatever is blocking the UI.
+        home_ready = False
+        for attempt in range(5):
+            if has_any_testid(driver, HOME_READY_TESTIDS, timeout=5):
+                home_ready = True
+                break
+            if dismiss_blocking_dialogs(driver):
+                print("[flow] dismissed a blocking dialog (update/promo modal)")
+            try:
+                size = driver.get_window_size()
+                # scrim area above the centred dialog (dialog starts ~30% down)
+                driver.tap([(size["width"] // 2, int(size["height"] * 0.16))], 120)
+            except Exception:
+                pass
+            time.sleep(2)
+        if not home_ready:
+            print("[flow] home testIDs not seen after modal-clearing attempts")
 
         # Start full-screen recording
         try:
