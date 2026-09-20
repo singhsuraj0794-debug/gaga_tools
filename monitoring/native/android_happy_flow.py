@@ -312,12 +312,33 @@ def run_flow() -> list[dict]:
             time.sleep(2)
         except Exception:
             pass
-        banner = find(driver, '//*[contains(@content-desc, "#")]', timeout=8) is not None or \
-                 find_desc(driver, "Buy Now", timeout=5) is not None or \
-                 find_desc(driver, "saved", timeout=5) is not None or \
-                 find_desc(driver, "gift card", timeout=5) is not None or \
-                 find_desc(driver, "Code", timeout=5) is not None
-        cat_tabs = find_desc(driver, "Home & Kitchen", timeout=8) is not None or find_desc(driver, "All", timeout=5) is not None
+        # Banners + category tabs. The app exposes testIDs (not the visible
+        # text), so match those. Verified present: home_banner_*_card,
+        # gajab_deal_block_*_button, home_category_*_item, trending_product_*_card.
+        banner = has_any_testid(driver, (
+                     "home_banner_1_card", "home_banner_8_card", "home_banner_0_card",
+                     "gajab_deal_block_0_button", "gajab_deal_product_card",
+                     "trending_product_0_card", "home_live_deal_product_card_button",
+                     "home_banner_2_card", "home_banner_3_card",
+                 ), timeout=10) \
+                 or find_desc(driver, "Buy Now", timeout=3) is not None \
+                 or find_desc(driver, "gift card", timeout=3) is not None
+        cat_tabs = has_any_testid(driver, (
+                       "home_category_0_item", "home_category_1_item",
+                       "home_category_2_item", "dashboard_categories_tab",
+                   ), timeout=8) \
+                   or find_desc(driver, "Home & Kitchen", timeout=3) is not None \
+                   or find_desc(driver, "All", timeout=3) is not None
+        # Category tabs only render near the top of the page — if we scrolled
+        # past them, scroll back up and re-check.
+        if not cat_tabs:
+            try:
+                driver.swipe(540, 700, 540, 1900, 500)
+                time.sleep(1.5)
+            except Exception:
+                pass
+            cat_tabs = has_any_testid(driver, ("home_category_0_item", "home_category_1_item",
+                                               "home_category_2_item"), timeout=6)
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_banners_check", "status": "pass" if (banner and cat_tabs) else "fail",
                         "detail": f"banners={banner}, category tabs={cat_tabs}",
@@ -328,7 +349,8 @@ def run_flow() -> list[dict]:
         # Scroll back to top first (banners_check scrolled down)
         driver.swipe(540, 600, 540, 1800, 600)
         time.sleep(1)
-        cat_tab = find_desc(driver, "Categories", timeout=8)
+        cat_tab = find_desc(driver, "dashboard_categories_tab", timeout=8) or \
+                  find_desc(driver, "Categories", timeout=4)
         if cat_tab:
             cat_tab.click()
             time.sleep(3)
