@@ -406,12 +406,22 @@ def run_flow() -> list[dict]:
         # Collect product cards — try multiple selectors since different category pages
         # use different layouts. Filter out filter/sort elements and header area.
         cat_cards = []
-        # Try 0: the app's own product-card testIDs (no visible text exposed).
-        for tid in ("product_template1_product_0_card", "product_template1_product_1_card",
-                    "product_template2_product_0_card", "product_template2_product_1_card"):
+        # Try 0: the app's own product-card testIDs. On a category listing the
+        # cards are 'child_category_product_card_*' (verified), on home they are
+        # 'product_template*_product_*_card'.
+        for tid in ("child_category_product_card_", "product_template1_product_0_card",
+                    "product_template1_product_1_card", "product_template2_product_0_card",
+                    "product_template2_product_1_card"):
             el = find_desc(driver, tid, timeout=2)
             if el:
                 cat_cards.append(el)
+        # Count all child-category cards if present (still "products loaded").
+        if not cat_cards:
+            try:
+                cards = driver.find_elements("xpath", '//*[contains(@content-desc, "child_category_product_card_")]')
+                cat_cards.extend(cards)
+            except Exception:
+                pass
         # Try 1: clickable ImageViews with non-empty content-desc (home page products)
         if len(cat_cards) < 3:
             cat_cards += driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
