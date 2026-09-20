@@ -305,40 +305,39 @@ def run_flow() -> list[dict]:
                         "duration_ms": duration, "screenshot": screenshot(driver, "home_products")})
 
         wait_for_tree(driver, 20, "banners")
-        # ── Step 2b: banners / category tabs (scroll down — banners are below the fold) ──
+        # ── Step 2b: banners / category tabs ──
         t0 = time.time()
-        try:
-            driver.swipe(500, 1800, 500, 700, 600)
-            time.sleep(2)
-        except Exception:
-            pass
-        # Banners + category tabs. The app exposes testIDs (not the visible
-        # text), so match those. Verified present: home_banner_*_card,
-        # gajab_deal_block_*_button, home_category_*_item, trending_product_*_card.
-        banner = has_any_testid(driver, (
-                     "home_banner_1_card", "home_banner_8_card", "home_banner_0_card",
-                     "gajab_deal_block_0_button", "gajab_deal_product_card",
-                     "trending_product_0_card", "home_live_deal_product_card_button",
-                     "home_banner_2_card", "home_banner_3_card",
-                 ), timeout=10) \
-                 or find_desc(driver, "Buy Now", timeout=3) is not None \
-                 or find_desc(driver, "gift card", timeout=3) is not None
-        cat_tabs = has_any_testid(driver, (
-                       "home_category_0_item", "home_category_1_item",
-                       "home_category_2_item", "dashboard_categories_tab",
-                   ), timeout=8) \
-                   or find_desc(driver, "Home & Kitchen", timeout=3) is not None \
-                   or find_desc(driver, "All", timeout=3) is not None
-        # Category tabs only render near the top of the page — if we scrolled
-        # past them, scroll back up and re-check.
-        if not cat_tabs:
+        BANNER_IDS = (
+            "home_banner_1_card", "home_banner_8_card", "home_banner_0_card",
+            "gajab_deal_block_0_button", "gajab_deal_product_card",
+            "trending_product_0_card", "home_live_deal_product_card_button",
+            "home_banner_2_card", "home_banner_3_card",
+        )
+        CAT_TAB_IDS = ("home_category_0_item", "home_category_1_item",
+                       "home_category_2_item", "dashboard_categories_tab")
+
+        # Check at the CURRENT (top) position first — the banner/category tabs are
+        # usually here, and scrolling first was what made this check flaky.
+        banner = has_any_testid(driver, BANNER_IDS, timeout=5) \
+            or find_desc(driver, "Buy Now", timeout=2) is not None
+        cat_tabs = has_any_testid(driver, CAT_TAB_IDS, timeout=5) \
+            or find_desc(driver, "Home & Kitchen", timeout=2) is not None \
+            or find_desc(driver, "All", timeout=2) is not None
+        # If either is missing, scroll down and re-check (banners can sit below fold).
+        if not banner or not cat_tabs:
             try:
-                driver.swipe(540, 700, 540, 1900, 500)
+                driver.swipe(500, 1700, 500, 800, 600)
                 time.sleep(1.5)
             except Exception:
                 pass
-            cat_tabs = has_any_testid(driver, ("home_category_0_item", "home_category_1_item",
-                                               "home_category_2_item"), timeout=6)
+            banner = banner or has_any_testid(driver, BANNER_IDS, timeout=4)
+            cat_tabs = cat_tabs or has_any_testid(driver, CAT_TAB_IDS, timeout=4)
+        # Scroll back to the top so the next step starts cleanly.
+        try:
+            driver.swipe(540, 700, 540, 1900, 500)
+            time.sleep(1)
+        except Exception:
+            pass
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_banners_check", "status": "pass" if (banner and cat_tabs) else "fail",
                         "detail": f"banners={banner}, category tabs={cat_tabs}",
@@ -574,24 +573,28 @@ def run_flow() -> list[dict]:
 
         # ── Step 7: My Bargains page (reset back to main app first) ──
         t0 = time.time()
-        # Back out until bottom nav is visible (Bazaar or Bargains in content-desc)
+        wait_for_tree(driver, 20, "my bargains")
+        # Back out until the bottom nav is visible (dashboard_*_tab testIDs).
         for _ in range(10):
-            if find_desc(driver, "Bazaar", timeout=1) or find_desc(driver, "Bargains", timeout=1):
+            if has_any_testid(driver, ("dashboard_bazaar_tab", "dashboard_bargains_tab",
+                                       "dashboard_alerts_tab"), timeout=1):
                 break
             try:
                 driver.back()
                 time.sleep(0.5)
             except Exception:
                 break
-        bargains_tab = find_desc(driver, "Bargains", timeout=5)
+        bargains_tab = find_desc(driver, "dashboard_bargains_tab", timeout=8) or \
+                       find_desc(driver, "Bargains", timeout=3)
         if bargains_tab:
             bargains_tab.click()
             time.sleep(3)
-        my_bargains_ok = find_desc(driver, "My Bargains", timeout=10) is not None or \
-                         has_any_testid(driver, ("mybargain_card_0", "mybargain_product_tap_0",
-                                                 "mybargain_bargain_again_button", "mybargain_offer_status_0"), timeout=6) or \
-                         find_desc(driver, "Bargain More", timeout=5) is not None or \
-                         find_desc(driver, "Buy Now", timeout=5) is not None
+        my_bargains_ok = has_any_testid(driver, ("mybargain_card_0", "mybargain_product_tap_0",
+                                                 "mybargain_bargain_again_button", "mybargain_offer_status_0",
+                                                 "mybargain_card_1"), timeout=10) or \
+                         find_desc(driver, "My Bargains", timeout=3) is not None or \
+                         find_desc(driver, "Bargain More", timeout=3) is not None or \
+                         find_desc(driver, "Buy Now", timeout=3) is not None
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_my_bargains", "status": "pass" if my_bargains_ok else "fail",
                         "detail": "My Bargains page loaded" if my_bargains_ok else "no bargains",
@@ -599,26 +602,26 @@ def run_flow() -> list[dict]:
 
         # ── Step 8: Alerts / Orders page (navigate via bottom nav) ──
         t0 = time.time()
-        # Bottom nav should already be visible from Bargains page
-        # If not, back out until it is
+        wait_for_tree(driver, 20, "alerts")
+        # Bottom nav should already be visible from Bargains page; if not, back out.
         for _ in range(10):
-            if find_desc(driver, "Alerts", timeout=1) or find_desc(driver, "Bazaar", timeout=1):
+            if has_any_testid(driver, ("dashboard_alerts_tab", "dashboard_bazaar_tab"), timeout=1):
                 break
             try:
                 driver.back()
                 time.sleep(0.5)
             except Exception:
                 break
-        alerts_tab = find_desc(driver, "Alerts", timeout=8)
+        alerts_tab = find_desc(driver, "dashboard_alerts_tab", timeout=8) or \
+                     find_desc(driver, "Alerts", timeout=3)
         if alerts_tab:
             alerts_tab.click()
             time.sleep(3)
-        alerts_ok = find_desc(driver, "Alerts", timeout=5) is not None or \
-                    has_any_testid(driver, ("alerts_filter_tab_all", "alerts_notification_card_0",
-                                            "alerts_filter_tab_orders"), timeout=6) or \
-                    find_desc(driver, "Notification", timeout=5) is not None or \
-                    find_desc(driver, "Orders", timeout=5) is not None or \
-                    find_desc(driver, "No alerts", timeout=5) is not None
+        alerts_ok = has_any_testid(driver, ("alerts_filter_tab_all", "alerts_notification_card_0",
+                                            "alerts_filter_tab_orders", "alerts_notification_card_1"), timeout=10) or \
+                    find_desc(driver, "Alerts", timeout=3) is not None or \
+                    find_desc(driver, "Notification", timeout=3) is not None or \
+                    find_desc(driver, "Orders", timeout=3) is not None
         duration = int((time.time() - t0) * 1000)
         results.append({"step": f"{PLATFORM}_alerts_orders", "status": "pass" if alerts_ok else "fail",
                         "detail": "alerts/orders page loaded" if alerts_ok else "page not found",
@@ -712,35 +715,43 @@ def run_flow() -> list[dict]:
             time.sleep(2)
         except Exception:
             pass
-        # Ensure bottom nav is visible
+        wait_for_tree(driver, 20, "bargain 2")
+        # Ensure bottom nav is visible (dashboard_*_tab testIDs)
         for _ in range(10):
-            if find_desc(driver, "Categories", timeout=1) or find_desc(driver, "Bazaar", timeout=1):
+            if has_any_testid(driver, ("dashboard_categories_tab", "dashboard_bazaar_tab"), timeout=1):
                 break
             try:
                 driver.back()
                 time.sleep(0.5)
             except Exception:
                 break
-        # Navigate to a category - first try Categories tab, then find category links directly
-        cat_tab2 = find_desc(driver, "Categories", timeout=5)
+        # Navigate to the Categories tab via its testID.
+        cat_tab2 = find_desc(driver, "dashboard_categories_tab", timeout=8) or \
+                   find_desc(driver, "Categories", timeout=3)
         if cat_tab2:
             tap_center(driver, cat_tab2)
             time.sleep(3)
-        # Scroll to top of Categories page (categories list starts at top)
         driver.swipe(540, 1800, 540, 600, 600)
         time.sleep(2)
-        cat_link2 = (find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Kitchen & Dining", timeout=5) or
-                     find_desc(driver, "Household Appliances", timeout=5) or find_desc(driver, "Lawn & Garden", timeout=5) or
-                     find_desc(driver, "Home & Kitchen", timeout=5))
-        if not cat_link2:
-            driver.swipe(540, 1800, 540, 600, 600)
-            time.sleep(2)
-            cat_link2 = (find_desc(driver, "Sporting Goods", timeout=5) or find_desc(driver, "Kitchen & Dining", timeout=5) or
-                         find_desc(driver, "Household Appliances", timeout=5) or find_desc(driver, "Lawn & Garden", timeout=5))
+        # Category entries on the Categories page are category_item_*_button.
+        cat_link2 = None
+        for tid in ("category_item_105_button", "category_item_53_button", "category_item_58_button",
+                    "category_item_70_button", "category_item_72_button", "home_category_0_item",
+                    "home_category_1_item"):
+            cat_link2 = find_desc(driver, tid, timeout=2)
+            if cat_link2:
+                break
         if cat_link2:
             tap_center(driver, cat_link2)
             time.sleep(4)
-        cards2 = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
+        # Product cards on a category listing are child_category_product_card_*.
+        cards2 = []
+        try:
+            cards2 = driver.find_elements("xpath", '//*[contains(@content-desc, "child_category_product_card_")]')
+        except Exception:
+            pass
+        if not cards2:
+            cards2 = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
         random.shuffle(cards2)
         b2_bargain_btn = None
         for prod in cards2[:15]:
@@ -776,17 +787,28 @@ def run_flow() -> list[dict]:
                 except Exception:
                     time.sleep(1)
                     continue
-                b2_offer = find_desc(driver, "Offer Your Price", timeout=4) or find_desc(driver, "Make an Offer", timeout=3)
+                b2_offer = find_desc(driver, "pdp_bargains_offer_your_price_button", timeout=4) or \
+                           find_desc(driver, "Offer Your Price", timeout=3) or \
+                           find_desc(driver, "Make an Offer", timeout=2)
                 if b2_offer:
                     break
             if b2_offer:
                 for price in ("568", "598", "628"):
-                    marker = find_desc(driver, price, timeout=3)
+                    marker = find_desc(driver, price, timeout=2)
                     if marker:
                         marker.click()
                         time.sleep(1)
                         b2_slid = True
                         break
+                if not b2_slid:
+                    for chip in ("pdp_bargains_preset_chip_29", "pdp_bargains_preset_chip_28",
+                                 "pdp_bargains_preset_chip_30"):
+                        marker = find_desc(driver, chip, timeout=1)
+                        if marker:
+                            marker.click()
+                            time.sleep(1)
+                            b2_slid = True
+                            break
                 b2_offer.click()
                 time.sleep(3)
         duration = int((time.time() - t0) * 1000)
