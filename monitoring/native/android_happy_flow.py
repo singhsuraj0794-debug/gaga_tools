@@ -60,6 +60,27 @@ def connect() -> webdriver.Remote:
     return driver
 
 
+def wait_for_tree(driver, timeout: int = 20, label: str = "") -> bool:
+    """Wait until the accessibility tree is readable again.
+
+    UIAutomator intermittently returns an empty tree while the app's UI thread
+    is busy ("Timed out waiting for the root AccessibilityNodeInfo"). Polling
+    page_source lets the app settle instead of failing the step outright.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            src = driver.page_source
+            if src and len(src) > 500:
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
+    if label:
+        print(f"[flow] tree still unreadable after {timeout}s ({label})")
+    return False
+
+
 def find(driver, xpath: str, timeout: int = 20):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -283,6 +304,7 @@ def run_flow() -> list[dict]:
                         "detail": "product cards visible" if products else "no product cards",
                         "duration_ms": duration, "screenshot": screenshot(driver, "home_products")})
 
+        wait_for_tree(driver, 20, "banners")
         # ── Step 2b: banners / category tabs (scroll down — banners are below the fold) ──
         t0 = time.time()
         try:
@@ -301,6 +323,7 @@ def run_flow() -> list[dict]:
                         "detail": f"banners={banner}, category tabs={cat_tabs}",
                         "duration_ms": duration, "screenshot": screenshot(driver, "banners")})
 
+        wait_for_tree(driver, 20, "category")
         # ── Step 3: category ──
         # Scroll back to top first (banners_check scrolled down)
         driver.swipe(540, 600, 540, 1800, 600)
@@ -396,6 +419,7 @@ def run_flow() -> list[dict]:
                         "detail": f"{len(cat_cards)} category products loaded" if cat_cards else "no category products",
                         "duration_ms": duration, "screenshot": screenshot(driver, "category")})
 
+        wait_for_tree(driver, 20, "product detail")
         # ── Step 4: product detail — pick a random in-stock product ──
         bargain_btn = None
         chosen = None
@@ -425,6 +449,7 @@ def run_flow() -> list[dict]:
                         "detail": "Start Bargaining visible" if bargain_btn else "no bargainable product found",
                         "duration_ms": duration, "screenshot": screenshot(driver, "product_detail")})
 
+        wait_for_tree(driver, 20, "bargain")
         # ── Step 5: bargain flow (open modal with retry, slide price down, then offer) ──
         t0 = time.time()
         offer_btn = None
