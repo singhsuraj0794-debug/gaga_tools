@@ -94,6 +94,8 @@ def has_any_testid(driver, testids, timeout: int = 8) -> bool:
 HOME_READY_TESTIDS = (
     "dashboard_bazaar_tab", "dashboard_categories_tab",
     "home_category_0_item", "product_template1_product_0_card",
+    "home_profile_avatar_button", "trending_product_0_card",
+    "gajab_deal_product_card",
 )
 PRODUCT_CARD_TESTIDS = (
     "product_template1_product_0_card", "product_template1_product_1_card",
@@ -217,7 +219,9 @@ def run_flow() -> list[dict]:
                 time.sleep(5)
         if not launched:
             print("[flow] could not launch app after retries — continuing anyway")
-        time.sleep(6)
+        # Give the UI time to settle after a cold launch. With animations off
+        # the accessibility tree becomes readable (verified: 19KB dump vs 0).
+        time.sleep(10)
 
         # An app-update / promo modal can cover the whole UI and block every
         # tap (seen: "Update App? Version 1.0.31 is available"). The app exposes
