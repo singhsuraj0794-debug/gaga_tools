@@ -731,50 +731,65 @@ def run_flow() -> list[dict]:
         if cat_tab2:
             tap_center(driver, cat_tab2)
             time.sleep(3)
-        driver.swipe(540, 1800, 540, 600, 600)
-        time.sleep(2)
-        # Category entries on the Categories page are category_item_*_button.
-        cat_link2 = None
-        for tid in ("category_item_105_button", "category_item_53_button", "category_item_58_button",
-                    "category_item_70_button", "category_item_72_button", "home_category_0_item",
-                    "home_category_1_item"):
-            cat_link2 = find_desc(driver, tid, timeout=2)
-            if cat_link2:
-                break
-        if cat_link2:
-            tap_center(driver, cat_link2)
-            time.sleep(4)
-        # Product cards on a category listing are child_category_product_card_*.
-        cards2 = []
-        try:
-            cards2 = driver.find_elements("xpath", '//*[contains(@content-desc, "child_category_product_card_")]')
-        except Exception:
-            pass
-        if not cards2:
-            cards2 = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
-        random.shuffle(cards2)
+
+        # Try SEVERAL categories until a bargainable product is found. The first
+        # category often has none, which is why bargain 2 kept failing.
         b2_bargain_btn = None
-        for prod in cards2[:15]:
+        CAT2_IDS = (
+            "category_item_105_button", "category_item_53_button", "category_item_58_button",
+            "category_item_70_button", "category_item_72_button", "category_item_77_button",
+            "category_item_87_button", "category_item_88_button", "category_item_89_button",
+            "category_item_90_button", "category_item_91_button",
+            "home_category_0_item", "home_category_1_item",
+        )
+        for cat_tid in CAT2_IDS:
+            cat_link2 = find_desc(driver, cat_tid, timeout=3)
+            if not cat_link2:
+                continue
+            tap_center(driver, cat_link2)
+            time.sleep(3)
+            wait_for_tree(driver, 15, f"bargain2 {cat_tid}")
+            # Product cards on a category listing are child_category_product_card_*.
+            cards2 = []
             try:
-                prod.click()
-                time.sleep(2.5)
-                if find_desc(driver, "Out of Stock", timeout=2):
+                cards2 = driver.find_elements("xpath", '//*[contains(@content-desc, "child_category_product_card_")]')
+            except Exception:
+                pass
+            if not cards2:
+                cards2 = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
+            random.shuffle(cards2)
+            for prod in cards2[:12]:
+                try:
+                    prod.click()
+                    time.sleep(2.5)
+                    if find_desc(driver, "Out of Stock", timeout=2):
+                        driver.back()
+                        time.sleep(2)
+                        continue
+                    b2_bargain_btn = find_desc(driver, "pdp_commonsheet_bargain_button", timeout=5) or \
+                                     find_desc(driver, "Start Bargaining", timeout=2)
+                    if b2_bargain_btn:
+                        break
                     driver.back()
                     time.sleep(2)
+                except Exception:
+                    try:
+                        driver.back()
+                        time.sleep(1)
+                    except Exception:
+                        pass
                     continue
-                b2_bargain_btn = find_desc(driver, "Start Bargaining", timeout=5) or \
-                                     find_desc(driver, "pdp_commonsheet_bargain_button", timeout=2)
-                if b2_bargain_btn:
-                    break
-                driver.back()
-                time.sleep(2)
-            except Exception:
-                try:
+            if b2_bargain_btn:
+                break
+            # Return to the categories list and try the next category.
+            try:
+                for _ in range(3):
+                    if has_any_testid(driver, ("category_item_105_button", "dashboard_categories_tab"), timeout=1):
+                        break
                     driver.back()
                     time.sleep(1)
-                except Exception:
-                    pass
-                continue
+            except Exception:
+                pass
         if b2_bargain_btn:
             # open bargain modal with retry
             for _ in range(4):
