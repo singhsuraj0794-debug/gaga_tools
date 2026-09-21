@@ -31,7 +31,16 @@ SCRAPE_DO_TOKEN = os.environ.get("SCRAPE_DO_TOKEN", "")
 # through the Webshare proxy. This is the SAME technique the Flipkart scraper
 # uses as its primary fetch: a real, non-automated browser over CDP. No external
 # scraping API required.
-SCRAPE_CDP_URL = os.environ.get("SCRAPE_CDP_URL", "http://localhost:9223")
+# Amazon works from the LOCAL IP (the Webshare residential proxy is only
+# needed for Flipkart/Meesho). Prefer the no-proxy Chrome (9225) and fall back
+# to the proxy-enabled one (9223). When the Webshare quota is exhausted (402)
+# the proxy path returns partial pages with no specifications, so the
+# no-proxy browser is the reliable one for Amazon.
+CDP_URLS = [
+    os.environ.get("AMAZON_CDP_URL", "http://localhost:9225"),
+    os.environ.get("SCRAPE_CDP_URL", "http://localhost:9223"),
+]
+SCRAPE_CDP_URL = CDP_URLS[0]
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -296,10 +305,17 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
     headless Chromium only if the CDP endpoint isn't reachable.
     """
     use_cdp = False
+    cdp_url = SCRAPE_CDP_URL
     try:
         import urllib.request
-        urllib.request.urlopen(f"{SCRAPE_CDP_URL}/json/version", timeout=5)
-        use_cdp = True
+        for candidate in CDP_URLS:
+            try:
+                urllib.request.urlopen(f"{candidate}/json/version", timeout=5)
+                cdp_url = candidate
+                use_cdp = True
+                break
+            except Exception:
+                continue
     except Exception:
         use_cdp = False
 
@@ -307,7 +323,7 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             if use_cdp:
-                browser = p.chromium.connect_over_cdp(SCRAPE_CDP_URL)
+                browser = p.chromium.connect_over_cdp(cdp_url)
                 context = browser.new_context(
                     user_agent=ua or USER_AGENTS[0],
                     viewport={"width": 1440, "height": 900},
