@@ -226,6 +226,13 @@ def _build_groups(products, find_fn, n, overlap_info):
             match_type = "most_images_match"
         else:
             match_type = "partial_image_match"
+
+        # Report a duplicate ONLY when EVERY image matches. Partial/most
+        # overlaps are not duplicates (a product can legitimately share one or
+        # two generic images) so they are skipped entirely.
+        if match_type != "all_images_match":
+            continue
+
         remove_items = []
         for ri in remove_idxs:
             p = products[ri]
