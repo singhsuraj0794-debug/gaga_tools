@@ -81,6 +81,16 @@ def _try_playwright(url: str, ua: str = "") -> str:
             page = ctx.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(3000)
+            # Pause any autoplaying hero video — a playing video keeps the page
+            # busy and can cover the DOM, which stalls scraping on the PDP.
+            try:
+                page.evaluate("""() => {
+                    document.querySelectorAll('video').forEach(v => {
+                        try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                    });
+                }""")
+            except Exception:
+                pass
             html = page.content()
             ctx.close()
             if not _is_bot_page(html):

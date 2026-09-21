@@ -174,6 +174,16 @@ def _try_playwright(url: str) -> str:
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            # Pause any autoplaying hero video — a playing video keeps the page
+            # busy and can cover the DOM, which stalls scraping on the PDP.
+            try:
+                page.evaluate("""() => {
+                    document.querySelectorAll('video').forEach(v => {
+                        try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                    });
+                }""")
+            except Exception:
+                pass
 
             # Wait for the page to actually render product data. `__NEXT_DATA__`
             # alone appears early with a loading state (we saw 90KB pages with no

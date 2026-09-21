@@ -331,6 +331,36 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2000)
 
+                # Product pages often autoplay a video in the hero. A playing
+                # video keeps the page busy (and can cover the DOM), which made
+                # scraping stall on the PDP. Pause every video and kill autoplay.
+                try:
+                    page.evaluate("""() => {
+                        document.querySelectorAll('video').forEach(v => {
+                            try {
+                                v.pause();
+                                v.autoplay = false;
+                                v.removeAttribute('autoplay');
+                                v.muted = true;
+                                v.currentTime = 0;
+                            } catch (e) {}
+                        });
+                    }""")
+                except Exception:
+                    pass
+
+                # Close any stale tabs left over from earlier runs so the browser
+                # doesn't accumulate pages (it had leaked 7 tabs).
+                try:
+                    for other in context.pages:
+                        if other is not page:
+                            try:
+                                other.close()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
                 # Amazon "Continue shopping" interstitial
                 try:
                     btn = page.query_selector(
