@@ -464,8 +464,12 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                                 if ("video" in tcls
                                         or thumb.query_selector(".videoBlockIngress, .vse-video-thumbnail, [class*='video'], [data-video-url]")):
                                     continue
-                                thumb.click()
-                                page.wait_for_timeout(400)
+                                # JS click — Playwright's normal click() auto-waits
+                                # for actionability, and when a thumbnail is even
+                                # partly covered each click burns seconds (this is
+                                # what made the scrape take ~190s).
+                                thumb.evaluate("el => el.click()")
+                                page.wait_for_timeout(250)
                                 dyn_json = page.evaluate("""() => {
                                     var el = document.querySelector('#landingImage') ||
                                              document.querySelector('#imgBlkFront');
