@@ -191,6 +191,26 @@ def _hamming_distance(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
 
 
+def _variant_family_key(p: dict):
+    """Return the variant family a product belongs to, or None.
+
+    A parent row ("Relationship *" Simple/Parent) is its own family; a child
+    row (Variant/Child) belongs to its "Parent Sku *". Parent and children
+    legitimately share the same images, so products in one family must never
+    be reported as duplicates of each other.
+    """
+    rel = str(p.get("relationship", "") or "").strip().lower()
+    parent = str(p.get("parentSku", "") or p.get("parent_sku", "") or "").strip()
+    sku = str(p.get("sku", "") or "").strip()
+    if rel in ("variant", "child"):
+        return parent or None
+    if rel in ("simple", "parent"):
+        return sku or None
+    if parent and parent != sku:
+        return parent
+    return None
+
+
 def _build_groups(products, find_fn, n, overlap_info):
     groups_map: Dict[int, List[int]] = defaultdict(list)
     for i in range(n):
@@ -199,6 +219,12 @@ def _build_groups(products, find_fn, n, overlap_info):
     all_remove_skus = []
     for root, members in groups_map.items():
         if len(members) < 2:
+            continue
+        # Variants: if every member belongs to the same variant family, this is
+        # one product with several variants (e.g. NEEM_BASIL_FACE_PACK and
+        # NEEM_BASIL_FACE_PACK_100GM) — never a duplicate.
+        fam_keys = {_variant_family_key(products[i]) for i in members}
+        if len(fam_keys) == 1 and None not in fam_keys:
             continue
         def sort_key(idx):
             p = products[idx]

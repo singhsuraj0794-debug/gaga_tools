@@ -1891,11 +1891,15 @@ export default function PreListingValidator() {
     try {
       const products = rows.map((row) => {
         const images = getImages(row);
+        const relKey = _findCol(row, "Relationship *", "Relationship");
+        const parentKey = _findCol(row, "Parent Sku *", "Parent Sku", "Parent SKU");
         return {
           sku: getSku(row),
           title: getTitle(row),
           seller: getSeller(row),
           images,
+          relationship: relKey ? String(row[relKey] ?? "").trim() : "",
+          parentSku: parentKey ? String(row[parentKey] ?? "").trim() : "",
         };
       }).filter((p) => p.sku && p.images.length > 0);
 
