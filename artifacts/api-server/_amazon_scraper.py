@@ -349,6 +349,22 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                 except Exception:
                     pass
 
+                # Amazon (and others) can open a full-screen VIDEO lightbox
+                # ("VIDEOS | IMAGES") over the page, which blocks extraction.
+                # Press Escape and click any close button, then re-pause videos.
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(400)
+                    page.evaluate("""() => {
+                        const closers = document.querySelectorAll(
+                            '[aria-label*="Close" i], button.a-button-close, .a-modal-close, [data-action="a-popover-close"]');
+                        closers.forEach(b => { try { b.click(); } catch (e) {} });
+                        document.querySelectorAll('video').forEach(v => {
+                            try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                        });
+                    }""")
+                except Exception:
+                    pass
                 # Close any stale tabs left over from earlier runs so the browser
                 # doesn't accumulate pages (it had leaked 7 tabs).
                 try:
@@ -407,6 +423,14 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                 except Exception:
                     pass
 
+                # Close any lightbox that the scroll / "Product information"
+                # click may have opened, before reading the DOM.
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(300)
+                except Exception:
+                    pass
+
                 data = page.evaluate(EXTRACT_JS)
 
                 # Click through thumbnail gallery to capture all full-res variant images
@@ -417,6 +441,13 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                         existing_images = set(data.get("images") or [])
                         for thumb in thumbs[:12]:
                             try:
+                                # SKIP the video thumbnail — clicking it opens a
+                                # full-screen "VIDEOS | IMAGES" lightbox that
+                                # covers the page and stalls extraction.
+                                tcls = (thumb.get_attribute("class") or "").lower()
+                                if ("video" in tcls
+                                        or thumb.query_selector(".videoBlockIngress, .vse-video-thumbnail, [class*='video'], [data-video-url]")):
+                                    continue
                                 thumb.click()
                                 page.wait_for_timeout(400)
                                 dyn_json = page.evaluate("""() => {
@@ -432,6 +463,18 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                                             data.setdefault("images", []).append(u)
                             except Exception:
                                 continue
+                except Exception:
+                    pass
+
+                # In case a lightbox did open, close it before reading the page.
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(300)
+                    page.evaluate("""() => {
+                        document.querySelectorAll(
+                            '[aria-label*="Close" i], button.a-button-close, .a-modal-close, .vse-close-button'
+                        ).forEach(b => { try { b.click(); } catch (e) {} });
+                    }""")
                 except Exception:
                     pass
 

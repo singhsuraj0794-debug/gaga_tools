@@ -91,6 +91,22 @@ def _try_playwright(url: str, ua: str = "") -> str:
                 }""")
             except Exception:
                 pass
+            # Amazon/Flipkart can open a full-screen VIDEO lightbox ("VIDEOS |
+            # IMAGES") over the page, which blocks extraction. Press Escape and
+            # click any close button, then re-pause videos.
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(400)
+                page.evaluate("""() => {
+                    const closers = document.querySelectorAll(
+                        '[aria-label*="Close" i], button.a-button-close, .a-modal-close, [data-action="a-popover-close"]');
+                    closers.forEach(b => { try { b.click(); } catch (e) {} });
+                    document.querySelectorAll('video').forEach(v => {
+                        try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                    });
+                }""")
+            except Exception:
+                pass
             html = page.content()
             ctx.close()
             if not _is_bot_page(html):

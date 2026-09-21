@@ -186,6 +186,22 @@ def _try_playwright(url: str) -> str:
             except Exception:
                 pass
 
+                # Amazon (and others) can open a full-screen VIDEO lightbox
+                # ("VIDEOS | IMAGES") over the page, which blocks extraction.
+                # Press Escape and click any close button, then re-pause videos.
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(400)
+                    page.evaluate("""() => {
+                        const closers = document.querySelectorAll(
+                            '[aria-label*="Close" i], button.a-button-close, .a-modal-close, [data-action="a-popover-close"]');
+                        closers.forEach(b => { try { b.click(); } catch (e) {} });
+                        document.querySelectorAll('video').forEach(v => {
+                            try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                        });
+                    }""")
+                except Exception:
+                    pass
             # Wait for the page to actually render product data. `__NEXT_DATA__`
             # alone appears early with a loading state (we saw 90KB pages with no
             # og:title), so also accept a real title / schema.org Product block.
