@@ -161,7 +161,8 @@ def _try_curl_cffi(url: str, impersonate: str = "safari15_5") -> str:
 
 # ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
 def _try_playwright(url: str) -> str:
-    """Fetch via YOUR real Chrome (port 9222) — used as last resort when proxy fails."""
+    """Fetch via YOUR real Chrome (CDP, port 9223) — the working path when
+    Meesho blocks direct/curl_cffi requests (403)."""
     try:
         import time, urllib.request
         from playwright.sync_api import sync_playwright
@@ -174,13 +175,28 @@ def _try_playwright(url: str) -> str:
             page = ctx.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
-            for _ in range(15):
+            # Wait for the page to actually render product data. `__NEXT_DATA__`
+            # alone appears early with a loading state (we saw 90KB pages with no
+            # og:title), so also accept a real title / schema.org Product block.
+            for _ in range(20):
                 time.sleep(2)
                 html = page.content()
-                if "__NEXT_DATA__" in html and len(html) > 5000:
+                if len(html) < 5000:
+                    continue
+                has_product = (
+                    ("__NEXT_DATA__" in html and 'og:title' in html)
+                    or '"@type":"Product"' in html
+                    or '"@type": "Product"' in html
+                    or "window.__INITIAL_STATE__" in html
+                )
+                if has_product:
                     page.close()
                     return html
+            # Fall back to whatever we have (still better than nothing).
+            html = page.content()
             page.close()
+            if len(html) > 20000:
+                return html
     except Exception:
         pass
     return ""
