@@ -53,12 +53,24 @@ def connect() -> webdriver.Remote:
     # App launch on a cold/slow emulator regularly exceeded the default 20s
     # adbExecTimeout, so activate_app()/start-activity threw and the whole run
     # aborted ("adbExec timeout ... timed out after 20000ms"). Give adb room.
-    options.adb_exec_timeout = 120000
-    options.uiautomator2_server_launch_timeout = 120000
-    options.uiautomator2_server_install_timeout = 120000
-    driver = webdriver.Remote(APPIUM_URL, options=options)
-    driver.update_settings({"waitForIdleTimeout": 0, "waitForSelectorTimeout": 0})
-    return driver
+    options.adb_exec_timeout = 180000
+    options.uiautomator2_server_launch_timeout = 180000
+    options.uiautomator2_server_install_timeout = 180000
+    # The emulator occasionally needs longer than the server-launch timeout to
+    # bring up the UiAutomator2 instrumentation ("The instrumentation process
+    # cannot be initialized within 120000ms timeout"), which aborts the whole
+    # run before any step executes. Retry the session a couple of times.
+    last_exc = None
+    for attempt in range(3):
+        try:
+            driver = webdriver.Remote(APPIUM_URL, options=options)
+            driver.update_settings({"waitForIdleTimeout": 0, "waitForSelectorTimeout": 0})
+            return driver
+        except Exception as exc:
+            last_exc = exc
+            print(f"[flow] Appium session attempt {attempt + 1} failed: {str(exc)[:160]}")
+            time.sleep(15)
+    raise last_exc
 
 
 def wait_for_tree(driver, timeout: int = 20, label: str = "") -> bool:
