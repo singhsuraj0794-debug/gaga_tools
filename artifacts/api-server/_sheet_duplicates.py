@@ -359,8 +359,8 @@ def _detect_stock_hashes(product_hashes: Dict[int, List[Tuple[str, object]]], n:
     """
     all_hashes: List[Tuple[int, int]] = []
     for idx, hashes in product_hashes.items():
-        for _, h in hashes:
-            all_hashes.append((idx, _hash_int(h)))
+        for entry in hashes:
+            all_hashes.append((idx, _hash_int(_unpack_hash_entry(entry)[1])))
     if not all_hashes:
         return set()
 
