@@ -24,7 +24,8 @@ interface Run {
     sub_steps?: {check:string;status:string;detail:string}[];
     detail?: string; url?: string; product_count?: number;
     session_recording_url?: string;
-    rca?: { summary?: string; causes?: string[]; actions?: string[] };
+    expected?: string; observed?: string; owner?: string; repro?: string;
+    rca?: { summary?: string; causes?: string[]; actions?: string[]; expected?: string; owner?: string; repro?: string };
   };
 }
 
@@ -138,6 +139,12 @@ function MetricRow({ metric, value, status, detail, tip }: {
 
 function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: React.ReactNode }) {
   const [showConsole, setShowConsole] = useState(false);
+  // Explainable failure info — either stored at the top level (Android) or
+  // nested under rca (web/mweb).
+  const expected = run.details?.expected || run.details?.rca?.expected;
+  const observed = run.details?.observed;
+  const owner = run.details?.owner || run.details?.rca?.owner;
+  const repro = run.details?.repro || run.details?.rca?.repro;
   return (
     <Card className={`border-l-4 ${run.status === "fail" ? "border-l-red-500" : run.status === "degraded" ? "border-l-yellow-500" : "border-l-green-500"}`}>
       <CardContent className="p-3 sm:p-4">
@@ -179,6 +186,38 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
                     <ul className="list-disc pl-4 mt-0.5 space-y-0.5">
                       {run.details.rca.actions.map((a, i) => <li key={i}>{a}</li>)}
                     </ul>
+                  </div>
+                )}
+              </div>
+            )}
+            {(expected || observed || repro) && run.status !== "pass" && (
+              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded text-xs">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className="font-medium text-slate-700">🧪 Explainable failure</span>
+                  {owner && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-purple-50 text-purple-700 border border-purple-200">
+                      OWNER: {String(owner).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                {observed && (
+                  <div className="text-slate-700">
+                    <span className="font-medium">Observed:</span> {observed}
+                  </div>
+                )}
+                {expected && (
+                  <div className="mt-0.5 text-slate-700">
+                    <span className="font-medium">Expected:</span> {expected}
+                  </div>
+                )}
+                {repro && (
+                  <div className="mt-1 text-slate-600">
+                    <span className="font-medium">🔁 Steps to reproduce:</span>
+                    <ol className="list-decimal pl-5 mt-0.5 space-y-0.5">
+                      {String(repro).split("\n").map((line, i) => (
+                        <li key={i}>{line.replace(/^\s*\d+\.\s*/, "")}</li>
+                      ))}
+                    </ol>
                   </div>
                 )}
               </div>
