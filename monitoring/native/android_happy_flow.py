@@ -122,8 +122,7 @@ def back_to_home(driver, tries: int = 8) -> bool:
     flow never navigated — leaving the checkout step on a PDP and producing a
     screenshot of a product page.
 
-    Instead, back out while a PDP-only marker (the bargain CTA, or the PDP's
-    own back button) is still on screen.
+    Instead, back out while a PDP-only marker (the bargain CTA) is on screen.
     """
     pdp_markers = ("pdp_commonsheet_bargain_button", "Start Bargaining",
                    "pdp_bargains_offer_your_price_button", "Your best price?")
@@ -137,6 +136,35 @@ def back_to_home(driver, tries: int = 8) -> bool:
         except Exception:
             break
     return not any(find_desc(driver, m, timeout=1) is not None for m in pdp_markers)
+
+
+def find_visible_desc(driver, substring: str, timeout: int = 8):
+    """Like find_desc(), but prefer an element that is actually on screen.
+
+    find_desc() returns the FIRST node whose content-desc matches anywhere in
+    the tree — including off-screen copies that React Native keeps mounted. On
+    a category/PDP screen those hidden duplicates swallowed the tap, so clicking
+    the 'Bargains' tab did nothing. Prefer a displayed element; fall back to the
+    last match (the tab bar renders after screen content).
+    """
+    deadline = time.time() + timeout
+    fallback = None
+    while time.time() < deadline:
+        try:
+            els = driver.find_elements(
+                "xpath", f'//*[contains(@content-desc, "{substring}")]')
+        except Exception:
+            els = []
+        for e in els:
+            try:
+                if e.is_displayed():
+                    return e
+            except Exception:
+                pass
+        if els:
+            fallback = els[-1]
+        time.sleep(0.5)
+    return fallback
 
 
 HOME_READY_TESTIDS = (
@@ -609,8 +637,8 @@ def run_flow() -> list[dict]:
         # showed a product page instead of checkout. Back out to the main screen
         # before looking for the tab.
         back_to_home(driver)
-        bargains_tab = find_desc(driver, "dashboard_bargains_tab", timeout=8) or \
-                       find_desc(driver, "Bargains", timeout=5)
+        bargains_tab = find_visible_desc(driver, "dashboard_bargains_tab", timeout=8) or \
+                       find_visible_desc(driver, "Bargains", timeout=5)
         if bargains_tab:
             bargains_tab.click()
             time.sleep(3)
