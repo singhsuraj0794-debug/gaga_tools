@@ -353,6 +353,25 @@ export default function PriceMapper() {
     setBatchSearching(false);
   }
 
+  async function exportAllExcel() {
+    setExporting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/price-mapper/export-all`);
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.headers.get("Content-Disposition")?.match(/"([^"]+)"/)?.[1] || "price-mappings-all.csv";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("Export failed");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function exportExcel() {
     setExporting(true);
     try {
@@ -558,6 +577,14 @@ export default function PriceMapper() {
               </p>
             </div>
           </div>
+          <Button onClick={exportAllExcel} disabled={exporting} variant="outline">
+            {exporting ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Download className="h-4 w-4 mr-2" />
+            )}
+            Export ALL Mapped
+          </Button>
           <Button onClick={exportExcel} disabled={exporting} variant="outline">
             {exporting ? (
               <Loader2 className="h-4 w-4 animate-spin mr-2" />
