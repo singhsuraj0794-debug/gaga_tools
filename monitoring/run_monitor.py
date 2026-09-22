@@ -166,6 +166,12 @@ def main():
             failures.append(f"HappyFlow/{step_name}: {msg}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
             send_alert(f"Happy flow {step_status}: {step_name}", format_rca_for_slack(rca, f"HappyFlow/{step_name}"))
             details["rca"] = {"summary": rca["summary"], "causes": rca["probable_causes"][:3], "actions": rca["actions"][:3]}
+            # Explainable + replicable: store how to reproduce the failure.
+            if rca.get("repro"):
+                details["expected"] = rca.get("expected", "")
+                details["owner"] = rca.get("owner", "")
+                details["repro"] = rca["repro"]
+                details["observed"] = rca_context
 
     print(f"  happy_flow overall: {flow_overall}", flush=True)
 

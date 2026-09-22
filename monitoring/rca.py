@@ -312,6 +312,30 @@ def generate_rca(check_name: str, failure_detail: str, console_errors: list | No
     rca["probable_causes"] = list(dict.fromkeys(rca["probable_causes"]))
     rca["actions"] = list(dict.fromkeys(rca["actions"]))
 
+    # Explainable + replicable: pull the manual reproduction steps and the
+    # expected behaviour for this check from the shared repro registry, so every
+    # alert tells the reader exactly how to see the failure themselves.
+    try:
+        from repro import REPRO, _repro_text
+    except Exception:  # pragma: no cover - monitor must never fail on this
+        REPRO, _repro_text = {}, None
+
+    meta = REPRO.get(check_name) or {}
+    if not meta:
+        # check_name is often prefixed, e.g. "happy_flow_checkout_nav" or
+        # "server_api" — match on the longest registry key contained in it.
+        lowered = check_name.lower()
+        candidates = [k for k in REPRO if k.lower() in lowered]
+        if candidates:
+            meta = REPRO[max(candidates, key=len)]
+    if meta and _repro_text is not None:
+        rca["expected"] = meta.get("expected", "")
+        rca["owner"] = meta.get("owner", "unknown")
+        steps = meta.get("repro") or []
+        if steps:
+            rca["repro"] = _repro_text(steps)
+            rca["repro_steps"] = list(steps)
+
     return rca
 
 
@@ -322,6 +346,11 @@ def format_rca_for_slack(rca: dict, check_name: str) -> str:
         f"📋 *Summary:* {rca['summary']}",
         f"⚠️ *Severity:* {rca['severity'].upper()}",
     ]
+    if rca.get("owner"):
+        lines.append(f"👤 *Owner:* {rca['owner']}")
+    if rca.get("expected"):
+        lines.append(f"🎯 *Expected:* {rca['expected']}")
+
     if rca["console_errors"]:
         lines.append(f"🖥️ *Console Errors ({len(rca['console_errors'])}):*")
         for ce in rca["console_errors"][:3]:
@@ -334,5 +363,10 @@ def format_rca_for_slack(rca: dict, check_name: str) -> str:
     lines.append(f"\n*✅ Action Items:*")
     for a in rca["actions"]:
         lines.append(f"• {a}")
+
+    if rca.get("repro"):
+        lines.append(f"\n*🔁 Steps to reproduce:*")
+        for step in rca["repro"].splitlines():
+            lines.append(step)
 
     return "\n".join(lines)
