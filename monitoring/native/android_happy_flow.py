@@ -577,7 +577,22 @@ def run_flow() -> list[dict]:
         # Make sure no bargain sheet is left over from step 5 before navigating.
         close_bargain_sheet(driver)
         dismiss_blocking_dialogs(driver)
-        bargains_tab = find_desc(driver, "Bargains", timeout=8)
+        # Step 5 (and bargain2) leave us on a product detail page, where the
+        # bottom navigation is hidden — clicking "Bargains" from here silently
+        # did nothing and the step ended on the PDP, which is why the screenshot
+        # showed a product page instead of checkout. Back out to the main screen
+        # (the dashboard_*_tab testIDs) before looking for the tab.
+        for _ in range(10):
+            if has_any_testid(driver, ("dashboard_bazaar_tab", "dashboard_bargains_tab",
+                                       "dashboard_alerts_tab"), timeout=1):
+                break
+            try:
+                driver.back()
+                time.sleep(0.6)
+            except Exception:
+                break
+        bargains_tab = find_desc(driver, "dashboard_bargains_tab", timeout=8) or \
+                       find_desc(driver, "Bargains", timeout=5)
         if bargains_tab:
             bargains_tab.click()
             time.sleep(3)
