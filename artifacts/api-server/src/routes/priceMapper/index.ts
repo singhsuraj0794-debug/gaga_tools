@@ -82,35 +82,48 @@ async function callSearch(title: string, imageUrl: string, gajabPrice: string = 
   }
 }
 
-// GET /api/price-mapper/products — list Gajab.com products from Supabase
-router.get("/products", async (_req: Request, res: Response): Promise<void> => {
+// GET /api/price-mapper/products — list Gajab.com products from Supabase (paginated)
+router.get("/products", async (req: Request, res: Response): Promise<void> => {
   try {
     const supabase = getSupabase();
     if (!supabase) {
       res.status(500).json({ error: "Supabase not configured" });
       return;
     }
-    const PAGE_LIMIT = 1000;
-    let allProducts: any[] = [];
-    let page = 0;
 
-    while (true) {
-      const from = page * PAGE_LIMIT;
-      const to = from + PAGE_LIMIT - 1;
-      const { data, error } = await supabase
-        .from("products")
-        .select("id, name, price, image_url, url, category")
-        .order("name")
-        .range(from, to);
+    const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string, 10) || 25));
+    const search = (req.query.search as string || "").trim();
+    const fromIdx = parseInt(req.query.from as string, 10) || 0;
+    const toIdx = parseInt(req.query.to as string, 10) || 0;
 
-      if (error) throw error;
-      if (!data || data.length === 0) break;
-      allProducts = allProducts.concat(data);
-      if (data.length < PAGE_LIMIT) break;
-      page++;
+    const from = fromIdx > 0 ? fromIdx - 1 : (page - 1) * pageSize;
+    const to = toIdx > fromIdx ? toIdx : from + pageSize - 1;
+
+    let countQuery = supabase.from("products").select("id", { count: "exact", head: true });
+    if (search) {
+      countQuery = countQuery.ilike("name", `%${search}%`);
     }
+    const { count } = await countQuery;
 
-    res.json({ products: allProducts });
+    let dataQuery = supabase
+      .from("products")
+      .select("id, name, price, image_url, url, category")
+      .order("name")
+      .range(from, to);
+    if (search) {
+      dataQuery = dataQuery.ilike("name", `%${search}%`);
+    }
+    const { data, error } = await dataQuery;
+
+    if (error) throw error;
+
+    res.json({
+      products: data || [],
+      total: count ?? (data || []).length,
+      page,
+      pageSize,
+    });
   } catch (err: any) {
     logger.error({ err: err.message }, "Failed to fetch products");
     res.status(500).json({ error: err.message });
@@ -261,14 +274,38 @@ router.post("/save", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-// GET /api/price-mapper/mappings — get all stored price mappings
-router.get("/mappings", async (_req: Request, res: Response): Promise<void> => {
+// GET /api/price-mapper/mappings — get stored price mappings (optionally by ids)
+router.get("/mappings", async (req: Request, res: Response): Promise<void> => {
   try {
     const supabase = getSupabase();
     if (!supabase) {
       res.status(500).json({ error: "Supabase not configured" });
       return;
     }
+
+    const idsParam = (req.query.ids as string || "").trim();
+    if (idsParam) {
+      const ids = idsParam.split(",").map(s => s.trim()).filter(Boolean).slice(0, 200);
+      if (ids.length === 0) {
+        res.json({ mappings: [] });
+        return;
+      }
+      const { data, error } = await supabase
+        .from("price_mappings")
+        .select("*")
+        .in("gajab_product_id", ids);
+      if (error) {
+        if (error.message?.includes("price_mappings")) {
+          res.json({ mappings: [] });
+          return;
+        }
+        throw error;
+      }
+      res.json({ mappings: data || [] });
+      return;
+    }
+
+    // Legacy: full load (paginated)
     const PAGE_LIMIT = 1000;
     let allMappings: any[] = [];
     let page = 0;
@@ -299,6 +336,28 @@ router.get("/mappings", async (_req: Request, res: Response): Promise<void> => {
   } catch (err: any) {
     logger.error({ err: err.message }, "Failed to fetch mappings");
     res.json({ mappings: [] });
+  }
+});
+
+// GET /api/price-mapper/mappings-count — count of mapped products
+router.get("/mappings-count", async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      res.status(500).json({ error: "Supabase not configured" });
+      return;
+    }
+    const { count, error } = await supabase
+      .from("price_mappings")
+      .select("gajab_product_id", { count: "exact", head: true });
+    if (error) {
+      res.json({ count: 0 });
+      return;
+    }
+    res.json({ count: count ?? 0 });
+  } catch (err: any) {
+    logger.error({ err: err.message }, "Failed to count mappings");
+    res.json({ count: 0 });
   }
 });
 

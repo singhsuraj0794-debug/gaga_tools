@@ -26,7 +26,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+const server = app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -41,3 +41,8 @@ app.listen(port, (err) => {
     logger.warn({ err: e }, "Startup warm-up failed")
   );
 });
+
+// Set long timeouts for sheet-duplicate jobs (can take 30+ min on large sellers)
+server.requestTimeout = 2700000;  // 45 min
+server.headersTimeout = 300000;   // 5 min
+server.keepAliveTimeout = 300000; // 5 min
