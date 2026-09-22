@@ -133,6 +133,69 @@ def compute_phash(img: Image.Image):
     return imagehash.phash(img)
 
 
+# pHash is computed on a GRAYSCALE image, so the same packaging in a different
+# colour (e.g. one box artwork recoloured per flavour) hashes as identical.
+# Every image therefore also gets an HSV colour signature, and two images only
+# count as the same image when the colours agree as well.
+COLOR_HIST_MIN = float(os.environ.get("DUPE_COLOR_HIST_MIN", "0.80"))
+COLOR_LAB_MAX = float(os.environ.get("DUPE_COLOR_LAB_MAX", "22.0"))
+
+
+def compute_color_sig(img: Image.Image):
+    """HSV histograms + mean Lab colour for an image (used to reject recolours)."""
+    try:
+        import numpy as np
+    except Exception:
+        return None
+    try:
+        small = img.convert("HSV").resize((64, 64))
+        arr = np.asarray(small).astype("float32")
+        h = np.histogram(arr[:, :, 0], bins=24, range=(0, 256))[0].astype("float32")
+        s = np.histogram(arr[:, :, 1], bins=8, range=(0, 256))[0].astype("float32")
+        v = np.histogram(arr[:, :, 2], bins=8, range=(0, 256))[0].astype("float32")
+        h /= h.sum() + 1e-6
+        s /= s.sum() + 1e-6
+        v /= v.sum() + 1e-6
+        lab = np.asarray(img.convert("LAB").resize((32, 32))).astype("float32")
+        mean_lab = lab.reshape(-1, 3).mean(axis=0)
+        return (h, s, v, mean_lab)
+    except Exception:
+        return None
+
+
+def color_similarity(sig_a, sig_b) -> Tuple[float, float]:
+    """Return (histogram_intersection, delta_e). Higher intersection / lower
+    delta_e means the images look the same colour."""
+    if sig_a is None or sig_b is None:
+        return 1.0, 0.0
+    try:
+        import numpy as np
+        ha, sa, va, lab_a = sig_a
+        hb, sb, vb, lab_b = sig_b
+        inter = (
+            float(np.minimum(ha, hb).sum())
+            + float(np.minimum(sa, sb).sum())
+            + float(np.minimum(va, vb).sum())
+        ) / 3.0
+        delta_e = float(np.linalg.norm(lab_a - lab_b))
+        return inter, delta_e
+    except Exception:
+        return 1.0, 0.0
+
+
+def colors_match(sig_a, sig_b) -> bool:
+    """True only when both images have effectively the same colour make-up."""
+    inter, delta_e = color_similarity(sig_a, sig_b)
+    return inter >= COLOR_HIST_MIN and delta_e <= COLOR_LAB_MAX
+
+
+def _unpack_hash_entry(entry):
+    """Accept (url, hash) or (url, hash, color_sig) tuples."""
+    if len(entry) >= 3:
+        return entry[0], entry[1], entry[2]
+    return entry[0], entry[1], None
+
+
 def _compute_product_hashes(product: dict) -> List[Tuple[str, object]]:
     hashes = []
     for url in product.get("images", [])[:10]:
@@ -143,7 +206,8 @@ def _compute_product_hashes(product: dict) -> List[Tuple[str, object]]:
             with Image.open(path) as img:
                 img = img.convert("RGB")
                 h = compute_phash(img)
-            hashes.append((url, h))
+                sig = compute_color_sig(img)
+            hashes.append((url, h, sig))
         except Exception:
             pass
     return hashes
@@ -156,11 +220,16 @@ def compute_image_overlap(
 ) -> Tuple[int, int]:
     matched = 0
     used_b = set()
-    for url_a, hash_a in hashes_a:
+    for entry_a in hashes_a:
+        url_a, hash_a, sig_a = _unpack_hash_entry(entry_a)
         best_idx = None
         best_dist = 999
-        for j, (url_b, hash_b) in enumerate(hashes_b):
+        for j, entry_b in enumerate(hashes_b):
             if j in used_b:
+                continue
+            _url_b, hash_b, sig_b = _unpack_hash_entry(entry_b)
+            # Recoloured artwork hashes identically — require matching colour.
+            if not colors_match(sig_a, sig_b):
                 continue
             dist = hash_a - hash_b
             if dist < best_dist:
@@ -447,7 +516,10 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     # Filter product_hashes to exclude stock hashes
     filtered_product_hashes: Dict[int, List[Tuple[str, object]]] = {}
     for idx, hashes in product_hashes.items():
-        filtered = [(url, h) for url, h in hashes if _hash_int(h) not in stock_hashes]
+        filtered = [
+            entry for entry in hashes
+            if _hash_int(_unpack_hash_entry(entry)[1]) not in stock_hashes
+        ]
         if filtered:
             filtered_product_hashes[idx] = filtered
 
@@ -470,7 +542,7 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     prod_hash_ints: Dict[int, List[int]] = {}
     hash_to_products: Dict[int, Set[int]] = defaultdict(set)
     for idx, hashes in filtered_product_hashes.items():
-        ints = [_hash_int(h) for _, h in hashes]
+        ints = [_hash_int(_unpack_hash_entry(h)[1]) for h in hashes]
         prod_hash_ints[idx] = ints
         for hval in ints:
             hash_to_products[hval].add(idx)
