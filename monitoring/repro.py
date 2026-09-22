@@ -253,6 +253,17 @@ REPRO: dict[str, dict] = {
 
 DEFAULT_OWNER = "unknown"
 
+# Generic fallback so EVERY failure carries reproduction steps, even for checks
+# that have no bespoke registry entry yet.
+GENERIC_REPRO = [
+    "Open the surface named in this check (see the observed value / URL below).",
+    "Repeat the action this check performs, at roughly the same time of day.",
+    "Watch the browser Network tab or app logs while it runs and note any error status.",
+    "Compare what you see against the 'expected' text above; if it differs, the failure is real.",
+    "If it passes manually, the check is flaky — note the run time and re-run the monitor.",
+]
+GENERIC_EXPECTED = "The monitored surface should respond normally and within its time budget."
+
 
 def _repro_text(steps: Iterable[str]) -> str:
     return "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))
@@ -262,14 +273,11 @@ def explain(step: str, status: str, observed: str = "") -> dict:
     """Build the explainable fields for a monitor result.
 
     Returns a dict with `expected`, `observed`, `owner` and `repro` (a
-    human-readable numbered list). Safe for unknown steps.
+    human-readable numbered list). Unknown steps fall back to generic steps.
     """
     meta = REPRO.get(step) or {}
-    expected = meta.get("expected", "No expectation documented for this step.")
-    steps = meta.get("repro") or [
-        "Open the monitored surface and repeat the action this step performs.",
-        "Compare what you see against the expected behaviour above.",
-    ]
+    expected = meta.get("expected") or GENERIC_EXPECTED
+    steps = meta.get("repro") or GENERIC_REPRO
     payload = {
         "expected": expected,
         "observed": observed or "(not captured)",

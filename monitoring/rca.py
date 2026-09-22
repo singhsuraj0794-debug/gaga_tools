@@ -328,10 +328,20 @@ def generate_rca(check_name: str, failure_detail: str, console_errors: list | No
         candidates = [k for k in REPRO if k.lower() in lowered]
         if candidates:
             meta = REPRO[max(candidates, key=len)]
-    if meta and _repro_text is not None:
-        rca["expected"] = meta.get("expected", "")
-        rca["owner"] = meta.get("owner", "unknown")
-        steps = meta.get("repro") or []
+    if _repro_text is not None:
+        if meta:
+            rca["expected"] = meta.get("expected", "")
+            rca["owner"] = meta.get("owner", "unknown")
+            steps = meta.get("repro") or []
+        else:
+            # Unknown check — still give the reader a way to reproduce it.
+            try:
+                from repro import GENERIC_EXPECTED, GENERIC_REPRO
+            except Exception:
+                GENERIC_EXPECTED, GENERIC_REPRO = "", []
+            rca["expected"] = GENERIC_EXPECTED
+            rca["owner"] = "unknown"
+            steps = list(GENERIC_REPRO)
         if steps:
             rca["repro"] = _repro_text(steps)
             rca["repro_steps"] = list(steps)

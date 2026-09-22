@@ -12,6 +12,25 @@ from slack_alert import send_alert
 from rca import generate_rca, format_rca_for_slack
 
 
+def explain_details(rca: dict, observed: str = "") -> dict:
+    """Explainable + replicable details for a failure row.
+
+    Carries the expected behaviour, what was observed, who owns it and the
+    numbered manual steps to reproduce — so the dashboard shows how to see the
+    failure again, not just that it happened.
+    """
+    details: dict = {}
+    if rca.get("expected"):
+        details["expected"] = rca["expected"]
+    if rca.get("owner"):
+        details["owner"] = rca["owner"]
+    if rca.get("repro"):
+        details["repro"] = rca["repro"]
+    if observed:
+        details["observed"] = observed
+    return details
+
+
 def main():
     print("=" * 60, flush=True)
     print(f"[MONITOR] Run started at {datetime.now(timezone.utc).isoformat()}", flush=True)
@@ -39,6 +58,11 @@ def main():
     print("\n--- Server Health ---", flush=True)
     health_results = check_server_health() if RUN_HEALTH else []
     for r in health_results:
+        if r["status"] == "fail":
+            rca = generate_rca(f"server_{r['service']}", f"{r['service']}: {r.get('error', 'unreachable')}")
+            r_details = explain_details(rca, f"{r['service']}: {r.get('error', 'unreachable')}")
+        else:
+            rca, r_details = None, None
         store.store_result(
             page_or_flow=f"server/{r['service']}",
             metric="response_time_ms",
@@ -46,9 +70,9 @@ def main():
             status=r["status"],
             step_failed=r.get("error"),
             duration_ms=r["duration_ms"],
+            details=r_details,
         )
-        if r["status"] == "fail":
-            rca = generate_rca(f"server_{r['service']}", f"{r['service']}: {r.get('error', 'unreachable')}")
+        if rca:
             failures.append(f"Server/{r['service']}: {r.get('error', 'unreachable')}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
             send_alert(f"Server health failed: {r['service']}", format_rca_for_slack(rca, f"Server/{r['service']}"))
 
@@ -56,6 +80,12 @@ def main():
     print("\n--- API Monitoring ---", flush=True)
     api_results = monitor_apis() if RUN_HEALTH else []
     for r in api_results:
+        a_rca = None
+        a_details = None
+        if r["status"] != "pass":
+            a_observed = f"HTTP {r.get('status_code')} | {r['duration_ms']}ms | {r.get('error', '')}"
+            a_rca = generate_rca(f"api_{r['api']}", a_observed)
+            a_details = explain_details(a_rca, a_observed)
         store.store_result(
             page_or_flow=f"api/{r['api']}",
             metric="response_time_ms",
@@ -63,15 +93,17 @@ def main():
             status=r["status"],
             step_failed=r.get("error"),
             duration_ms=r["duration_ms"],
+            details=a_details,
         )
-        if r["status"] == "fail":
+        if a_rca:
             failures.append(f"API/{r['api']}: {r.get('error', 'error')}")
-            send_alert(f"API failed: {r['api']}", f"HTTP {r.get('status_code')} | {r['duration_ms']}ms\n{r.get('error', '')}")
+            send_alert(f"API {r['status']}: {r['api']}", format_rca_for_slack(a_rca, f"API/{r['api']}"))
         store.store_result(
             page_or_flow=f"api/{r['api']}",
             metric="status_code",
             value=float(r.get("status_code") or 0),
             status=r["status"],
+            details=a_details,
         )
 
     # ── Part 3: Lighthouse Audits ──
@@ -95,6 +127,9 @@ def main():
             for v in violations:
                 metric_key = v.split("=")[0] if "=" in v else v
                 rca = generate_rca(f"lighthouse_{metric_key}", v)
+                lh_details = explain_details(rca, f"{page}: {v}")
+                store.store_result(page_or_flow=page, metric=metric_key, value=None,
+                                   status="degraded", step_failed=v, details=lh_details)
                 failures.append(f"Lighthouse/{page}: {v}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
                 send_alert(
                     f"Lighthouse audit issues: {page}",
@@ -184,6 +219,11 @@ def main():
         feature_results = []
     for r in feature_results:
         match_count = r.get("match_count")
+        f_details = {"check": r["check"], "check_type": r.get("check_type","visible"), "match_count": match_count, "min_expected": r.get("min")}
+        if r["status"] != "pass":
+            f_observed = r.get("error") or (f"Found {match_count}, expected >= {r.get('min',1)}" if match_count is not None else "element missing")
+            f_rca = generate_rca(f"feature_{r['check']}", f_observed)
+            f_details.update(explain_details(f_rca, f_observed))
         store.store_result(
             page_or_flow=f"feature/{r['page']}",
             metric=f"elem_{r['check']}_{r.get('check_type','visible')}",
@@ -191,7 +231,7 @@ def main():
             status=r["status"],
             step_failed=r.get("error") or (f"Found {match_count}, expected >= {r.get('min',1)}" if match_count is not None and r["status"] != "pass" else None),
             duration_ms=r["duration_ms"],
-            details={"check": r["check"], "check_type": r.get("check_type","visible"), "match_count": match_count, "min_expected": r.get("min")},
+            details=f_details,
         )
         if r["status"] == "fail":
             rca = generate_rca(f"feature_{r['check']}", r.get("error", "missing"))
