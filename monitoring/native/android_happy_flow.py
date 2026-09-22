@@ -113,6 +113,32 @@ def has_any_testid(driver, testids, timeout: int = 8) -> bool:
     return False
 
 
+def back_to_home(driver, tries: int = 8) -> bool:
+    """Return to the app's main screen from a PDP / detail screen.
+
+    React Native keeps the bottom tab bar mounted, so the `dashboard_*_tab`
+    testIDs are present in the accessibility tree even while a product detail
+    page covers them. A presence check therefore said "already home" and the
+    flow never navigated — leaving the checkout step on a PDP and producing a
+    screenshot of a product page.
+
+    Instead, back out while a PDP-only marker (the bargain CTA, or the PDP's
+    own back button) is still on screen.
+    """
+    pdp_markers = ("pdp_commonsheet_bargain_button", "Start Bargaining",
+                   "pdp_bargains_offer_your_price_button", "Your best price?")
+    for _ in range(tries):
+        on_pdp = any(find_desc(driver, m, timeout=1) is not None for m in pdp_markers)
+        if not on_pdp:
+            return True
+        try:
+            driver.back()
+            time.sleep(1.0)
+        except Exception:
+            break
+    return not any(find_desc(driver, m, timeout=1) is not None for m in pdp_markers)
+
+
 HOME_READY_TESTIDS = (
     "dashboard_bazaar_tab", "dashboard_categories_tab",
     "home_category_0_item", "product_template1_product_0_card",
@@ -581,16 +607,8 @@ def run_flow() -> list[dict]:
         # bottom navigation is hidden — clicking "Bargains" from here silently
         # did nothing and the step ended on the PDP, which is why the screenshot
         # showed a product page instead of checkout. Back out to the main screen
-        # (the dashboard_*_tab testIDs) before looking for the tab.
-        for _ in range(10):
-            if has_any_testid(driver, ("dashboard_bazaar_tab", "dashboard_bargains_tab",
-                                       "dashboard_alerts_tab"), timeout=1):
-                break
-            try:
-                driver.back()
-                time.sleep(0.6)
-            except Exception:
-                break
+        # before looking for the tab.
+        back_to_home(driver)
         bargains_tab = find_desc(driver, "dashboard_bargains_tab", timeout=8) or \
                        find_desc(driver, "Bargains", timeout=5)
         if bargains_tab:
