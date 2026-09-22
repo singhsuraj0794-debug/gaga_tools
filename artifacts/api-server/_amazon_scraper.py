@@ -788,7 +788,8 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", _html_mod.unescape(s)).strip()
 
 
-EXTRACT_MAX_PAGES = 20
+EXTRACT_MAX_PAGES = 400          # merchant catalogues can run to hundreds of pages
+EXTRACT_MAX_PRODUCTS = 20000     # hard cap on returned links
 EXTRACT_SCROLL_WAIT = 0.3
 
 
@@ -821,7 +822,7 @@ def extract_products(store_url: str) -> dict:
         qs = _urlparse.parse_qs(parsed.query)
         seller_id = qs.get("seller", [None])[0]
         if seller_id:
-            store_url = f"https://{parsed.netloc}/s?merchant={seller_id}"
+            store_url = f"https://{parsed.netloc}/s?i=merchant-items&me={seller_id}&s=popularity-rank&fs=true"
             parsed = urlparse(store_url)
             path_parts = ["s"]
             store_name = "Seller Store"
@@ -836,6 +837,24 @@ def extract_products(store_url: str) -> dict:
         store_name = qs.get("k", ["Search"])[0][:40]
     else:
         store_name = domain[:30]
+
+    # Seller storefront links (/l/<node>?me=<seller>, /b?...&me=<seller>, /sp)
+    # render as a "Storefront" page: ~20 preview tiles in carousels, no
+    # s-search-result cards and NO pagination — which is why a 4000-item
+    # catalogue yielded only 21 links. The seller's full catalogue is exposed
+    # by the merchant-items search, which paginates normally. Rewrite to it.
+    import urllib.parse as _urlparse
+    _qs = _urlparse.parse_qs(parsed.query)
+    _me = (_qs.get("me", [None])[0] or "").strip()
+    if _me and not path_parts[:1] == ["s"]:
+        store_url = (
+            f"https://{parsed.netloc}/s?i=merchant-items&me={_me}"
+            "&s=popularity-rank&fs=true"
+        )
+        parsed = urlparse(store_url)
+        path_parts = ["s"]
+        if not store_name or store_name == domain[:30]:
+            store_name = "Seller Store"
 
     products: list[dict] = []
     seen_asins: set[str] = set()
@@ -889,87 +908,118 @@ def extract_products(store_url: str) -> dict:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-            )
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1440, "height": 900},
-                locale="en-IN",
-            )
-            page = context.new_page()
+            # Prefer the CDP Chrome (matches scrape()): a real browser profile
+            # survives Amazon's bot checks far better than a fresh headless one.
+            browser = None
+            cdp_used = None
+            for candidate in CDP_URLS:
+                try:
+                    import urllib.request as _ur
+                    _ur.urlopen(f"{candidate}/json/version", timeout=5)
+                    browser = pw.chromium.connect_over_cdp(candidate)
+                    cdp_used = candidate
+                    break
+                except Exception:
+                    continue
+            if browser is not None:
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                    ),
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-IN",
+                )
+                page = context.new_page()
+            else:
+                browser = pw.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                )
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+                    ),
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-IN",
+                )
+                page = context.new_page()
+            logger.info("Catalogue extraction using %s", cdp_used or "headless")
+
+            def _collect() -> int:
+                """Scroll, extract ASINs from the page, return total seen."""
+                prev = len(seen_asins)
+                for _ in range(3):
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    time.sleep(EXTRACT_SCROLL_WAIT)
+                    data = page.evaluate(EXTRACT_JS) or []
+                    before = len(seen_asins)
+                    for p in data:
+                        m = re.search(r"/([A-Z0-9]{10})(?:[/?]|$)", p.get("url", ""))
+                        asin = m.group(1) if m else ""
+                        if asin and asin not in seen_asins:
+                            seen_asins.add(asin)
+                            products.append(p)
+                    if len(seen_asins) == before:
+                        break
+                return len(seen_asins) - prev
 
             logger.info("Navigating to store URL: %s", store_url)
-            page.goto(store_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(1000)
+            page.goto(store_url, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(1500)
 
             if _is_bot_page(page.content(), page.url):
                 logger.warning("Blocked on store URL: %s", store_url)
+                context.close() if cdp_used is None else None
+                if cdp_used is None:
+                    browser.close()
+                else:
+                    page.close()
                 return {"store_name": store_name, "products": [], "error": "Blocked by Amazon"}
 
-            # Scroll for lazy load
-            prev_count = 0
-            for scroll_pass in range(3):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(EXTRACT_SCROLL_WAIT)
-                data = page.evaluate(EXTRACT_JS)
-                if data and len(data) > prev_count:
-                    prev_count = len(data)
-                else:
-                    break
+            _collect()
 
-            data = page.evaluate(EXTRACT_JS)
-            if data:
-                for p in data:
-                    asin_match = re.search(r"/([A-Z0-9]{10})(?:/|$)", p.get("url", ""))
-                    asin = asin_match.group(1) if asin_match else ""
-                    if asin and asin not in seen_asins:
-                        seen_asins.add(asin)
-                        products.append(p)
-
-            # Try next pages up to limit
-            pages = 0
-            while pages < EXTRACT_MAX_PAGES - 1:
+            # Paginate via the &page=N query param — far more reliable than
+            # clicking the next button, and it keeps working for merchant
+            # catalogues with hundreds of pages. Stop when a page yields no new
+            # ASINs (Amazon returns "no results" past the last page).
+            base_url = store_url
+            sep = "&" if "?" in base_url else "?"
+            page_no = 1
+            stall = 0
+            while page_no < EXTRACT_MAX_PAGES:
+                page_no += 1
                 try:
-                    next_btn = page.query_selector(
-                        "a[aria-label='Go to next page'], "
-                        "li.a-last a:not(.a-disabled), "
-                        ".s-pagination-next:not(.s-pagination-disabled)"
-                    )
-                    if not next_btn:
-                        break
-                    if "a-disabled" in (next_btn.get_attribute("class") or ""):
-                        break
-                    next_btn.click()
-                    page.wait_for_load_state("domcontentloaded", timeout=15000)
-                    page.wait_for_timeout(800)
-
-                    for scroll_pass in range(2):
-                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        time.sleep(EXTRACT_SCROLL_WAIT)
-
-                    data2 = page.evaluate(EXTRACT_JS)
-                    if data2:
-                        for p in data2:
-                            asin_match = re.search(r"/([A-Z0-9]{10})(?:/|$)", p.get("url", ""))
-                            asin = asin_match.group(1) if asin_match else ""
-                            if asin and asin not in seen_asins:
-                                seen_asins.add(asin)
-                                products.append(p)
-                    pages += 1
+                    page.goto(f"{base_url}{sep}page={page_no}",
+                              wait_until="domcontentloaded", timeout=45000)
+                    page.wait_for_timeout(1200)
                 except Exception:
                     break
+                new = _collect()
+                if new == 0:
+                    stall += 1
+                    if stall >= 2:
+                        break
+                else:
+                    stall = 0
+                if page_no % 10 == 0:
+                    logger.info("Catalogue page %s: %s products so far",
+                                page_no, len(seen_asins))
 
-            context.close()
-            browser.close()
+            if cdp_used is None:
+                context.close()
+                browser.close()
+            else:
+                try:
+                    page.close()
+                except Exception:
+                    pass
     except Exception as exc:
         return {"store_name": store_name, "products": products, "error": str(exc)}
 
-    return {"store_name": store_name, "products": products[:500], "error": ""}
+    return {"store_name": store_name, "products": products[:EXTRACT_MAX_PRODUCTS], "error": ""}
+
 
 
 if __name__ == "__main__":
