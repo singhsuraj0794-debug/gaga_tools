@@ -46,6 +46,36 @@ def _wait_for_products(page, selector: str = "a[href*='/product-detail/']", min_
     return 0
 
 
+def _goto_ready(page, url: str, timeout: int | None = None, wait_selector: str | None = None):
+    """Navigate without depending on the full 'load' event.
+
+    The site ships ~4.4 MB of blocking JS and ~9.8 MB of decorative background
+    SVGs, so Page.goto(domcontentloaded) can exceed 30s and
+    wait_for_load_state('load') never completes. That made EVERY category and
+    product navigation time out, so the bargain flows reported
+    'No product found with bargain button'.
+
+    'commit' resolves as soon as the response starts; DOM-ready is then only a
+    best-effort wait, and an optional selector confirms the content we need.
+    """
+    t = timeout or NAV_TIMEOUT
+    for attempt in ("commit", "domcontentloaded"):
+        try:
+            page.goto(url, timeout=t, wait_until=attempt)
+            break
+        except Exception:
+            continue
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=min(t, 20000))
+    except Exception:
+        pass
+    if wait_selector:
+        try:
+            page.wait_for_selector(wait_selector, timeout=15000)
+        except Exception:
+            pass
+
+
 def _detect_session_expired(page) -> bool:
     """Check if the page indicates session/login expiry."""
     try:
@@ -418,8 +448,7 @@ def _do_checkout_flow(page, results: list):
 
     # Step 5a: Go to My Bargains
     log("Step 5a — Navigating to My Bargains")
-    page.goto("https://gajab.com/my-bargains", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-    page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+    _goto_ready(page, "https://gajab.com/my-bargains", timeout=NAV_TIMEOUT)
     # Wait for bargain items to load (retry up to 10s)
     for _ in range(5):
         time.sleep(1)
@@ -638,8 +667,7 @@ def _do_search_flow(page, results: list):
     t0 = time.time()
     sub_steps = []
     try:
-        page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        _goto_ready(page, "https://gajab.com/", timeout=NAV_TIMEOUT)
         time.sleep(1)
 
         search_input = page.locator("input[placeholder*='Search']").first
@@ -673,8 +701,7 @@ def _do_page_checks(page, results: list):
     for name, url, expected in pages_to_check:
         t0 = time.time()
         try:
-            page.goto(url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+            _goto_ready(page, url, timeout=NAV_TIMEOUT)
             time.sleep(1)
             duration = int((time.time() - t0) * 1000)
             has_content = page.evaluate("(sel) => document.querySelector(sel) !== null", expected)
@@ -695,8 +722,7 @@ def _do_page_checks(page, results: list):
 
     log("Checking home page banners")
     try:
-        page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        _goto_ready(page, "https://gajab.com/", timeout=NAV_TIMEOUT)
         time.sleep(1)
         banners = page.locator("[class*='banner'] img, section img[src*='banner'], [class*='carousel'] img")
         banner_count = banners.count()
@@ -784,9 +810,10 @@ def _pick_random_product(page) -> str | None:
 
     for cat_url in CATEGORY_URLS:
         try:
-            page.goto(cat_url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
-            time.sleep(1)
+            _goto_ready(page, cat_url, timeout=NAV_TIMEOUT)
+            # The grid is client-rendered — poll for it instead of assuming it is
+            # there one second after the response starts.
+            _wait_for_products(page, min_count=1, timeout_s=20)
             all_links = page.locator("a[href*='/product-detail/']")
             count = all_links.count()
             if count == 0:
@@ -800,8 +827,7 @@ def _pick_random_product(page) -> str | None:
                 if url and not url.startswith("http"):
                     url = "https://gajab.com" + url
                 try:
-                    page.goto(url, timeout=15000, wait_until="domcontentloaded")
-                    page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+                    _goto_ready(page, url, timeout=15000)
                 except Exception:
                     continue
                 time.sleep(0.5)
@@ -835,8 +861,7 @@ def _do_second_bargain(page, results: list):
         return
 
     log(f"Bargain 2 — Loading {product_url}")
-    page.goto(product_url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-    page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+    _goto_ready(page, product_url, timeout=NAV_TIMEOUT)
     time.sleep(1)
 
     # Dismiss any pincode/location dialog that might block the bargain modal
@@ -950,8 +975,7 @@ def _do_second_bargain(page, results: list):
     # Proceed to checkout via My Bargains after counter-offer accept
     if accepted:
         log("Bargain 2 — Navigating to My Bargains for payment")
-        page.goto("https://gajab.com/my-bargains", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+        _goto_ready(page, "https://gajab.com/my-bargains", timeout=NAV_TIMEOUT)
         # Wait for bargain items to load
         for _ in range(5):
             time.sleep(1)
@@ -1085,8 +1109,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
             # Step 1: Home page
             log("Step 1 — Loading home page")
             t0 = time.time()
-            page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+            _goto_ready(page, "https://gajab.com/", timeout=NAV_TIMEOUT)
             duration = int((time.time() - t0) * 1000)
             title = page.title()
             has_gajab = "Gajab" in title or "gajab" in title.lower()
@@ -1153,8 +1176,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
 
                 # First go to home page to access nav
                 try:
-                    page.goto("https://gajab.com/", timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-                    page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+                    _goto_ready(page, "https://gajab.com/", timeout=NAV_TIMEOUT)
                     time.sleep(1)
                 except Exception:
                     pass
@@ -1199,8 +1221,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     # Fallback: navigate directly
                     log(f"  Nav click failed, falling back to URL: {cat['url']}")
                     try:
-                        page.goto(cat["url"], timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-                        page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+                        _goto_ready(page, cat["url"], timeout=NAV_TIMEOUT)
                     except Exception:
                         pass
 
@@ -1218,7 +1239,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     log(f"  {cat_name}: no products found, retrying once...")
                     try:
                         page.reload(timeout=NAV_TIMEOUT)
-                        page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT)
+                        pass  # networkidle never settles with polling/analytics beacons
                         product_count = _wait_for_products(page, min_count=1, timeout_s=10)
                         has_products = product_count > 0
                         duration = int((time.time() - t0) * 1000)
@@ -1276,8 +1297,7 @@ def _run_platform_flow(platform: str) -> list[dict]:
             # Step 3: Product detail page
             log("Step 3 — Loading product detail page")
             t0 = time.time()
-            page.goto(product_url, timeout=NAV_TIMEOUT, wait_until="domcontentloaded")
-            page.wait_for_load_state("load", timeout=PAGE_TIMEOUT)
+            _goto_ready(page, product_url, timeout=NAV_TIMEOUT)
             time.sleep(1)
             duration = int((time.time() - t0) * 1000)
             # Wait for #varient-price to appear (up to 15s)
