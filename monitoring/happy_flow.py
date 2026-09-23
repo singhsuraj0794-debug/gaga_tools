@@ -739,12 +739,20 @@ def _do_checkout_flow(page, results: list):
         sub_steps.append({"check": "pay_button_click", "status": "degraded",
                           "detail": "no bargain with an available Pay button this run"})
 
+    checkout_verdict = (
+        "gateway opened" if (razorpay_found and pay_was_clicked)
+        else "correctly gated — bargain pending, Pay not expected yet" if bargain_in_progress
+        else "Pay clicked but no gateway detected" if pay_was_clicked
+        else "no accepted bargain with a Pay button this run"
+    )
     results.append({
         "step": _STEP_PREFIX + "checkout_flow",
         "duration_ms": duration,
         "status": checkout_status,
         "sub_steps": sub_steps,
-        "detail": f"Checkout: timer={timer_found}, Pay={pay_was_clicked}, Razorpay={'found' if razorpay_found else 'not found'}, Bargain={'in-progress' if bargain_in_progress else 'won'}",
+        "detail": (f"{checkout_verdict} — timer={timer_found}, Pay clicked={pay_was_clicked}, "
+                   f"Razorpay={'found' if razorpay_found else 'not found'}, "
+                   f"bargain={'pending' if bargain_in_progress else 'accepted'}"),
         "screenshot": ss_after_pay or ss_bargains,
         "failure_reason": failure_reason,
     })
@@ -835,8 +843,15 @@ def _check_budget(budget_key: str, duration_ms: int, results: list):
     budget_sec = TIME_BUDGETS_SECONDS.get(budget_key)
     if budget_sec and duration_ms > budget_sec * 1000:
         log(f"BUDGET EXCEEDED: {budget_key} took {duration_ms}ms (budget: {budget_sec * 1000}ms)")
+        # Slow, not broken: keep the verdict visible and record the overrun
+        # explicitly, so a passing step downgraded for time is not mistaken for
+        # a functional failure in the dashboard.
         results[-1]["status"] = "degraded"
         results[-1]["budget_exceeded"] = {"budget_ms": budget_sec * 1000, "actual_ms": duration_ms}
+        results[-1]["detail"] = (
+            f"SLOW: {duration_ms/1000:.1f}s vs {budget_sec}s budget — "
+            f"assertions passed. {results[-1].get('detail', '')}"
+        )
 
 
 _SESSION_FILE = Path(__file__).parent / ".gajab_session.json"
