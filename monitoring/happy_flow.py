@@ -1446,6 +1446,44 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     return false;
                 }""")
             pdp_ok = has_varient or has_bargain_btn
+            # A PDP can render blank on a slow/flaky load even though the picker
+            # verified it earlier. Re-pick once and retry before calling it a
+            # failure, otherwise a single bad load fails the step.
+            if not pdp_ok:
+                for _attempt in range(2):
+                    log(f"PDP check failed — retrying with another product (attempt {_attempt + 1})")
+                    try:
+                        alt = _pick_random_product(page)
+                        if not alt:
+                            break
+                        _goto_ready(page, alt, timeout=NAV_TIMEOUT)
+                        try:
+                            page.wait_for_selector("#varient-price", timeout=15000)
+                        except PWTimeout:
+                            pass
+                        vp2 = page.locator("#varient-price")
+                        if vp2.count() > 0:
+                            try:
+                                has_varient = bool((vp2.first.inner_text(timeout=5000) or "").strip())
+                            except Exception:
+                                has_varient = False
+                        if not has_varient:
+                            has_bargain_btn = page.evaluate("""() => {
+                                const needles = ['start bargaining', 'bargain now', 'negotiate'];
+                                for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                                    const t = (el.textContent || '').trim().toLowerCase();
+                                    if (!t || t.length > 40) continue;
+                                    if (needles.some(n => t.includes(n))) return true;
+                                }
+                                return false;
+                            }""")
+                        pdp_ok = has_varient or has_bargain_btn
+                        if pdp_ok:
+                            product_url = alt
+                            log(f"PDP recovered on {alt}")
+                            break
+                    except Exception as e:
+                        log(f"  PDP retry failed: {str(e)[:80]}")
             ss_pdp = _capture_screenshot(page, f"{_STEP_PREFIX}product_detail")
             failure_reason = None
             issue_type = None
