@@ -481,6 +481,74 @@ REPRO: dict[str, dict] = {
         ],
     },
 
+    # ── Web/mweb step names as emitted by run_monitor (platform-prefixed) ──
+    "checkout_flow": {
+        "owner": "web",
+        "expected": (
+            "From My Bargains an accepted bargain exposes Pay, and Pay opens the "
+            "Razorpay gateway. A bargain still awaiting seller acceptance is "
+            "correctly gated (no Pay) and still counts as PASS."
+        ),
+        "repro": [
+            "Log in on https://gajab.com/ and open https://gajab.com/my-bargains.",
+            "Find a bargain whose status is ACCEPTED (a pending one has no Pay by design).",
+            "Click Pay and confirm the Razorpay modal opens with UPI.",
+            "If every bargain is still pending, Pay will legitimately be absent — that is expected, not a bug.",
+        ],
+    },
+    "product_detail_load": {
+        "owner": "web",
+        "expected": "A product detail page opens with #varient-price and a tappable 'Start Bargaining' CTA.",
+        "repro": [
+            "Open any category on https://gajab.com/ and click a product.",
+            "Confirm the PDP shows the price block and the 'Start Bargaining' button.",
+            "Some listings have no bargain CTA (not bargainable) — the flow retries with another product.",
+        ],
+    },
+    "home_products_populate": {
+        "owner": "web",
+        "expected": "The home page product grid populates with cards.",
+        "repro": [
+            "Open https://gajab.com/ in a fresh incognito window.",
+            "Confirm product cards render in the first grid.",
+            "An empty grid means the feed API returned nothing.",
+        ],
+    },
+    "category_all_load": {
+        "owner": "web",
+        "expected": "https://gajab.com/product-list/all lists products within the time budget.",
+        "repro": [
+            "Open https://gajab.com/product-list/all.",
+            "Confirm products render; note how long the grid takes to appear.",
+            "Slow loads here are usually the heavy background SVGs / blocking JS.",
+        ],
+    },
+    "category_load": {
+        "owner": "web",
+        "expected": "A category listing loads and its product grid populates within the time budget.",
+        "repro": [
+            "Open any category, e.g. https://gajab.com/product-list/toys-games.",
+            "Confirm the grid renders and note the load time.",
+        ],
+    },
+    "page_my_bargains": {
+        "owner": "web",
+        "expected": "https://gajab.com/my-bargains loads the user's bargains while logged in.",
+        "repro": [
+            "Log in and open https://gajab.com/my-bargains.",
+            "Confirm bargain cards render.",
+            "A redirect to login means the stored session expired.",
+        ],
+    },
+    "page_alerts_orders": {
+        "owner": "web",
+        "expected": "The alerts and orders pages load their lists while logged in.",
+        "repro": [
+            "Log in and open https://gajab.com/alerts-list, then the orders page.",
+            "Confirm both lists render.",
+        ],
+    },
+
     # ── Monitor meta ───────────────────────────────────────────────────────
     "monitor_total_duration_ms": {
         "owner": "infra",
@@ -548,6 +616,16 @@ def lookup(step: str) -> dict:
     matches = [k for k in REPRO if k.lower() in low]
     if matches:
         return REPRO[max(matches, key=len)]
+    # Dynamic step names, e.g. "mweb_category_toys-games_load" — the slug is
+    # per-run, so collapse "category_<slug>_load" to the registry key
+    # "category_load".
+    import re as _re
+    collapsed = _re.sub(r"category_[a-z0-9\-]+_load", "category_load", low)
+    if collapsed in REPRO:
+        return REPRO[collapsed]
+    collapsed2 = _re.sub(r"_toys-games_", "_", low)
+    if collapsed2 in REPRO:
+        return REPRO[collapsed2]
     return {}
 
 
