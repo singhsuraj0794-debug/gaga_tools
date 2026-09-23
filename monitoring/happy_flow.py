@@ -1362,19 +1362,42 @@ def _run_platform_flow(platform: str) -> list[dict]:
             try:
                 _do_bargain_flow(page, results)
             except Exception as e:
-                log(f"Bargain flow error (continuing): {e}")
-                ss = _capture_screenshot(page, f"{_STEP_PREFIX}bargain_failed")
-                session_expired = _detect_session_expired(page)
-                results.append({
-                    "step": _STEP_PREFIX + "bargain_flow",
-                    "duration_ms": 0,
-                    "status": "fail",
-                    "detail": f"Bargain flow failed: {e}",
-                    "failure_reason": str(e)[:200],
-                    "screenshot": ss,
-                    "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
-                    "issue_type": "infra" if session_expired else "product",
-                })
+                # The bargain CTA is flaky per product: a listing can have
+                # #varient-price (so the PDP step passes) yet not render the
+                # button. Rather than failing the step outright, re-pick another
+                # product and retry — the second attempt is a genuine check.
+                retried = False
+                for attempt in range(2):
+                    log(f"Bargain flow retry {attempt + 1}: re-picking a product ({e})")
+                    try:
+                        alt = _pick_random_product(page)
+                        if not alt:
+                            break
+                        _goto_ready(page, alt, timeout=NAV_TIMEOUT)
+                        time.sleep(1)
+                        for _ in range(3):
+                            page.keyboard.press("Escape")
+                            time.sleep(0.3)
+                        _do_bargain_flow(page, results)
+                        retried = True
+                        break
+                    except Exception as e2:
+                        e = e2
+                        continue
+                if not retried:
+                    log(f"Bargain flow error (continuing): {e}")
+                    ss = _capture_screenshot(page, f"{_STEP_PREFIX}bargain_failed")
+                    session_expired = _detect_session_expired(page)
+                    results.append({
+                        "step": _STEP_PREFIX + "bargain_flow",
+                        "duration_ms": 0,
+                        "status": "fail",
+                        "detail": f"Bargain flow failed: {e}",
+                        "failure_reason": str(e)[:200],
+                        "screenshot": ss,
+                        "console_errors": [c for c in console_errors if c["type"] == "error"][:5],
+                        "issue_type": "infra" if session_expired else "product",
+                    })
 
             # Step 5: Checkout + Razorpay payment gateway check
             try:
