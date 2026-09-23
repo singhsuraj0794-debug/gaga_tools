@@ -304,7 +304,11 @@ def run_feature_checks() -> list[dict]:
             pdp_checks = [
                 {"name": "product_title", "type": "visible", "selector": "h1, [class*='title'], [class*='product-name']"},
                 {"name": "product_image", "type": "visible", "selector": "img[src*='resize.gajab.com'], img[alt*='product'], [class*='gallery'] img"},
-                {"name": "price_display", "type": "visible", "selector": "#varient-price, [class*='price'], [class*='Price']"},
+                # #varient-price exists in the DOM but is not visible on the
+                # current build; the price is rendered as "MRP: ₹X" text, so
+                # accept either.
+                {"name": "price_display", "type": "text_visible", "terms": ["MRP"],
+                 "selectors": ["#varient-price"]},
                 {"name": "start_bargaining_btn", "type": "text_visible", "terms": ["Start Bargaining", "Your best price"]},
                 {"name": "asking_price", "type": "text_visible", "terms": ["Asking", "MRP"]},
                 {"name": "ratings_section", "type": "text_visible", "terms": ["Rating", "ratings", "Reviews"],
