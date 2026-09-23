@@ -617,15 +617,13 @@ def lookup(step: str) -> dict:
     if matches:
         return REPRO[max(matches, key=len)]
     # Dynamic step names, e.g. "mweb_category_toys-games_load" — the slug is
-    # per-run, so collapse "category_<slug>_load" to the registry key
-    # "category_load".
+    # per-run, so collapse any "category_<slug>_load" (with or without a
+    # platform prefix) to the registry key "category_load".
     import re as _re
-    collapsed = _re.sub(r"category_[a-z0-9\-]+_load", "category_load", low)
-    if collapsed in REPRO:
-        return REPRO[collapsed]
-    collapsed2 = _re.sub(r"_toys-games_", "_", low)
-    if collapsed2 in REPRO:
-        return REPRO[collapsed2]
+    for cand in (low, *(low[len(p):] for p in _PREFIXES if low.startswith(p))):
+        collapsed = _re.sub(r"category_[a-z0-9\-]+_load", "category_load", cand)
+        if collapsed in REPRO:
+            return REPRO[collapsed]
     return {}
 
 
