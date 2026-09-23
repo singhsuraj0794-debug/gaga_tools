@@ -119,32 +119,82 @@ function Screenshot({ base64, url, label }: { base64?: string; url?: string; lab
   );
 }
 
-function MetricRow({ metric, value, status, detail, tip }: {
+function MetricRow({ metric, value, status, detail, tip, plan }: {
   metric: string; value: number | null; status: string;
   detail?: React.ReactNode; tip?: string;
+  plan?: { expected?: string; observed?: string; owner?: string; repro?: string };
 }) {
+  const [showPlan, setShowPlan] = useState(false);
+  const notPassing = status !== "pass";
+  const hasPlan = !!(plan && (plan.expected || plan.repro));
   return (
-    <div className="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-b-0 text-sm">
-      <span className="text-slate-600 flex items-center gap-0.5">
-        {metric.replace(/_/g, " ")}
-        {tip && <InfoTip text={tip} />}
-      </span>
-      <div className="flex items-center gap-2">
-        <Val metric={metric} value={value} />
-        <Badge status={status} />
+    <div className="py-1.5 border-b border-slate-100 last:border-b-0 text-sm">
+      <div className="flex items-center justify-between">
+        <span className="text-slate-600 flex items-center gap-0.5">
+          {metric.replace(/_/g, " ")}
+          {tip && <InfoTip text={tip} />}
+        </span>
+        <div className="flex items-center gap-2">
+          {hasPlan && (
+            <button type="button" onClick={() => setShowPlan(v => !v)}
+              className="text-[10px] px-1.5 py-0.5 rounded border border-slate-200 text-slate-500 hover:bg-slate-50"
+              title="Show check plan / how to reproduce">
+              {notPassing ? "why?" : "plan"} {showPlan ? "▾" : "▸"}
+            </button>
+          )}
+          <Val metric={metric} value={value} />
+          <Badge status={status} />
+        </div>
       </div>
+      {detail}
+      {hasPlan && showPlan && (
+        <div className="mt-1 p-2 bg-slate-50 border border-slate-200 rounded text-xs">
+          <div className="flex items-center gap-2 flex-wrap mb-0.5">
+            <span className="font-medium text-slate-700">
+              {notPassing ? "🧪 Explainable failure" : "📋 Check plan"}
+            </span>
+            {plan?.owner && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-purple-50 text-purple-700 border border-purple-200">
+                OWNER: {String(plan.owner).toUpperCase()}
+              </span>
+            )}
+          </div>
+          {notPassing && plan?.observed && (
+            <div className="text-slate-800"><span className="font-medium">Observed (why it failed):</span> {plan.observed}</div>
+          )}
+          {plan?.expected && (
+            <div className="mt-0.5 text-slate-700"><span className="font-medium">Expected:</span> {plan.expected}</div>
+          )}
+          {!notPassing && plan?.observed && (
+            <div className="mt-0.5 text-slate-700"><span className="font-medium">Observed:</span> {plan.observed}</div>
+          )}
+          {plan?.repro && (
+            <div className="mt-1 text-slate-600">
+              <span className="font-medium">🔁 Steps to reproduce / plan of action:</span>
+              <ol className="list-decimal pl-5 mt-0.5 space-y-0.5">
+                {String(plan.repro).split("\n").map((line, i) => (
+                  <li key={i}>{line.replace(/^\s*\d+\.\s*/, "")}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: React.ReactNode }) {
   const [showConsole, setShowConsole] = useState(false);
-  // Explainable failure info — either stored at the top level (Android) or
-  // nested under rca (web/mweb).
+  const [showPlan, setShowPlan] = useState(false);
+  // Explainable failure info — either stored at the top level (Android/web) or
+  // nested under rca (older rows).
   const expected = run.details?.expected || run.details?.rca?.expected;
   const observed = run.details?.observed;
   const owner = run.details?.owner || run.details?.rca?.owner;
   const repro = run.details?.repro || run.details?.rca?.repro;
+  const notPassing = run.status !== "pass";
+  const hasPlan = !!(expected || repro);
   return (
     <Card className={`border-l-4 ${run.status === "fail" ? "border-l-red-500" : run.status === "degraded" ? "border-l-yellow-500" : "border-l-green-500"}`}>
       <CardContent className="p-3 sm:p-4">
@@ -190,35 +240,53 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
                 )}
               </div>
             )}
-            {(expected || observed || repro) && run.status !== "pass" && (
-              <div className="mt-1.5 p-2 bg-slate-50 border border-slate-200 rounded text-xs">
-                <div className="flex items-center gap-2 flex-wrap mb-1">
-                  <span className="font-medium text-slate-700">🧪 Explainable failure</span>
+            {(expected || observed || repro) && (
+              <div className={`mt-1.5 p-2 rounded text-xs border ${
+                notPassing ? "bg-slate-50 border-slate-200" : "bg-slate-50/60 border-slate-100"
+              }`}>
+                <button
+                  type="button"
+                  onClick={() => setShowPlan(v => !v)}
+                  className="flex items-center gap-2 flex-wrap w-full text-left"
+                >
+                  <span className="font-medium text-slate-700">
+                    {notPassing ? "🧪 Explainable failure" : "📋 Check plan"}
+                  </span>
                   {owner && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-purple-50 text-purple-700 border border-purple-200">
                       OWNER: {String(owner).toUpperCase()}
                     </span>
                   )}
-                </div>
-                {observed && (
-                  <div className="text-slate-700">
-                    <span className="font-medium">Observed:</span> {observed}
+                  <span className="text-slate-400 ml-auto">{showPlan ? "▾" : "▸"}</span>
+                </button>
+                {notPassing && observed && (
+                  <div className="text-slate-800 mt-1">
+                    <span className="font-medium">Observed (why it failed):</span> {observed}
                   </div>
                 )}
-                {expected && (
-                  <div className="mt-0.5 text-slate-700">
-                    <span className="font-medium">Expected:</span> {expected}
-                  </div>
-                )}
-                {repro && (
-                  <div className="mt-1 text-slate-600">
-                    <span className="font-medium">🔁 Steps to reproduce:</span>
-                    <ol className="list-decimal pl-5 mt-0.5 space-y-0.5">
-                      {String(repro).split("\n").map((line, i) => (
-                        <li key={i}>{line.replace(/^\s*\d+\.\s*/, "")}</li>
-                      ))}
-                    </ol>
-                  </div>
+                {showPlan && (
+                  <>
+                    {expected && (
+                      <div className="mt-1 text-slate-700">
+                        <span className="font-medium">Expected:</span> {expected}
+                      </div>
+                    )}
+                    {!notPassing && observed && (
+                      <div className="mt-0.5 text-slate-700">
+                        <span className="font-medium">Observed:</span> {observed}
+                      </div>
+                    )}
+                    {repro && (
+                      <div className="mt-1 text-slate-600">
+                        <span className="font-medium">🔁 Steps to reproduce / plan of action:</span>
+                        <ol className="list-decimal pl-5 mt-0.5 space-y-0.5">
+                          {String(repro).split("\n").map((line, i) => (
+                            <li key={i}>{line.replace(/^\s*\d+\.\s*/, "")}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -291,7 +359,12 @@ function GroupMetrics({ runs, title, icon }: { runs: Run[]; title: string; icon:
         <span className="text-xs text-slate-400">{unique.length} metrics</span>
       </div>
       {unique.map(r => (
-        <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} tip={METRIC_INFO[r.metric]} />
+        <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status}
+          tip={METRIC_INFO[r.metric]}
+          plan={{ expected: r.details?.expected || r.details?.rca?.expected,
+                  observed: r.details?.observed,
+                  owner: r.details?.owner || r.details?.rca?.owner,
+                  repro: r.details?.repro || r.details?.rca?.repro }} />
       ))}
     </SectionCard>
   );
@@ -535,7 +608,14 @@ export default function MonitoringDashboard() {
                           <span className="text-sm font-medium text-slate-700 capitalize">{p.replace(/_/g, " ")}</span>
                           <Badge status={st} />
                         </div>
-                        {unique.map(r => <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} tip={METRIC_INFO[r.metric]} />)}
+                        {unique.map(r => (
+                          <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status}
+                            tip={METRIC_INFO[r.metric]}
+                            plan={{ expected: r.details?.expected || r.details?.rca?.expected,
+                                    observed: r.details?.observed,
+                                    owner: r.details?.owner || r.details?.rca?.owner,
+                                    repro: r.details?.repro || r.details?.rca?.repro }} />
+                        ))}
                       </div>
                     );
                   })}
@@ -561,7 +641,11 @@ export default function MonitoringDashboard() {
                             <Badge status={endpointRuns.some(r => r.status === "fail") ? "fail" : endpointRuns.some(r => r.status === "degraded") ? "degraded" : "pass"} />
                           </div>
                           {endpointRuns.map(r => (
-                            <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} />
+                            <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status}
+                              plan={{ expected: r.details?.expected || r.details?.rca?.expected,
+                                      observed: r.details?.observed,
+                                      owner: r.details?.owner || r.details?.rca?.owner,
+                                      repro: r.details?.repro || r.details?.rca?.repro }} />
                           ))}
                         </div>
                       ))}
@@ -587,7 +671,11 @@ export default function MonitoringDashboard() {
                             <Badge status={endpointRuns.some(r => r.status === "fail") ? "fail" : endpointRuns.some(r => r.status === "degraded") ? "degraded" : "pass"} />
                           </div>
                           {endpointRuns.map(r => (
-                            <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status} />
+                            <MetricRow key={r.metric} metric={r.metric} value={r.value} status={r.status}
+                              plan={{ expected: r.details?.expected || r.details?.rca?.expected,
+                                      observed: r.details?.observed,
+                                      owner: r.details?.owner || r.details?.rca?.owner,
+                                      repro: r.details?.repro || r.details?.rca?.repro }} />
                           ))}
                         </div>
                       ))}

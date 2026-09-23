@@ -233,6 +233,89 @@ REPRO: dict[str, dict] = {
             "A non-200 or timeout means the API/edge is down.",
         ],
     },
+    # Server-health endpoints (server_health.HEALTH_ENDPOINTS)
+    "gajab.com (main)": {
+        "owner": "web",
+        "expected": "The gajab.com homepage returns HTTP 200 within the latency budget.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code} %{time_total}s\\n' https://gajab.com/",
+            "Open https://gajab.com/ in an incognito window and confirm it renders.",
+            "If slow, check the origin/CDN (Cloudflare) and the backend logs.",
+        ],
+    },
+    "gajab.com (category)": {
+        "owner": "web",
+        "expected": "The category listing returns HTTP 200 within the latency budget.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code} %{time_total}s\\n' https://gajab.com/product-list/all",
+            "Open https://gajab.com/product-list/all and confirm products render.",
+        ],
+    },
+    "gatewayservice.gajab.com": {
+        "owner": "api",
+        "expected": "The gateway service product API returns HTTP 200 within the latency budget.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code} %{time_total}s\\n' 'https://gatewayservice.gajab.com/product/api/product-store/product/prestige-pvc-80-veggie-cutter-with-3-stainless-steel-blades-jumbo-bowl-black/4305598878914?pincode=400001'",
+            "A 5xx means the product-store backend is failing; check its logs.",
+        ],
+    },
+    "resize.gajab.com (CDN)": {
+        "owner": "infra",
+        "expected": "The image CDN serves images with HTTP 200 within the latency budget.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code} %{time_total}s\\n' https://resize.gajab.com/storeLogo/Gajab_og_banner_1770188098122.jpeg",
+            "If it 5xx's, images across the site break — check the resize/CDN service.",
+        ],
+    },
+    # API monitor endpoints (api_monitor.API_ENDPOINTS)
+    "Home Page (gajab.com": {
+        "owner": "web",
+        "expected": "The homepage responds 200 with the expected page content.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code}\\n' https://gajab.com/",
+            "Open https://gajab.com/ and confirm the page renders for a logged-out user.",
+        ],
+    },
+    "Category Page (gajab.com": {
+        "owner": "web",
+        "expected": "The category page responds 200 with the expected page content.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code}\\n' https://gajab.com/product-list/all",
+            "Open the category page and confirm the product grid loads.",
+        ],
+    },
+    "Gateway Service (gatewayservice": {
+        "owner": "api",
+        "expected": "The gateway OTP/product endpoints respond successfully.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code}\\n' https://gatewayservice.gajab.com/customer/api/customer/mobile-send-otp-new",
+            "A 5xx means the gateway backend is down — check its logs and the upstream DB.",
+        ],
+    },
+    "Product Store API (gateway)": {
+        "owner": "api",
+        "expected": "The product-store API returns product JSON for a valid product + pincode.",
+        "repro": [
+            "curl -sS 'https://gatewayservice.gajab.com/product/api/product-store/product/prestige-pvc-80-veggie-cutter-with-3-stainless-steel-blades-jumbo-bowl-black/4305598878914?pincode=400001'",
+            "An empty body or 5xx means the product-store service or its DB is failing.",
+        ],
+    },
+    "Image CDN (resize.gajab.com)": {
+        "owner": "infra",
+        "expected": "The image CDN returns the image with HTTP 200.",
+        "repro": [
+            "curl -sS -o /dev/null -w '%{http_code}\\n' https://resize.gajab.com/storeLogo/Gajab_og_banner_1770188098122.jpeg",
+            "A 5xx here breaks every product image on the site.",
+        ],
+    },
+    "healthz": {
+        "owner": "api",
+        "expected": "The API server answers its health check.",
+        "repro": [
+            "curl -sS https://gajab.com/api/healthz",
+            "A non-200 or timeout means the API/edge is down.",
+        ],
+    },
     "products_status": {
         "owner": "api",
         "expected": "The products status endpoint reports a healthy catalogue.",
@@ -269,21 +352,62 @@ def _repro_text(steps: Iterable[str]) -> str:
     return "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))
 
 
-def explain(step: str, status: str, observed: str = "") -> dict:
-    """Build the explainable fields for a monitor result.
+_PREFIXES = ("mweb_", "web_", "android_", "happy_flow_", "native_", "server_", "api_")
 
-    Returns a dict with `expected`, `observed`, `owner` and `repro` (a
-    human-readable numbered list). Unknown steps fall back to generic steps.
+
+def lookup(step: str) -> dict:
+    """Find the registry entry for a step, tolerating platform/flow prefixes.
+
+    Step names arrive as `home_load`, `mweb_home_load`, `android_home_load`,
+    `happy_flow_checkout_nav`, `api_Home Page` ... so try the exact key first,
+    then strip known prefixes, then fall back to the longest registry key
+    contained in the name.
     """
-    meta = REPRO.get(step) or {}
-    expected = meta.get("expected") or GENERIC_EXPECTED
+    if not step:
+        return {}
+    if step in REPRO:
+        return REPRO[step]
+    low = step.lower()
+    for prefix in _PREFIXES:
+        if low.startswith(prefix):
+            candidate = low[len(prefix):]
+            if candidate in REPRO:
+                return REPRO[candidate]
+    # strip every prefix combination (e.g. "mweb_checkout_nav")
+    for prefix in _PREFIXES:
+        low2 = low[len(prefix):] if low.startswith(prefix) else low
+        if low2 in REPRO:
+            return REPRO[low2]
+    matches = [k for k in REPRO if k.lower() in low]
+    if matches:
+        return REPRO[max(matches, key=len)]
+    return {}
+
+
+def template(step: str) -> dict:
+    """The checkpoint template — what it verifies and how to reproduce it.
+
+    Always returned (generic fallback for unknown steps) so the dashboard can
+    show a plan of action for EVERY checkpoint, not just the failing ones.
+    """
+    meta = lookup(step)
     steps = meta.get("repro") or GENERIC_REPRO
-    payload = {
-        "expected": expected,
-        "observed": observed or "(not captured)",
+    return {
+        "expected": meta.get("expected") or GENERIC_EXPECTED,
         "owner": meta.get("owner", DEFAULT_OWNER),
         "repro": _repro_text(steps),
     }
+
+
+def explain(step: str, status: str, observed: str = "") -> dict:
+    """Build the explainable fields for a monitor result.
+
+    Returns `expected`, `observed`, `owner` and `repro` (a numbered list), and
+    `explainable` only when the step did not pass. Unknown steps fall back to
+    generic steps so every checkpoint has a plan of action.
+    """
+    payload = template(step)
+    payload["observed"] = observed or "(not captured)"
     if status not in ("pass",):
         payload["explainable"] = True
     return payload

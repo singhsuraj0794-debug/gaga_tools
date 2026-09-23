@@ -10,6 +10,7 @@ from api_monitor import monitor_apis
 from supabase_client import SupabaseStore
 from slack_alert import send_alert
 from rca import generate_rca, format_rca_for_slack
+from repro import explain
 
 
 def explain_details(rca: dict, observed: str = "") -> dict:
@@ -58,11 +59,12 @@ def main():
     print("\n--- Server Health ---", flush=True)
     health_results = check_server_health() if RUN_HEALTH else []
     for r in health_results:
+        h_observed = (f"{r['service']}: {r.get('error')}" if r.get("error")
+                      else f"{r['duration_ms']}ms, HTTP {r.get('status_code', 'ok')}")
+        r_details = explain(f"server_{r['service']}", r["status"], h_observed)
+        rca = None
         if r["status"] == "fail":
-            rca = generate_rca(f"server_{r['service']}", f"{r['service']}: {r.get('error', 'unreachable')}")
-            r_details = explain_details(rca, f"{r['service']}: {r.get('error', 'unreachable')}")
-        else:
-            rca, r_details = None, None
+            rca = generate_rca(f"server_{r['service']}", h_observed)
         store.store_result(
             page_or_flow=f"server/{r['service']}",
             metric="response_time_ms",
@@ -80,12 +82,9 @@ def main():
     print("\n--- API Monitoring ---", flush=True)
     api_results = monitor_apis() if RUN_HEALTH else []
     for r in api_results:
-        a_rca = None
-        a_details = None
-        if r["status"] != "pass":
-            a_observed = f"HTTP {r.get('status_code')} | {r['duration_ms']}ms | {r.get('error', '')}"
-            a_rca = generate_rca(f"api_{r['api']}", a_observed)
-            a_details = explain_details(a_rca, a_observed)
+        a_observed = f"HTTP {r.get('status_code')} | {r['duration_ms']}ms" + (f" | {r.get('error')}" if r.get("error") else "")
+        a_details = explain(f"api_{r['api']}", r["status"], a_observed)
+        a_rca = generate_rca(f"api_{r['api']}", a_observed) if r["status"] != "pass" else None
         store.store_result(
             page_or_flow=f"api/{r['api']}",
             metric="response_time_ms",
@@ -121,13 +120,17 @@ def main():
         print(f"  {page}: violations={violations} metrics={metrics}", flush=True)
         for metric_name, metric_value in metrics.items():
             metric_status = "fail" if metric_name in violated_metrics else "pass"
-            store.store_result(page_or_flow=page, metric=metric_name, value=metric_value, status=metric_status)
+            store.store_result(
+                page_or_flow=page, metric=metric_name, value=metric_value, status=metric_status,
+                details=explain(f"lighthouse_{metric_name}", metric_status,
+                                f"{metric_name}={metric_value}"),
+            )
         if violations:
             page_violations = [v for v in violations]
             for v in violations:
                 metric_key = v.split("=")[0] if "=" in v else v
                 rca = generate_rca(f"lighthouse_{metric_key}", v)
-                lh_details = explain_details(rca, f"{page}: {v}")
+                lh_details = explain(f"lighthouse_{metric_key}", "degraded", f"{page}: {v}")
                 store.store_result(page_or_flow=page, metric=metric_key, value=None,
                                    status="degraded", step_failed=v, details=lh_details)
                 failures.append(f"Lighthouse/{page}: {v}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
@@ -183,6 +186,13 @@ def main():
             "url": step.get("url"),
             "product_count": step.get("product_count"),
         }
+        # Checkpoint template + real reason. Every step carries the plan of
+        # action (what it verifies, how to reproduce); the observed reason is
+        # filled in with the actual outcome, so the dashboard shows "where it
+        # failed and why" without needing a separate lookup.
+        _observed = (error or failure_reason or detail or
+                     ("ok" if step_status == "pass" else f"degraded ({duration}ms)"))
+        details.update(explain(step_name, step_status, str(_observed)[:400]))
         # Upload screenshot to Supabase Storage
         ss_path = screenshot.get("path")
         if ss_path:
@@ -219,11 +229,12 @@ def main():
         feature_results = []
     for r in feature_results:
         match_count = r.get("match_count")
+        f_observed = r.get("error") or (
+            f"Found {match_count}, expected >= {r.get('min',1)}" if match_count is not None else "element missing")
+        if r["status"] == "pass":
+            f_observed = f"Found {match_count} (min {r.get('min',1)})"
         f_details = {"check": r["check"], "check_type": r.get("check_type","visible"), "match_count": match_count, "min_expected": r.get("min")}
-        if r["status"] != "pass":
-            f_observed = r.get("error") or (f"Found {match_count}, expected >= {r.get('min',1)}" if match_count is not None else "element missing")
-            f_rca = generate_rca(f"feature_{r['check']}", f_observed)
-            f_details.update(explain_details(f_rca, f_observed))
+        f_details.update(explain(f"feature_{r['check']}", r["status"], f_observed))
         store.store_result(
             page_or_flow=f"feature/{r['page']}",
             metric=f"elem_{r['check']}_{r.get('check_type','visible')}",
