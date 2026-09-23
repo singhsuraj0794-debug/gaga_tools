@@ -215,6 +215,11 @@ def main():
             ss_url = store.upload_screenshot(ss_path, platform=platform or "")
             if ss_url:
                 details["screenshot_url"] = ss_url
+        # The page the screenshot was taken on — lets the dashboard show which
+        # flow/screen the image belongs to instead of an unattributed picture.
+        ss_page_url = screenshot.get("url") or step.get("url")
+        if ss_page_url:
+            details["url"] = ss_page_url
         # Attach the correct platform's video URL
         if platform and platform in video_urls and video_urls[platform]:
             details["session_recording_url"] = video_urls[platform]

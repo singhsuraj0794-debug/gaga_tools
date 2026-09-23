@@ -270,6 +270,13 @@ function StepCard({ run, stepName, icon }: { run: Run; stepName: string; icon: R
                     <span className="font-medium">Observed (why it failed):</span> {observed}
                   </div>
                 )}
+                {showPlan && run.details?.url && (
+                  <div className="mt-1 text-slate-700">
+                    <span className="font-medium">Page:</span>{" "}
+                    <a href={run.details.url} target="_blank" rel="noreferrer"
+                       className="text-blue-600 underline break-all">{run.details.url}</a>
+                  </div>
+                )}
                 {showPlan && (
                   <>
                     {expected && (

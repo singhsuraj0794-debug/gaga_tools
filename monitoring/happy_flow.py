@@ -131,10 +131,19 @@ import base64 as _base64
 import io as _io
 
 def _capture_screenshot(page, label: str) -> dict:
-    ts = datetime.now().strftime("%H%M%S")
+    # Millisecond precision: two captures of the same label within one second
+    # produced the SAME filename and the later one overwrote the earlier, so a
+    # step could end up showing another step's screenshot.
+    ts = datetime.now().strftime("%H%M%S_%f")
     path = _SCREENSHOT_DIR / f"{label}_{ts}.png"
-    result = {"path": None, "base64": None}
+    result = {"path": None, "base64": None, "url": None}
     try:
+        # Record the page the screenshot belongs to, so the dashboard can prove
+        # which flow/screen an image came from.
+        try:
+            result["url"] = page.url
+        except Exception:
+            pass
         buf = _io.BytesIO()
         page.screenshot(path=str(path), full_page=False)
         with open(path, "rb") as f:
@@ -142,7 +151,7 @@ def _capture_screenshot(page, label: str) -> dict:
         result["path"] = str(path)
         if len(raw) < 500000:
             result["base64"] = "data:image/png;base64," + _base64.b64encode(raw).decode()
-        log(f"Screenshot saved: {path} ({len(raw)}b)")
+        log(f"Screenshot saved: {path} ({len(raw)}b) url={result.get('url')}")
     except Exception as e:
         log(f"Screenshot failed: {e}")
     return result
@@ -218,31 +227,27 @@ def _do_bargain_flow(page, results: list):
 
     log("Step 4b — Locating & clicking Start Bargaining button")
     clicked = page.evaluate("""() => {
-        // Search the whole document (mobile renders the button outside #varient-price)
-        const roots = [document.getElementById('varient-price'), document.body].filter(Boolean);
-        let clicked_any = false;
-        const seen = new Set();
-        for (const root of roots) {
-            const btns = root.querySelectorAll('button, a');
-            for (const btn of btns) {
-                const t = (btn.textContent || '').trim().toLowerCase();
-                if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
-                    if (seen.has(btn)) continue;
-                    seen.add(btn);
-                    btn.removeAttribute('disabled');
-                    btn.scrollIntoView({behavior:'instant',block:'center'});
-                    const event = new MouseEvent('click', {
-                        view: window, bubbles: true, cancelable: true,
-                        clientX: btn.getBoundingClientRect().left + btn.offsetWidth / 2,
-                        clientY: btn.getBoundingClientRect().top + btn.offsetHeight / 2,
-                    });
-                    btn.dispatchEvent(event);
-                    clicked_any = true;
-                    break;
-                }
-            }
+        // Search the whole document. The current build puts 'Start Bargaining'
+        // on a div/span (and mobile renders it outside #varient-price), so
+        // querying only button,a missed it entirely.
+        const needles = ['start bargaining', 'bargain now', 'negotiate'];
+        const candidates = document.querySelectorAll('button, a, [role="button"], div, span');
+        for (const btn of candidates) {
+            const t = (btn.textContent || '').trim().toLowerCase();
+            if (!t || t.length > 40) continue;      // skip page-sized containers
+            if (!needles.some(n => t.includes(n))) continue;
+            btn.removeAttribute('disabled');
+            btn.scrollIntoView({behavior:'instant', block:'center'});
+            const r = btn.getBoundingClientRect();
+            const event = new MouseEvent('click', {
+                view: window, bubbles: true, cancelable: true,
+                clientX: r.left + r.width / 2,
+                clientY: r.top + r.height / 2,
+            });
+            btn.dispatchEvent(event);
+            return true;
         }
-        return clicked_any;
+        return false;
     }""")
 
     if not clicked:
@@ -762,17 +767,17 @@ def _pick_random_product(page) -> str | None:
     ]
 
     def _has_bargain_button() -> bool:
+        # The current build renders 'Start Bargaining' on a div/span (the feature
+        # check finds it with a text search over ALL elements), NOT on a
+        # <button>/<a>. Searching only button,a made this return False on a PDP
+        # that clearly had the button, so the picker reported
+        # 'No product found with bargain button' for every product.
         return bool(page.evaluate("""() => {
-            const vp = document.getElementById('varient-price');
-            const roots = [vp, document.body].filter(Boolean);
-            for (const root of roots) {
-                const btns = root.querySelectorAll('button, a');
-                for (const btn of btns) {
-                    const t = (btn.textContent || '').trim().toLowerCase();
-                    if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
-                        return true;
-                    }
-                }
+            const needles = ['start bargaining', 'bargain now', 'negotiate'];
+            for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (!t || t.length > 40) continue;   // skip containers wrapping the page
+                if (needles.some(n => t.includes(n))) return true;
             }
             return false;
         }"""))
