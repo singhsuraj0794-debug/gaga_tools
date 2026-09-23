@@ -658,10 +658,25 @@ def run_flow() -> list[dict]:
         buy_btn = None
         bargain_more = None
         bargain_state = ""
-        # Click the first bargain item to open its detail (won bargains show "Buy Now")
-        items = driver.find_elements("xpath", '//android.widget.ImageView[@content-desc != "" and @clickable="true"]')
-        if items:
-            items[0].click()
+        # Click the first bargain item to open its detail (won bargains show "Buy Now").
+        # The bargains list exposes testIDs (mybargain_product_tap_0 / mybargain_card_0)
+        # — the same ones the my_bargains check uses — so tap by testID first. The
+        # old ImageView[@clickable="true"] heuristic matched nothing on this build,
+        # which is why this step always reported "no tappable bargain item".
+        item = (find_desc(driver, "mybargain_product_tap_0", timeout=6) or
+                find_desc(driver, "mybargain_card_0", timeout=4) or
+                find_desc(driver, "mybargain_bargain_again_button", timeout=2))
+        if item is None:
+            items = driver.find_elements(
+                "xpath",
+                '//android.widget.ImageView[@content-desc != "" and @clickable="true"] | '
+                '//android.view.ViewGroup[@clickable="true" and @content-desc != ""]')
+            item = items[0] if items else None
+        if item is not None:
+            try:
+                tap_center(driver, item)
+            except Exception:
+                item.click()
             time.sleep(4)
             if find_desc(driver, "Bargain More", timeout=2) is not None:
                 bargain_state = "pending"      # offer awaiting seller acceptance
@@ -705,8 +720,10 @@ def run_flow() -> list[dict]:
             checkout_detail = "bargain awaiting seller acceptance (Bargain More) — checkout not reachable yet by design"
         elif bargain_state == "accepted":
             checkout_status, checkout_detail = "degraded", "bargain accepted but no Buy Now / checkout control appeared"
+        elif item is not None:
+            checkout_status, checkout_detail = "degraded", "bargain card opened but neither Buy Now, Bargain More nor checkout appeared"
         else:
-            checkout_status, checkout_detail = "fail", "no tappable bargain item in My Bargains"
+            checkout_status, checkout_detail = "fail", "no tappable bargain card in My Bargains (list did not render)"
 
         checkout_observed = (
             f"gateway={bool(gateway)}, checkout_page={bool(checkout_page)}, "
