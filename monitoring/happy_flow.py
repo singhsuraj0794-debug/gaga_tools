@@ -886,18 +886,17 @@ def _do_second_bargain(page, results: list):
     time.sleep(1)
 
     page.evaluate("""() => {
-        const roots = [document.getElementById('varient-price'), document.body].filter(Boolean);
-        for (const root of roots) {
-            const btns = root.querySelectorAll('button, a');
-            for (const btn of btns) {
-                const t = (btn.textContent || '').trim().toLowerCase();
-                if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) {
-                    btn.removeAttribute('disabled');
-                    btn.scrollIntoView();
-                    btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                    break;
-                }
-            }
+        // Same widening as the other CTA lookups: the button is a div/span on
+        // the current build, so 'button, a' alone finds nothing.
+        const needles = ['start bargaining', 'bargain now', 'negotiate'];
+        for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+            const t = (el.textContent || '').trim().toLowerCase();
+            if (!t || t.length > 40) continue;
+            if (!needles.some(n => t.includes(n))) continue;
+            el.removeAttribute('disabled');
+            el.scrollIntoView();
+            el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            break;
         }
     }""")
     time.sleep(3)
