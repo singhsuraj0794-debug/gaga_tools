@@ -126,28 +126,30 @@ def has_any_testid(driver, testids, timeout: int = 8) -> bool:
 
 
 def back_to_home(driver, tries: int = 8) -> bool:
-    """Return to the app's main screen from a PDP / detail screen.
+    """Return to the app's main screen from a PDP / category screen.
 
-    React Native keeps the bottom tab bar mounted, so the `dashboard_*_tab`
-    testIDs are present in the accessibility tree even while a product detail
-    page covers them. A presence check therefore said "already home" and the
-    flow never navigated — leaving the checkout step on a PDP and producing a
-    screenshot of a product page.
+    Two traps made this fail before:
+      1. React Native keeps the bottom tab bar mounted, so `dashboard_*_tab`
+         testIDs are present in the tree even when a product detail page covers
+         them — a presence check said "already home".
+      2. Backing out only until the PDP markers disappear stops one screen short
+         (the category listing), which has no bottom navigation at all.
 
-    Instead, back out while a PDP-only marker (the bargain CTA) is on screen.
+    So drive on HOME-ONLY content markers (the home category row / trending /
+    deals), which do not exist on the PDP or the category listing.
     """
-    pdp_markers = ("pdp_commonsheet_bargain_button", "Start Bargaining",
-                   "pdp_bargains_offer_your_price_button", "Your best price?")
+    home_markers = ("home_category_0_item", "trending_product_0_card",
+                    "gajab_deal_product_card", "home_profile_avatar_button",
+                    "home_banner_0_card", "home_category_1_item")
     for _ in range(tries):
-        on_pdp = any(find_desc(driver, m, timeout=1) is not None for m in pdp_markers)
-        if not on_pdp:
+        if has_any_testid(driver, home_markers, timeout=1):
             return True
         try:
             driver.back()
             time.sleep(1.0)
         except Exception:
             break
-    return not any(find_desc(driver, m, timeout=1) is not None for m in pdp_markers)
+    return has_any_testid(driver, home_markers, timeout=1)
 
 
 def find_visible_desc(driver, substring: str, timeout: int = 8):
@@ -651,6 +653,19 @@ def run_flow() -> list[dict]:
         back_to_home(driver)
         bargains_tab = find_visible_desc(driver, "dashboard_bargains_tab", timeout=8) or \
                        find_visible_desc(driver, "Bargains", timeout=5)
+        if bargains_tab is None:
+            # Safety net: home markers can also be mounted-but-hidden, so if the
+            # tab still isn't reachable, back out a few more screens and retry.
+            for _ in range(3):
+                try:
+                    driver.back()
+                    time.sleep(1.2)
+                except Exception:
+                    break
+                bargains_tab = find_visible_desc(driver, "dashboard_bargains_tab", timeout=3) or \
+                               find_visible_desc(driver, "Bargains", timeout=2)
+                if bargains_tab is not None:
+                    break
         if bargains_tab:
             bargains_tab.click()
             time.sleep(3)
@@ -663,9 +678,20 @@ def run_flow() -> list[dict]:
         # — the same ones the my_bargains check uses — so tap by testID first. The
         # old ImageView[@clickable="true"] heuristic matched nothing on this build,
         # which is why this step always reported "no tappable bargain item".
-        item = (find_desc(driver, "mybargain_product_tap_0", timeout=6) or
-                find_desc(driver, "mybargain_card_0", timeout=4) or
-                find_desc(driver, "mybargain_bargain_again_button", timeout=2))
+        item = None
+        # The bargains list can take a moment to render after the tab switch, so
+        # poll for the card instead of a single shot.
+        for _ in range(6):
+            item = (find_desc(driver, "mybargain_product_tap_0", timeout=3) or
+                    find_desc(driver, "mybargain_card_0", timeout=2) or
+                    find_desc(driver, "mybargain_bargain_again_button", timeout=1))
+            if item is not None:
+                break
+            try:
+                driver.swipe(540, 1600, 540, 900, 400)  # nudge the list
+            except Exception:
+                pass
+            time.sleep(1)
         if item is None:
             items = driver.find_elements(
                 "xpath",
