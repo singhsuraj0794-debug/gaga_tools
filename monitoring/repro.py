@@ -324,6 +324,108 @@ REPRO: dict[str, dict] = {
             "Compare the reported counts/staleness with the expected range.",
         ],
     },
+    # ── Feature element checks (monitoring/feature_checks.py) ──────────────
+    "site_logo": {
+        "owner": "web",
+        "expected": "The Gajab logo is visible in the header on every page.",
+        "repro": ["Open https://gajab.com/", "Confirm the logo shows in the top-left header."],
+    },
+    "search_icon": {
+        "owner": "web",
+        "expected": "A search control (icon or input) is visible in the header.",
+        "repro": ["Open https://gajab.com/", "Confirm the search icon/box is in the header and opens when clicked."],
+    },
+    "category_nav": {
+        "owner": "web",
+        "expected": "At least 3 category navigation entries are present.",
+        "repro": ["Open https://gajab.com/", "Count the category tiles/links in the category strip (expect >= 3)."],
+    },
+    "hero_banner": {
+        "owner": "web",
+        "expected": "The hero banner carousel renders with images.",
+        "repro": ["Open https://gajab.com/", "Confirm the top banner shows an image and auto-rotates."],
+    },
+    "product_grid": {
+        "owner": "web",
+        "expected": "At least 4 product cards render on the home page.",
+        "repro": ["Open https://gajab.com/", "Count product cards in the first grid (expect >= 4).", "An empty grid means the feed API returned nothing."],
+    },
+    "most_bargained_section": {
+        "owner": "web",
+        "expected": "The 'Most Bargained' section is present on the home page.",
+        "repro": ["Open https://gajab.com/", "Scroll to the 'Most Bargained' section and confirm cards render."],
+    },
+    "trending_section": {
+        "owner": "web",
+        "expected": "The 'Trending' section is present on the home page.",
+        "repro": ["Open https://gajab.com/", "Scroll to the 'Trending' section and confirm cards render."],
+    },
+    "footer_links": {
+        "owner": "web",
+        "expected": "The footer contains at least 3 links.",
+        "repro": ["Open https://gajab.com/", "Scroll to the footer and count the links (expect >= 3)."],
+    },
+    "login_button": {
+        "owner": "web",
+        "expected": "A login/sign-in entry point is visible when logged out.",
+        "repro": ["Open https://gajab.com/ in an incognito window.", "Confirm the Login / Account control is visible."],
+    },
+    "product_cards": {
+        "owner": "web",
+        "expected": "The category listing renders at least 6 product cards.",
+        "repro": ["Open https://gajab.com/product-list/all.", "Count the product cards (expect >= 6).", "Fewer means the listing API failed or paging broke."],
+    },
+    "filter_panel": {
+        "owner": "web",
+        "expected": "A Filters control is available on the category listing.",
+        "repro": ["Open https://gajab.com/product-list/all.", "Confirm a 'Filters' button is visible and opens a panel."],
+    },
+    "price_filter": {
+        "owner": "web",
+        "expected": "The filter panel offers price filtering.",
+        "repro": ["Open https://gajab.com/product-list/all.", "Click 'Filters' and confirm a Price control/range appears."],
+    },
+    "sort_dropdown": {
+        "owner": "web",
+        "expected": "A sort control (e.g. 'Relevance') is available on the category listing.",
+        "repro": ["Open https://gajab.com/product-list/all.", "Confirm the sort control shows 'Relevance' and opens a menu."],
+    },
+    "pagination": {
+        "owner": "web",
+        "expected": "The listing supports paging (pagination control or Load More).",
+        "repro": ["Open https://gajab.com/product-list/all.", "Scroll to the bottom and confirm pagination / Load More is present."],
+    },
+    "product_title": {
+        "owner": "web",
+        "expected": "The PDP shows the product title.",
+        "repro": ["Open any product detail page.", "Confirm the H1/title is present."],
+    },
+    "product_image": {
+        "owner": "web",
+        "expected": "The PDP shows the product gallery image from the CDN.",
+        "repro": ["Open any product detail page.", "Confirm the gallery image loads (resize.gajab.com)."],
+    },
+    "price_display": {
+        "owner": "web",
+        "expected": "The PDP shows the price.",
+        "repro": ["Open any product detail page.", "Confirm the price element (#varient-price) is visible."],
+    },
+    "start_bargaining_btn": {
+        "owner": "web",
+        "expected": "The PDP shows the 'Start Bargaining' call to action.",
+        "repro": ["Open any product detail page.", "Confirm the 'Start Bargaining' button is visible and clickable."],
+    },
+    "asking_price": {
+        "owner": "web",
+        "expected": "The PDP shows both MRP and the Asking price.",
+        "repro": ["Open any product detail page.", "Confirm 'MRP: ₹X' and 'Asking: ₹Y' are both shown."],
+    },
+    "ratings_section": {
+        "owner": "web",
+        "expected": "The PDP shows the ratings/reviews area (stars and/or a ratings count).",
+        "repro": ["Open any product detail page.", "Confirm the star row / ratings count renders.", "Note: the count text lives in a hidden container, so the check also accepts the star images."],
+    },
+
     # ── Monitor meta ───────────────────────────────────────────────────────
     "monitor_total_duration_ms": {
         "owner": "infra",

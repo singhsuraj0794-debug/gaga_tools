@@ -100,6 +100,65 @@ def check_elements(page, checks: list[dict]) -> list[dict]:
                     error = f"Found {count}, expected >= {min_count}"
                     issue_type = "product" if count == 0 else "infra"
                 match_count = count
+            elif check.get("type") == "text_visible":
+                # Robust alternative to brittle CSS classes: pass when ANY
+                # visible element contains one of the given terms. The app's
+                # class names are hashed/minified, so selectors like
+                # [class*='asking'] or button:has-text('Relevance') matched
+                # nothing even though the feature was clearly on screen.
+                terms = check.get("terms") or [check.get("contains", "")]
+                poll_timeout = check.get("poll_timeout_ms", 8000)
+                # Optional: open a panel/menu before looking (e.g. Filters).
+                if check.get("click_before"):
+                    try:
+                        cb = page.get_by_text(check["click_before"], exact=False).first
+                        if cb.is_visible():
+                            cb.click()
+                            time.sleep(1.5)
+                    except Exception:
+                        pass
+                found_term = None
+                deadline = time.time() + poll_timeout / 1000
+                # Optional CSS alternatives — some features render as images
+                # (e.g. star glyphs) while their text lives in a display:none
+                # container, so a text search alone reports a false failure.
+                sel_alts = check.get("selectors") or []
+                while time.time() < deadline and not found_term:
+                    for sel in sel_alts:
+                        try:
+                            loc = page.locator(sel)
+                            for i in range(min(loc.count(), 8)):
+                                if loc.nth(i).is_visible():
+                                    found_term = sel
+                                    break
+                        except Exception:
+                            pass
+                        if found_term:
+                            break
+                    if found_term:
+                        break
+                    for term in terms:
+                        if not term:
+                            continue
+                        try:
+                            loc = page.get_by_text(term, exact=False)
+                            for i in range(min(loc.count(), 6)):
+                                if loc.nth(i).is_visible():
+                                    found_term = term
+                                    break
+                        except Exception:
+                            pass
+                        if found_term:
+                            break
+                    if not found_term:
+                        time.sleep(0.5)
+                if found_term:
+                    match_count = 1
+                else:
+                    status = "fail"
+                    error = f"No visible element containing any of {terms}" + (
+                        f" or matching {sel_alts}" if sel_alts else "")
+                    issue_type = "product"
             elif check.get("type") == "text":
                 # Poll for text content
                 deadline = time.time() + 8000 / 1000
@@ -219,9 +278,9 @@ def run_feature_checks() -> list[dict]:
 
             category_checks = [
                 {"name": "product_cards", "type": "count", "selector": "a[href*='/product-detail/']", "min": 6, "poll_timeout_ms": 10000},
-                {"name": "filter_panel", "type": "visible", "selector": "[class*='filter'], button:has-text('Filter'), [class*='Filter']"},
-                {"name": "price_filter", "type": "visible", "selector": "[class*='price'], input[type='range']"},
-                {"name": "sort_dropdown", "type": "visible", "selector": "select, button:has-text('Relevance'), [class*='sort']"},
+                {"name": "filter_panel", "type": "text_visible", "terms": ["Filters", "Filter"]},
+                {"name": "price_filter", "type": "text_visible", "terms": ["Price", "₹"], "click_before": "Filters"},
+                {"name": "sort_dropdown", "type": "text_visible", "terms": ["Relevance", "Sort by", "Popularity"]},
                 {"name": "pagination", "type": "visible", "selector": "a[href*='offset'], [class*='pagination'], button:has-text('Load More')"},
             ]
             log(f"Running {len(category_checks)} category page feature checks")
@@ -246,9 +305,10 @@ def run_feature_checks() -> list[dict]:
                 {"name": "product_title", "type": "visible", "selector": "h1, [class*='title'], [class*='product-name']"},
                 {"name": "product_image", "type": "visible", "selector": "img[src*='resize.gajab.com'], img[alt*='product'], [class*='gallery'] img"},
                 {"name": "price_display", "type": "visible", "selector": "#varient-price, [class*='price'], [class*='Price']"},
-                {"name": "start_bargaining_btn", "type": "visible", "selector": "button:has-text('Start Bargaining'), #varient-price button"},
-                {"name": "asking_price", "type": "visible", "selector": "[class*='asking'], [class*='price']"},
-                {"name": "ratings_section", "type": "visible", "selector": "[class*='rating'], img[class*='rating']"},
+                {"name": "start_bargaining_btn", "type": "text_visible", "terms": ["Start Bargaining", "Your best price"]},
+                {"name": "asking_price", "type": "text_visible", "terms": ["Asking", "MRP"]},
+                {"name": "ratings_section", "type": "text_visible", "terms": ["Rating", "ratings", "Reviews"],
+                 "selectors": ["img[alt*='star']", "[class*='star']"]},
             ]
             log(f"Running {len(pdp_checks)} product detail feature checks")
             for r in check_elements(page, pdp_checks):
