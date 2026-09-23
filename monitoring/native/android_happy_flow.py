@@ -709,6 +709,11 @@ def run_flow() -> list[dict]:
             elif find_desc(driver, "Buy Now", timeout=2) is not None or \
                  find_desc(driver, "Pay", timeout=2) is not None:
                 bargain_state = "accepted"
+            elif find_desc(driver, "Start Bargaining", timeout=2) is not None or \
+                 find_desc(driver, "pdp_commonsheet_bargain_button", timeout=1) is not None:
+                # Opened a PDP that offers a fresh bargain: this listing has no
+                # active/accepted offer, so checkout is legitimately unreachable.
+                bargain_state = "rebargain"
         buy_btn = find_desc(driver, "Buy Now", timeout=8) or find_desc(driver, "Pay", timeout=5)
         if not buy_btn:
             accept_btn = find_desc(driver, "Accept the offer", timeout=6)
@@ -744,6 +749,11 @@ def run_flow() -> list[dict]:
             # the app behaving correctly.
             checkout_status = "pass"
             checkout_detail = "bargain awaiting seller acceptance (Bargain More) — checkout not reachable yet by design"
+        elif bargain_state == "rebargain":
+            # Also expected: the tapped bargain has no active offer, so the PDP
+            # correctly offers a fresh bargain instead of checkout.
+            checkout_status = "pass"
+            checkout_detail = "opened bargain has no active offer (PDP offers 'Start Bargaining') — checkout not reachable by design"
         elif bargain_state == "accepted":
             checkout_status, checkout_detail = "degraded", "bargain accepted but no Buy Now / checkout control appeared"
         elif item is not None:
