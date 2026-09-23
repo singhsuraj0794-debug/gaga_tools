@@ -324,6 +324,16 @@ REPRO: dict[str, dict] = {
             "Compare the reported counts/staleness with the expected range.",
         ],
     },
+    # ── Monitor meta ───────────────────────────────────────────────────────
+    "monitor_total_duration_ms": {
+        "owner": "infra",
+        "expected": "The whole monitoring cycle finishes within its time budget, with no failing checks.",
+        "repro": [
+            "Open the latest run in this dashboard and scan every checkpoint for FAIL/DEGRADED.",
+            "The 'observed' line lists how many issues this cycle found.",
+            "A long duration with all checks passing is normal on Lighthouse/feature runs.",
+        ],
+    },
     "price_mappings": {
         "owner": "api",
         "expected": "Price mappings endpoint returns data.",

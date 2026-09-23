@@ -270,12 +270,15 @@ def main():
     print(f"  Duration: {elapsed}ms", flush=True)
     print("=" * 60, flush=True)
 
+    overall_status = "degraded" if failures else "pass"
     store.store_result(
         page_or_flow="monitor",
         metric="total_duration_ms",
         value=float(elapsed),
-        status="degraded" if failures else "pass",
+        status=overall_status,
         duration_ms=elapsed,
+        details=explain("monitor_total_duration_ms", overall_status,
+                        f"{elapsed}ms total, {len(failures)} issue(s) this run"),
     )
     return 0
 
