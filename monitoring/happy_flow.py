@@ -486,7 +486,14 @@ def _do_checkout_flow(page, results: list):
     log("  Waiting for a Pay button to appear (won bargain needs time to settle)")
     pay_wait = 0
     for _ in range(12):
-        if page.locator("button:has-text('Pay'), button:has-text('Pay Now'), a:has-text('Pay')").count() > 0:
+        if page.evaluate("""() => {
+                const rx = /^pay( now)?(\\s*₹\\s*[\\d,]+)?$/i;
+                for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                    const t = (el.textContent || '').trim();
+                    if (t && t.length <= 24 && rx.test(t)) return true;
+                }
+                return false;
+            }"""):
             break
         time.sleep(2)
         pay_wait += 2
@@ -534,6 +541,30 @@ def _do_checkout_flow(page, results: list):
                 continue
 
     if not pay_btn:
+        # The build may render Pay on a div/span, which :has-text('Pay') on
+        # button/a misses. Match precisely ('Pay', 'Pay Now', 'Pay ₹123') so we
+        # don't grab unrelated 'Payment...' text.
+        pay_handle = page.evaluate_handle("""() => {
+            const rx = /^pay( now)?(\\s*₹\\s*[\\d,]+)?$/i;
+            for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                const t = (el.textContent || '').trim();
+                if (!t || t.length > 24) continue;
+                if (!rx.test(t)) continue;
+                const box = el.getBoundingClientRect();
+                if (box.width < 10 || box.height < 10) continue;
+                return el;
+            }
+            return null;
+        }""")
+        try:
+            el = pay_handle.as_element()
+        except Exception:
+            el = None
+        if el is not None:
+            pay_btn = el
+            log("  Pay button found via document-wide text search")
+
+    if not pay_btn:
         # Check for "Continue Bargaining" — bargain still in progress
         log("  No Pay button visible — checking bargain state")
         continue_sel = "button:has-text('Continue'), button:has-text('Negotiate'), a:has-text('Continue'), [class*='continue']"
@@ -567,13 +598,32 @@ def _do_checkout_flow(page, results: list):
             if clicked_card:
                 log(f"  Clicked card via JS: {clicked_card}")
                 time.sleep(2)
-                # Look for Pay button on detail page
+                # Look for Pay button on detail page (same widening as above)
                 for psel in pay_selectors:
                     ploc = page.locator(psel)
                     if ploc.count() > 0:
                         pay_btn = ploc.first
                         log(f"  Pay button found after card click: {psel}")
                         break
+                if not pay_btn:
+                    ph2 = page.evaluate_handle("""() => {
+                        const rx = /^pay( now)?(\\s*₹\\s*[\\d,]+)?$/i;
+                        for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                            const t = (el.textContent || '').trim();
+                            if (!t || t.length > 24 || !rx.test(t)) continue;
+                            const box = el.getBoundingClientRect();
+                            if (box.width < 10 || box.height < 10) continue;
+                            return el;
+                        }
+                        return null;
+                    }""")
+                    try:
+                        el2 = ph2.as_element()
+                    except Exception:
+                        el2 = None
+                    if el2 is not None:
+                        pay_btn = el2
+                        log("  Pay button found on detail via text search")
 
     ss_before_pay = _capture_screenshot(page, f"{_STEP_PREFIX}bargains_with_item")
 
@@ -585,9 +635,14 @@ def _do_checkout_flow(page, results: list):
             pay_btn.click(force=True)
         except Exception:
             page.evaluate("""() => {
-                const btns = document.querySelectorAll('button');
-                for (const b of btns) {
-                    if ((b.textContent||'').includes('Pay')) { b.click(); return; }
+                // Widen beyond <button>: the Pay CTA can be a div/span.
+                const rx = /^pay( now)?(\\s*₹\\s*[\\d,]+)?$/i;
+                for (const b of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                    const t = (b.textContent || '').trim();
+                    if (!t || t.length > 24 || !rx.test(t)) continue;
+                    b.removeAttribute('disabled');
+                    b.click();
+                    return;
                 }
             }""")
         time.sleep(5)
@@ -965,7 +1020,17 @@ def _do_second_bargain(page, results: list):
             log("Offer clicked")
             break
     else:
-        page.evaluate("""() => { for (const b of document.querySelectorAll('button')) { if (b.textContent.includes('Offer')) { b.click(); return; } } }""")
+        page.evaluate("""() => {
+            const needles = ['offer your price', 'submit offer', 'make an offer', 'make offer', 'send offer'];
+            for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                const t = (el.textContent || '').trim().toLowerCase();
+                if (!t || t.length > 40) continue;
+                if (!needles.some(n => t.includes(n))) continue;
+                el.removeAttribute('disabled');
+                el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                return;
+            }
+        }""")
     sub_steps.append({"check": "offer_submitted", "status": "pass", "detail": "Low offer submitted"})
     time.sleep(4)
 
@@ -1060,9 +1125,13 @@ def _do_second_bargain(page, results: list):
                 pay_btn.click(force=True)
             except Exception:
                 page.evaluate("""() => {
-                    const btns = document.querySelectorAll('button');
-                    for (const b of btns) {
-                        if ((b.textContent||'').includes('Pay')) { b.click(); return; }
+                    const rx = /^pay( now)?(\\s*₹\\s*[\\d,]+)?$/i;
+                    for (const b of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                        const t = (b.textContent||'').trim();
+                        if (!t || t.length > 24 || !rx.test(t)) continue;
+                        b.removeAttribute('disabled');
+                        b.click();
+                        return;
                     }
                 }""")
             time.sleep(5)
