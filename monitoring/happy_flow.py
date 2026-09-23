@@ -1314,14 +1314,17 @@ def _run_platform_flow(platform: str) -> list[dict]:
                     has_varient = bool(text and text.strip())
                 except Exception:
                     has_varient = False
-            # Mobile may render the price/bargain section outside #varient-price — fall back to body-wide detection
+            # Mobile may render the price/bargain section outside #varient-price
+            # — fall back to a document-wide text search (the build puts the CTA
+            # on a div/span, so 'button, a' alone missed it).
             has_bargain_btn = False
             if not has_varient:
                 has_bargain_btn = page.evaluate("""() => {
-                    const btns = document.querySelectorAll('button, a');
-                    for (const btn of btns) {
-                        const t = (btn.textContent || '').trim().toLowerCase();
-                        if (t.includes('start bargaining') || t.includes('bargain now') || t.includes('negotiate')) return true;
+                    const needles = ['start bargaining', 'bargain now', 'negotiate'];
+                    for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
+                        const t = (el.textContent || '').trim().toLowerCase();
+                        if (!t || t.length > 40) continue;
+                        if (needles.some(n => t.includes(n))) return true;
                     }
                     return false;
                 }""")
