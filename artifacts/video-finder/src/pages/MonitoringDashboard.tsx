@@ -122,7 +122,7 @@ function Screenshot({ base64, url, label }: { base64?: string; url?: string; lab
 function MetricRow({ metric, value, status, detail, tip, plan }: {
   metric: string; value: number | null; status: string;
   detail?: React.ReactNode; tip?: string;
-  plan?: { expected?: string; observed?: string; owner?: string; repro?: string };
+  plan?: { expected?: string; observed?: string; owner?: string; repro?: string; url?: string };
 }) {
   const [showPlan, setShowPlan] = useState(false);
   const notPassing = status !== "pass";
@@ -159,6 +159,12 @@ function MetricRow({ metric, value, status, detail, tip, plan }: {
               </span>
             )}
           </div>
+          {plan?.url && (
+            <div className="text-slate-700">
+              <span className="font-medium">URL:</span>{" "}
+              <a href={plan.url} target="_blank" rel="noreferrer" className="text-blue-600 underline break-all">{plan.url}</a>
+            </div>
+          )}
           {notPassing && plan?.observed && (
             <div className="text-slate-800"><span className="font-medium">Observed (why it failed):</span> {plan.observed}</div>
           )}
@@ -364,7 +370,8 @@ function GroupMetrics({ runs, title, icon }: { runs: Run[]; title: string; icon:
           plan={{ expected: r.details?.expected || r.details?.rca?.expected,
                   observed: r.details?.observed,
                   owner: r.details?.owner || r.details?.rca?.owner,
-                  repro: r.details?.repro || r.details?.rca?.repro }} />
+                  repro: r.details?.repro || r.details?.rca?.repro,
+                  url: r.details?.url }} />
       ))}
     </SectionCard>
   );
@@ -614,7 +621,8 @@ export default function MonitoringDashboard() {
                             plan={{ expected: r.details?.expected || r.details?.rca?.expected,
                                     observed: r.details?.observed,
                                     owner: r.details?.owner || r.details?.rca?.owner,
-                                    repro: r.details?.repro || r.details?.rca?.repro }} />
+                                    repro: r.details?.repro || r.details?.rca?.repro,
+                                    url: r.details?.url }} />
                         ))}
                       </div>
                     );
@@ -645,7 +653,8 @@ export default function MonitoringDashboard() {
                               plan={{ expected: r.details?.expected || r.details?.rca?.expected,
                                       observed: r.details?.observed,
                                       owner: r.details?.owner || r.details?.rca?.owner,
-                                      repro: r.details?.repro || r.details?.rca?.repro }} />
+                                      repro: r.details?.repro || r.details?.rca?.repro,
+                                      url: r.details?.url }} />
                           ))}
                         </div>
                       ))}
@@ -675,7 +684,8 @@ export default function MonitoringDashboard() {
                               plan={{ expected: r.details?.expected || r.details?.rca?.expected,
                                       observed: r.details?.observed,
                                       owner: r.details?.owner || r.details?.rca?.owner,
-                                      repro: r.details?.repro || r.details?.rca?.repro }} />
+                                      repro: r.details?.repro || r.details?.rca?.repro,
+                                      url: r.details?.url }} />
                           ))}
                         </div>
                       ))}

@@ -426,6 +426,61 @@ REPRO: dict[str, dict] = {
         "repro": ["Open any product detail page.", "Confirm the star row / ratings count renders.", "Note: the count text lives in a hidden container, so the check also accepts the star images."],
     },
 
+    # ── Lighthouse / performance metrics (monitoring/lighthouse_audit.py) ──
+    # Pages audited: home https://gajab.com/, category
+    # https://gajab.com/product-list/all, product_detail (the Prestige veggie
+    # cutter PDP). Thresholds come from monitoring/config.py THRESHOLDS.
+    "lighthouse_performance_score": {
+        "owner": "web",
+        "expected": "Lighthouse performance score >= 50 (config THRESHOLDS.performance_score).",
+        "repro": [
+            "Identify the URL from the 'observed' line (home / category / product_detail).",
+            "Run: npx lighthouse <URL> --only-categories=performance --form-factor=mobile --view",
+            "Or open the URL in Chrome DevTools > Lighthouse > Mobile > Analyze page load.",
+            "Compare the score with 50; then check the Opportunities list for the biggest wins.",
+            "Common causes: large unoptimized hero images, render-blocking JS/CSS, slow TTFB.",
+        ],
+    },
+    "lighthouse_lcp_ms": {
+        "owner": "web",
+        "expected": "Largest Contentful Paint <= 2500 ms (config THRESHOLDS.lcp_ms).",
+        "repro": [
+            "Note the URL from the 'observed' line.",
+            "Run: npx lighthouse <URL> --only-audits=largest-contentful-paint --form-factor=mobile",
+            "Or DevTools > Lighthouse > analyze, then read the LCP element in the report.",
+            "The LCP element is usually the hero banner/product image — check its size and format (WebP).",
+        ],
+    },
+    "lighthouse_cls": {
+        "owner": "web",
+        "expected": "Cumulative Layout Shift <= 0.1 (config THRESHOLDS.cls).",
+        "repro": [
+            "Note the URL from the 'observed' line.",
+            "Run: npx lighthouse <URL> --only-audits=cumulative-layout-shift --form-factor=mobile",
+            "Or load the URL in DevTools > Performance > Experience and watch for layout shifts.",
+            "Usual causes: images without width/height, late-loading banners or fonts shifting content.",
+        ],
+    },
+    "lighthouse_tbt_ms": {
+        "owner": "web",
+        "expected": "Total Blocking Time <= 300 ms (config THRESHOLDS.tbt_ms).",
+        "repro": [
+            "Note the URL from the 'observed' line.",
+            "Run: npx lighthouse <URL> --only-audits=total-blocking-time --form-factor=mobile",
+            "DevTools > Performance recording shows the long tasks that block the main thread.",
+            "Usual causes: heavy JS bundles, long tasks during hydration.",
+        ],
+    },
+    "lighthouse_si_ms": {
+        "owner": "web",
+        "expected": "Speed Index <= 4000 ms (config THRESHOLDS.si_ms).",
+        "repro": [
+            "Note the URL from the 'observed' line.",
+            "Run: npx lighthouse <URL> --only-audits=speed-index --form-factor=mobile",
+            "DevTools > Performance > Filmstrip shows how quickly content becomes visible.",
+        ],
+    },
+
     # ── Monitor meta ───────────────────────────────────────────────────────
     "monitor_total_duration_ms": {
         "owner": "infra",

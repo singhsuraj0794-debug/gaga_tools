@@ -108,10 +108,19 @@ def main():
     # ── Part 3: Lighthouse Audits ──
     print("\n--- Lighthouse Audits ---", flush=True)
     audit_results = audit_all_pages() if RUN_LIGHTHOUSE else []
+    # Map the dashboard's page key to the audited URL so every Lighthouse row
+    # can say exactly which URL scored badly.
+    from config import URLS as _URLS
+    LH_URLS = {
+        "home": "https://gajab.com/",
+        "category": _URLS.get("category", "https://gajab.com/product-list/all"),
+        "product_detail": _URLS.get("product_detail", ""),
+    }
     for result in audit_results:
         page = result["page"]
         metrics = result["metrics"]
         violations = result["violations"]
+        page_url = LH_URLS.get(page.replace("_field", ""), "")
         violated_metrics = set()
         for v in violations:
             for m in metrics:
@@ -120,22 +129,29 @@ def main():
         print(f"  {page}: violations={violations} metrics={metrics}", flush=True)
         for metric_name, metric_value in metrics.items():
             metric_status = "fail" if metric_name in violated_metrics else "pass"
+            m_details = explain(f"lighthouse_{metric_name}", metric_status,
+                                f"{page_url or page}: {metric_name}={metric_value}")
+            if page_url:
+                m_details["url"] = page_url
+            m_details["page"] = page
             store.store_result(
                 page_or_flow=page, metric=metric_name, value=metric_value, status=metric_status,
-                details=explain(f"lighthouse_{metric_name}", metric_status,
-                                f"{metric_name}={metric_value}"),
+                details=m_details,
             )
         if violations:
             page_violations = [v for v in violations]
             for v in violations:
                 metric_key = v.split("=")[0] if "=" in v else v
                 rca = generate_rca(f"lighthouse_{metric_key}", v)
-                lh_details = explain(f"lighthouse_{metric_key}", "degraded", f"{page}: {v}")
+                lh_details = explain(f"lighthouse_{metric_key}", "degraded",
+                                     f"{page} ({page_url or 'n/a'}): {v}")
+                if page_url:
+                    lh_details["url"] = page_url
                 store.store_result(page_or_flow=page, metric=metric_key, value=None,
                                    status="degraded", step_failed=v, details=lh_details)
                 failures.append(f"Lighthouse/{page}: {v}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
                 send_alert(
-                    f"Lighthouse audit issues: {page}",
+                    f"Lighthouse audit issues: {page} ({page_url or 'n/a'})",
                     format_rca_for_slack(rca, f"Lighthouse/{page}"),
                 )
 
