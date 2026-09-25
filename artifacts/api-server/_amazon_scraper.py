@@ -1116,22 +1116,34 @@ def extract_products(store_url: str) -> dict:
             stall = 0
             while page_no < EXTRACT_MAX_PAGES:
                 page_no += 1
-                try:
-                    page.goto(f"{base_url}{sep}page={page_no}",
-                              wait_until="domcontentloaded", timeout=45000)
-                    page.wait_for_timeout(1200)
-                except Exception:
+                loaded = False
+                # A page that comes back empty is usually throttling/backoff, not
+                # the end of the catalogue — reload it once before counting it as
+                # a stall. Without this, two bad pages near the middle silently
+                # truncated the catalogue (e.g. 130 of 220 products).
+                for _try in range(2):
+                    try:
+                        page.goto(f"{base_url}{sep}page={page_no}",
+                                  wait_until="domcontentloaded", timeout=45000)
+                        page.wait_for_timeout(1200 + _try * 1500)
+                        loaded = True
+                        break
+                    except Exception:
+                        time.sleep(2)
+                if not loaded:
                     break
                 new = _collect()
                 if new == 0:
                     stall += 1
-                    if stall >= 2:
+                    logger.info("Catalogue page %s added nothing (stall %s/3)", page_no, stall)
+                    if stall >= 3:
                         break
                 else:
                     stall = 0
-                if page_no % 10 == 0:
+                if page_no % 5 == 0:
                     logger.info("Catalogue page %s: %s products so far",
                                 page_no, len(seen_asins))
+                time.sleep(0.8)   # gentle pacing to avoid mid-catalogue throttling
 
             if cdp_used is None:
                 context.close()
