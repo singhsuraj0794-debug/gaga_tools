@@ -1123,9 +1123,20 @@ def extract_products(store_url: str) -> dict:
                 # truncated the catalogue (e.g. 130 of 220 products).
                 for _try in range(2):
                     try:
+                        # 'commit' resolves as soon as the response starts — far
+                        # cheaper than domcontentloaded on a heavy page, and it
+                        # keeps the whole catalogue extraction well inside the
+                        # deployed proxy timeout (Render was taking 120-200s and
+                        # could be cut off mid-catalogue).
                         page.goto(f"{base_url}{sep}page={page_no}",
-                                  wait_until="domcontentloaded", timeout=45000)
-                        page.wait_for_timeout(1200 + _try * 1500)
+                                  wait_until="commit", timeout=45000)
+                        # wait for the result grid, best-effort
+                        try:
+                            page.wait_for_selector('[data-component-type="s-search-result"]',
+                                                   timeout=12000)
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(800 + _try * 1500)
                         loaded = True
                         break
                     except Exception:
