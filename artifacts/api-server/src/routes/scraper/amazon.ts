@@ -169,6 +169,41 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
 
     logger.info({ url: targetUrl }, "Extracting products from Amazon store/search page");
 
+    // Prefer the local scraper tunnel (residential IP, finishes a 220-product
+    // catalogue in 30-60s). Extracting on this host is unreliable: headless
+    // Chromium exceeds the proxy timeout (~100s) and the memory limit, which is
+    // what produced short catalogues and 502/503s.
+    const tunnel = (process.env.SCRAPER_TUNNEL_URL || "https://headphone-shudder-lavender.ngrok-free.dev").replace(/\/+$/, "");
+    if (tunnel) {
+      try {
+        const r = await fetch(`${tunnel}/extract`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
+          body: JSON.stringify({ url: targetUrl }),
+          signal: AbortSignal.timeout(600000),
+        });
+        if (r.ok) {
+          const d: any = await r.json();
+          const prods = d.products || [];
+          if (prods.length > 0) {
+            logger.info({ count: prods.length, via: "tunnel" }, "Amazon extract via tunnel");
+            res.json({
+              storeName: d.storeName || d.store_name || "",
+              products: prods,
+              total: prods.length,
+              error: d.error || "",
+            });
+            return;
+          }
+          logger.warn({ body: JSON.stringify(d).slice(0, 200) }, "Tunnel returned no products — falling back");
+        } else {
+          logger.warn({ status: r.status }, "Tunnel extract failed — falling back");
+        }
+      } catch (e: any) {
+        logger.warn({ err: e.message }, "Tunnel extract error — falling back");
+      }
+    }
+
     const env: Record<string, string> = { ...process.env as Record<string, string> };
     if (process.env.SCRAPER_PROXY) env.SCRAPER_PROXY = process.env.SCRAPER_PROXY;
     if (process.env.SCRAPING_SERVICE_URL) env.SCRAPING_SERVICE_URL = process.env.SCRAPING_SERVICE_URL;

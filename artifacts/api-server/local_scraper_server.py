@@ -98,6 +98,23 @@ class ScraperHandler(BaseHTTPRequestHandler):
                 self._json(400, {"status": "failed", "error": "url required"})
                 return
 
+            # Amazon catalogue/brand-search extraction. The deployed API cannot
+            # do this reliably (headless Chromium exceeds its proxy timeout and
+            # memory), so the deployed route proxies here: this machine has a
+            # residential IP and finishes a 220-product catalogue in ~30-60s.
+            if "amazon." in url or "amzn." in url:
+                print(f"[EXTRACT] amazon catalogue: {url}", flush=True)
+                result = amazon_scraper.extract_products(url)
+                self._json(200, {
+                    "status": "success" if not result.get("error") else "failed",
+                    "store_name": result.get("store_name", ""),
+                    "storeName": result.get("store_name", ""),
+                    "products": result.get("products") or [],
+                    "total": len(result.get("products") or []),
+                    "error": result.get("error") or "",
+                })
+                return
+
             if page_num > 0:
                 # Single-page chunk (fits under ngrok's ~60s limit)
                 print(f"[EXTRACT] meesho page {page_num}: {url}", flush=True)
