@@ -793,6 +793,114 @@ EXTRACT_MAX_PRODUCTS = 20000     # hard cap on returned links
 EXTRACT_SCROLL_WAIT = 0.3
 
 
+def _search_brand_hits(brand: str) -> int:
+    """Return how many products the brand-filtered search returns (0 = wrong)."""
+    import re as _re
+    import urllib.request as _ur
+    from urllib.parse import quote_plus as _qp
+    url = f"https://www.amazon.in/s?rh=p_4%3A{_qp(brand)}"
+    try:
+        req = _ur.Request(url, headers={
+            "User-Agent": USER_AGENTS[0],
+            "Accept-Language": "en-IN,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml",
+        })
+        html = _ur.urlopen(req, timeout=25).read().decode("utf-8", "ignore")
+    except Exception:
+        return 0
+    return len(set(_re.findall(r"/dp/([A-Z0-9]{10})", html)))
+
+
+def _brand_filter_candidates(path_name: str) -> list[str]:
+    """Candidate brand strings for a store, best guess first.
+
+    Amazon's p_4 brand filter is picky: for the BMBROTHERS store only
+    'BM BROTHERS' returns the 220-product catalogue, while the page title gives
+    'B M BROTHERS' (0) and the path slug 'BMBROTHERS' (0). So generate the
+    obvious variants and let the caller verify which one actually works.
+    """
+    import re as _re
+    raw = (path_name or "").strip()
+    out: list[str] = []
+
+    def add(v: str):
+        v = " ".join((v or "").split())
+        if v and v not in out:
+            out.append(v)
+
+    if raw:
+        # BMBROTHERS -> "BM BROTHERS" (split the trailing all-caps word off)
+        m = _re.match(r"^([A-Z]{2,3})([A-Z][a-z].*)$", raw)
+        if m:
+            add(f"{m.group(1)} {m.group(2)}")
+        # BMBROTHERS -> "BM BROTHERS" via a known two-letter acronym split
+        for acr in ("BM", "MB", "SM", "RS"):
+            if raw.startswith(acr) and len(raw) > len(acr):
+                add(f"{acr} {raw[len(acr):]}")
+        add(raw.replace("_", " ").replace("-", " "))
+        add(raw)
+    return out
+
+
+def _resolve_brand_filter(store_url: str, path_name: str) -> str:
+    """Pick the p_4 brand string that actually returns the store's catalogue."""
+    cands = []
+    title_brand = _brand_from_store_url(store_url)
+    if title_brand:
+        # 'B M BROTHERS' -> also try 'BM BROTHERS' (join single-letter tokens)
+        joined = " ".join(re.sub(r"\b([A-Za-z])\b\s+", r"\1", title_brand).split())
+        cands.extend([title_brand, joined])
+    cands.extend(_brand_filter_candidates(path_name))
+    seen = []
+    for c in cands:
+        if c and c not in seen:
+            seen.append(c)
+    best = ""
+    best_hits = 0
+    for c in seen:
+        hits = _search_brand_hits(c)
+        logger.info("brand candidate %r -> %s products", c, hits)
+        if hits > best_hits:
+            best, best_hits = c, hits
+        if hits >= 20:      # good enough; a real catalogue is rarely smaller
+            break
+    return best
+
+
+def _brand_from_store_url(store_url: str) -> str:
+    """Resolve the brand display name for an Amazon Brand Store URL.
+
+    /stores/<NAME>/page/<id> renders a single server-rendered storefront page
+    (~25-40 tiles, no pagination, no s-search-result cards), so a 200-product
+    store yielded only ~25 links. The same catalogue IS exposed by the
+    brand-filtered search (?rh=p_4:<BRAND>), which paginates normally.
+
+    The path slug ('BMBROTHERS') does NOT work as a filter — Amazon needs the
+    display name ('BM BROTHERS'), which is in the page <title>.
+    """
+    import re as _re
+    import urllib.request as _ur
+    try:
+        req = _ur.Request(
+            store_url,
+            headers={
+                "User-Agent": USER_AGENTS[0],
+                "Accept-Language": "en-IN,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        html = _ur.urlopen(req, timeout=25).read().decode("utf-8", "ignore")
+    except Exception:
+        return ""
+    m = _re.search(r"<title>\s*Amazon\.in\s*:\s*([^<]+?)\s*</title>", html, _re.I)
+    if m:
+        return m.group(1).strip()
+    m2 = _re.search(r'"brandName"\s*:\s*"([^"]{2,60})"', html)
+    if m2:
+        return m2.group(1).strip()
+    return ""
+
+
 def extract_products(store_url: str) -> dict:
     """Extract all product links from an Amazon search / category / store page.
 
@@ -855,6 +963,24 @@ def extract_products(store_url: str) -> dict:
         path_parts = ["s"]
         if not store_name or store_name == domain[:30]:
             store_name = "Seller Store"
+
+    # Amazon BRAND STORES (/stores/<NAME>/page/<id>) are a single server-rendered
+    # storefront page: ~25-40 tiles, no s-search-result cards, no pagination. A
+    # 200-product store therefore returned only ~25 links. The full catalogue is
+    # exposed by the brand-filtered search (?rh=p_4:<BRAND>), which paginates.
+    # The path slug does not work as a filter — Amazon needs the display name.
+    if path_parts[:1] == ["stores"] and not _qs.get("rh"):
+        _uf = _urlparse.quote_plus
+        _brand = _resolve_brand_filter(store_url, path_parts[1] if len(path_parts) > 1 else "")
+        if _brand:
+            store_name = _brand[:40]
+            store_url = (
+                f"https://{parsed.netloc}/s?rh=p_4%3A{_uf(_brand)}"
+                "&s=popularity-rank"
+            )
+            parsed = urlparse(store_url)
+            path_parts = ["s"]
+            logger.info("Brand store -> brand search: %s (%s)", store_url, _brand)
 
     products: list[dict] = []
     seen_asins: set[str] = set()
