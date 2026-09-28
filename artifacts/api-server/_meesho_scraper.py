@@ -545,6 +545,21 @@ def scrape_product(url: str, html: str = "") -> dict:
     variations = product_data.get("variations", [])
     variants_str = ", ".join(str(v) for v in variations) if isinstance(variations, list) and variations else None
 
+    # Category breadcrumb (e.g. "Unisex Personal Care > Face Care > Face Wash").
+    # Populated on the canonical /<slug>/p/<id> URL; the short /s/p/<id> form
+    # returns an empty list, so we prefer the pretty URL upstream.
+    source_category_path = None
+    bc = product_data.get("breadcrumb")
+    if isinstance(bc, list):
+        titles = [
+            _clean(str(b.get("title") or ""))
+            for b in bc
+            if isinstance(b, dict)
+        ]
+        titles = [t for t in titles if t]
+        if titles:
+            source_category_path = " > ".join(titles)
+
     hsn_val = None
     gst_val = None
     dims_val = None
@@ -574,6 +589,7 @@ def scrape_product(url: str, html: str = "") -> dict:
         "weight": weight_val,
         "specifications": specs if specs else None,
         "variants": variants_str,
+        "source_category_path": source_category_path,
         "price": f"\u20b9{price}" if price else None,
         "url": canonical_url,
         "error": None,

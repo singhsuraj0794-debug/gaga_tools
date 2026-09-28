@@ -62,6 +62,7 @@ EMPTY_RESULT = {
     "gst": None,
     "hsn": None,
     "specifications": None,
+    "source_category_path": None,
 }
 
 # DOM extraction executed inside the Playwright page.
@@ -168,7 +169,19 @@ EXTRACT_JS = r"""() => {
     }
   });
 
-  return { title, price, images, bullets, description, meta_description, specs };
+  // Category breadcrumb — the marketplace taxonomy we later map onto Gajab's.
+  let sourceCategoryPath = null;
+  const bcRoot = q('#wayfinding-breadcrumbs_feature_div')
+    || q('#wayfinding-breadcrumbs_container')
+    || q('.a-breadcrumb');
+  if (bcRoot) {
+    const parts = Array.from(bcRoot.querySelectorAll('a'))
+      .map(a => (a.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    if (parts.length) sourceCategoryPath = parts.join(' > ');
+  }
+
+  return { title, price, images, bullets, description, meta_description, specs, sourceCategoryPath };
 }"""
 
 
@@ -626,6 +639,12 @@ def _result_from_dom(data: dict) -> dict:
         result["specifications"] = cleaned_specs
         _fill_derived(result, cleaned_specs)
 
+    # Marketplace category breadcrumb (e.g. "Home Improvement > Power & Hand Tools
+    # > ... > Clamp Sets") — mapped to a Gajab L1-L4 path at export time.
+    scp = data.get("sourceCategoryPath")
+    if scp:
+        result["source_category_path"] = _clean(scp)
+
     return result
 
 
@@ -662,6 +681,20 @@ def _parse_html(html: str, url: str) -> dict:
     m = re.search(r'<meta[^>]*name="description"[^>]*content="([^"]+)"', html, re.IGNORECASE)
     if m:
         result["meta_description"] = _clean(m.group(1))[:2000]
+
+    # Category breadcrumb (marketplace taxonomy → mapped to Gajab at export)
+    m = re.search(
+        r'id="wayfinding-breadcrumbs_feature_div"(.*?)</div>\s*</div>',
+        html, re.DOTALL | re.IGNORECASE,
+    ) or re.search(r'id="wayfinding-breadcrumbs_feature_div"(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
+    if m:
+        parts = [
+            _clean(re.sub(r"<[^>]+>", "", x))
+            for x in re.findall(r"<a[^>]*>(.*?)</a>", m.group(1), re.DOTALL)
+        ]
+        parts = [p for p in parts if p]
+        if parts:
+            result["source_category_path"] = " > ".join(parts)
 
     # Price
     for pat in (

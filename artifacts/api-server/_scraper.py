@@ -30,12 +30,35 @@ USER_AGENTS = [
 ]
 
 
+def _backfill_source_category(result: dict, url: str, ua: str) -> None:
+    """Fill in source_category_path when the cheap fetch missed it.
+
+    Flipkart renders its breadcrumb client-side only, so a successful direct
+    fetch has no category. One browser pass is made purely to read it — the
+    fetch order in scrape() itself is unchanged.
+    """
+    try:
+        html = _try_playwright(url, ua)
+        if not html:
+            return
+        m = re.search(r'<script id="__gajab_src_category__"[^>]*>(.*?)</script>', html, re.DOTALL)
+        if m:
+            bc = json.loads(m.group(1))
+            if bc:
+                result["source_category_path"] = bc
+    except Exception:
+        pass
+
+
 def scrape(url: str, attempt: int = 1, max_attempts: int = 3) -> dict:
     ua = USER_AGENTS[(attempt - 1) % len(USER_AGENTS)]
 
     html = _try_direct(url, ua)
     if html:
-        return _parse_html(html, url)
+        result = _parse_html(html, url)
+        if result.get("status") == "success" and not result.get("source_category_path"):
+            _backfill_source_category(result, url, ua)
+        return result
     html = _try_playwright(url, ua)
     if html:
         return _parse_html(html, url)
@@ -108,6 +131,28 @@ def _try_playwright(url: str, ua: str = "") -> str:
             except Exception:
                 pass
             html = page.content()
+            # Capture the category breadcrumb while we still have a live page
+            # (Flipkart renders it only in the DOM). Embed it in the HTML we
+            # return so _parse_html can pick it up without a second browser pass.
+            try:
+                bc = page.evaluate("""() => {
+                    for (const a of document.querySelectorAll('a')) {
+                        if ((a.innerText || '').trim() !== 'Home') continue;
+                        let el = a.parentElement, depth = 0;
+                        while (el && depth < 8) {
+                            const links = [...el.querySelectorAll('a')]
+                                .map(x => (x.innerText || '').trim()).filter(Boolean);
+                            if (links.length >= 3) return links.join(' > ');
+                            el = el.parentElement; depth++;
+                        }
+                    }
+                    return null;
+                }""")
+                if bc:
+                    html += ('<script id="__gajab_src_category__" type="application/json">'
+                             + json.dumps(bc) + '</script>')
+            except Exception:
+                pass
             ctx.close()
             if not _is_bot_page(html):
                 return html
@@ -164,7 +209,17 @@ def _via_scraping_service(url: str) -> dict:
 
 
 def _parse_html(html: str, url: str) -> dict:
-    result = {"status": "failed", "title": None, "description": None, "meta_description": None, "images": [], "price": None, "dimensions": None, "weight": None, "gst": None, "hsn": None, "specifications": None, "url": url}
+    result = {"status": "failed", "title": None, "description": None, "meta_description": None, "images": [], "price": None, "dimensions": None, "weight": None, "gst": None, "hsn": None, "specifications": None, "source_category_path": None, "url": url}
+
+    # Breadcrumb captured by _try_playwright (Flipkart only exposes it in the DOM)
+    _m = re.search(r'<script id="__gajab_src_category__"[^>]*>(.*?)</script>', html, re.DOTALL)
+    if _m:
+        try:
+            _bc = json.loads(_m.group(1))
+            if _bc:
+                result["source_category_path"] = _bc
+        except Exception:
+            pass
 
     data = _try_next_data(html)
     if data:
