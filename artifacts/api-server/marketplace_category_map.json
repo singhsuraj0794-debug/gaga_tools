@@ -3,7 +3,9 @@
   "map": {
     "amazon": {
       "Health & Personal Care > Household Supplies > Household Cleaners > Drain Openers": "Home & Kitchen > Household Care & Supplies > Home Care > Drain Opener",
-      "Health & Personal Care > Household Supplies > Household Cleaners > All-Purpose Cleaners": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > All Purpose Cleaner"
+      "Health & Personal Care > Household Supplies > Household Cleaners > All-Purpose Cleaners": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > All Purpose Cleaner",
+      "Health & Personal Care > Household Supplies > Indoor Insect & Pest Control > Sprays": "Home & Kitchen > Household Care & Supplies > Home Care > Insect Repellents",
+      "Outdoor Living > Pest Control > Rodent Control": "Home & Kitchen > Home Decor > Home Utilities > Rodent Repellant Device"
     },
     "meesho": {
       "Home & Kitchen > Kitchen Storage & Organisers > Jars & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
@@ -11,6 +13,10 @@
       "Unisex Personal Care > Face Care > Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes",
       "Unisex Personal Care > Unisex Fragrances & Deodorants > Unisex Perfumes": "Beauty & Health Care > Health & Beauty > Fragrances > Perfumes",
       "Mens Personal Care & Grooming > Men Face Care > Men'S Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes"
+    },
+    "flipkart": {
+      "Mobiles & Accessories > Mobile Accessories > Cases & Covers > Plain Cases & Covers": "Electronics > Mobile, Tablets and Accessories"
     }
-  }
+  },
+  "_note_coarse": "Targets may be L1-L4. Where the master has no L4 for a scraped category, a shallower (L2/L3) path is an explicit, valid fallback."
 }

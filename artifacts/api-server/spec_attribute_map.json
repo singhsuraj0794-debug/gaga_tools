@@ -1,0 +1,69 @@
+{
+  "version": "1.0",
+  "note": "Curated scraped-spec-key -> Gajab attribute. Keys are normalised (lowercase, punctuation to spaces). Leave a target empty to explicitly drop a noisy key.",
+  "aliases": {
+    "colour": "color",
+    "country of origin": "country of origin",
+    "country origin": "country of origin",
+    "material type": "material",
+    "material composition": "material",
+    "item type name": [
+      "product form",
+      "model or style"
+    ],
+    "product type": [
+      "product form",
+      "model or style"
+    ],
+    "model name": "model or style",
+    "style": [
+      "model or style"
+    ],
+    "pattern": "model or style",
+    "type": [
+      "product form",
+      "model or style"
+    ],
+    "net quantity": "net quantity (Unit Value)",
+    "quantity": "net quantity (Unit Value)",
+    "unit count": "net quantity (Unit Value)",
+    "number of packs": "pack count",
+    "pack of": [
+      "net quantity (Unit Value)",
+      "pack count"
+    ],
+    "multipack": [
+      "net quantity (Unit Value)",
+      "pack count"
+    ],
+    "size in ltrs": [
+      "capacity (Unit Value)",
+      "net volume"
+    ],
+    "volume unit": "capacity (UOM)",
+    "capacity": [
+      "capacity",
+      "net volume"
+    ],
+    "product form": "product form",
+    "form": "product form",
+    "skin type": "skin or hair type",
+    "flavour": "fragrance",
+    "flavor": "fragrance",
+    "shelf life best before": "shelf life (in days)",
+    "warranty": "warranty",
+    "warranty description": "warranty",
+    "included components": "included components",
+    "number of pieces": "net quantity (Unit Value)",
+    "assembled product dimensions": "dimensions",
+    "water resistance": "water resistance",
+    "finish type": "finish",
+    "power source": "power source",
+    "maximum diameter": "size",
+    "net volume": [
+      "net volume"
+    ],
+    "sku": []
+  },
+  "_comment_units": "unit companions handled automatically (product_weight_unit etc.)"
+}

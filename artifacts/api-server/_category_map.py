@@ -70,12 +70,19 @@ def load_taxonomy(path: str | Path | None = None) -> dict:
 
 
 def validate_map(map_data: dict, taxonomy: dict | None = None) -> tuple[dict, list[str]]:
-    """Drop entries whose target is not a real Gajab L4 path.
+    """Drop entries whose target is not a real Gajab category.
 
-    Returns (clean_map, errors). Only the master taxonomy is authoritative.
+    Accepts ANY level present in the master (L1/L2/L3/L4) — the master keeps
+    every level in `ids`, while `paths` holds only L4 leaves. A shallower target
+    is a legitimate fallback: it is better to place a product at L3 than to
+    leave the category blank when no L4 fits.
+
+    Returns (clean_map, errors).
     """
     tax = taxonomy or load_taxonomy()
-    valid = {p["full"] for p in tax.get("paths", [])}
+    valid = set(tax.get("ids") or {})
+    if not valid:  # very old taxonomy without ids
+        valid = {p["full"] for p in tax.get("paths", [])}
     clean: dict[str, dict] = {"version": map_data.get("version", "1.0"), "map": {}}
     errors: list[str] = []
     for platform, entries in (map_data.get("map") or {}).items():
@@ -87,7 +94,7 @@ def validate_map(map_data: dict, taxonomy: dict | None = None) -> tuple[dict, li
             if not dest:
                 continue
             if dest not in valid:
-                errors.append(f"{platform}: '{src}' -> '{dest}' is not a Gajab L4 path")
+                errors.append(f"{platform}: '{src}' -> '{dest}' is not a Gajab category path")
                 continue
             bucket[_norm_key(src)] = dest
         clean["map"][platform] = bucket
@@ -110,7 +117,12 @@ class CategoryMapper:
         self.map, self.errors = validate_map(raw, self.taxonomy)
 
     def resolve(self, platform: str, source_path: str | None) -> dict | None:
-        """Return {'full','l1'..'l4','confidence','method'} or None if unmapped."""
+        """Return {'full','l1'..'l4','level','confidence','method'} or None if unmapped.
+
+        The target may be any level (L1-L4). When a deeper level is unavailable
+        the map can legitimately point at L3 or L2, and the returned `level`
+        records how specific the assignment is.
+        """
         if not source_path:
             return None
         plat = (platform or "").lower()
@@ -133,17 +145,31 @@ class CategoryMapper:
 
         if not dest:
             return None
+
+        parts = [p for p in re.split(r"\s*>\s*", dest) if p]
         node = self._by_full.get(dest)
-        if not node:
-            return None
+        if node:
+            return {
+                "full": node["full"],
+                "l1": node.get("l1"),
+                "l2": node.get("l2"),
+                "l3": node.get("l3"),
+                "l4": node.get("l4"),
+                "level": 4,
+                "confidence": 1.0,
+                "method": "curated",
+            }
+        # shallower than L4 (L1/L2/L3) — still a valid master category
+        lv = [parts[i] if i < len(parts) else "" for i in range(4)]
         return {
-            "full": node["full"],
-            "l1": node.get("l1"),
-            "l2": node.get("l2"),
-            "l3": node.get("l3"),
-            "l4": node.get("l4"),
+            "full": dest,
+            "l1": lv[0],
+            "l2": lv[1],
+            "l3": lv[2],
+            "l4": lv[3],
+            "level": len(parts),
             "confidence": 1.0,
-            "method": "curated",
+            "method": "curated-coarse",
         }
 
 
