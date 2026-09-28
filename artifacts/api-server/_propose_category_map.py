@@ -21,6 +21,7 @@ import json
 import re
 import sys
 from collections import Counter
+from pathlib import Path
 
 from _category_map import load_taxonomy, normalise_path
 
@@ -30,6 +31,30 @@ _STOP = {
     "home", "page", "products", "product", "items", "item", "all", "other",
     "general", "misc", "accessories", "accessory",
 }
+
+# Curated marketplace -> Gajab vocabulary (see category_aliases.json).
+_ALIASES: dict[str, str] = {}
+
+
+def load_aliases(path: str | None = None) -> dict[str, str]:
+    """Load the curated alias table (applied to scraped paths before matching)."""
+    p = Path(path) if path else Path(__file__).with_name("category_aliases.json")
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return {k.lower(): v for k, v in (data.get("aliases") or {}).items()}
+    except Exception:
+        return {}
+
+
+def apply_aliases(source_path: str) -> str:
+    """Rewrite known marketplace phrases to Gajab wording."""
+    if not source_path or not _ALIASES:
+        return source_path
+    out = source_path
+    for src, dest in _ALIASES.items():
+        # replace on the raw string, case-insensitively
+        out = re.sub(re.escape(src), dest, out, flags=re.IGNORECASE)
+    return out
 
 
 def tokens(s: str) -> list[str]:
@@ -92,6 +117,9 @@ def _informativeness(t: str) -> float:
 
 def score(source_path: str, candidate: dict) -> float:
     """Informativeness-weighted overlap between the scraped path and a Gajab path.
+    The curated alias table is applied first, so a marketplace phrase that has
+    been taught ('plain cases & covers' -> 'mobile back cover') scores against
+    Gajab's wording.
 
     The leaf (L4) dominates — marketplaces usually agree on the product noun even
     when their higher levels differ. Two guards keep it honest:
@@ -101,6 +129,7 @@ def score(source_path: str, candidate: dict) -> float:
         at 0.94 because the one token 'furniture' is the whole candidate leaf —
         even though Gajab has no polish category and nothing should be proposed.
     """
+    source_path = apply_aliases(source_path)
     src = _stems(tokens(source_path))
     if not src:
         return 0.0
@@ -132,7 +161,19 @@ def score(source_path: str, candidate: dict) -> float:
     cand_leaf = _stems(tokens(candidate.get("l4", "")))
     head_ok = (not head) or (head in cand_leaf) or any(head in c for c in cand_leaf) or any(c in head for c in cand_leaf)
 
-    raw = 0.60 * leaf + 0.20 * mid + 0.13 * branch + 0.07 * top
+    # Chain evidence: the WHOLE breadcrumb vs the WHOLE Gajab path. This is the
+    # tie-breaker between siblings that share a leaf — e.g. 'Mobiles &
+    # Accessories > … > Cases & Covers' should favour a Mobile branch over
+    # 'Computer Accessories > Cases & Covers'.
+    cand_all = _stems(
+        tokens(" ".join(str(candidate.get(k, "")) for k in ("l1", "l2", "l3", "l4")))
+    )
+    inter = src & cand_all
+    chain = 0.0
+    if inter and cand_all:
+        chain = sum(_informativeness(t) for t in inter) / sum(_informativeness(t) for t in cand_all)
+
+    raw = 0.55 * leaf + 0.18 * mid + 0.12 * branch + 0.05 * top + 0.10 * chain
     if not head_ok:
         raw *= 0.35
     return round(raw, 4)
@@ -143,6 +184,8 @@ def propose(products: list[dict], platform: str, top: int, min_score: float) -> 
     paths = tax.get("paths", [])
     # learn which tokens are too common to be evidence, from the taxonomy itself
     _GENERIC.update(_generic_tokens(paths))
+    # and the curated marketplace -> Gajab vocabulary
+    _ALIASES.update(load_aliases())
     counts: Counter = Counter()
     for p in products:
         raw = p.get("source_category_path") or p.get("sourceCategoryPath")
@@ -171,24 +214,51 @@ def propose(products: list[dict], platform: str, top: int, min_score: float) -> 
 
 
 def to_markdown(rows: list[dict]) -> str:
+    # An entry with no adequate candidate is usually a TAXONOMY GAP (the master
+    # has no such category), not a matcher failure — call it out separately so
+    # the taxonomy can be extended rather than the map fudged.
+    gaps = [r for r in rows if not r["proposed"] or r["score"] < 0.45]
+    mapped = [r for r in rows if r not in gaps]
+
     lines = [
         "# Scraped categories → Gajab L1–L4 (review)",
         "",
         "Fill the **Corrected Gajab path** column, then copy accepted rows into",
         "`marketplace_category_map.json`. Only curated entries are used at runtime;",
-        "unmapped categories leave `Category Name *` blank in the export.",
+        "unmapped categories leave `Category Name *` blank in the export and the row",
+        "is flagged.",
+        "",
+        "## 1. Mapped (proposal is plausible — verify/adjust)",
         "",
         "| platform | scraped category | seen | proposed Gajab path | score | corrected Gajab path |",
         "|---|---|---:|---|---:|---|",
     ]
-    for r in rows:
+    for r in sorted(mapped, key=lambda x: -x["score"]):
         lines.append(
             f"| {r['platform']} | {r['source_path']} | {r['count']} | "
             f"{r['proposed'] or '_no proposal_'} | {r['score']:.2f} | |"
         )
-    lines.append("")
-    lines.append("## Alternatives considered")
-    lines.append("")
+
+    lines += [
+        "",
+        "## 2. Taxonomy gaps / no adequate Gajab category",
+        "",
+        "These scraped categories have **no matching row in All Categories** (or only a",
+        "poor one). Extend the master taxonomy, or mark them out of scope. Until then",
+        "they export with `Category Name *` blank and a flag.",
+        "",
+        "| platform | scraped category | seen | best candidate | score | decision |",
+        "|---|---|---:|---|---:|---|",
+    ]
+    for r in sorted(gaps, key=lambda x: x["source_path"]):
+        alt = r["alternatives"][0]["path"] if r["alternatives"] else ""
+        cand = r["proposed"] or alt
+        lines.append(
+            f"| {r['platform']} | {r['source_path']} | {r['count']} | "
+            f"{cand or '_none_'} | {r['score']:.2f} | |"
+        )
+
+    lines += ["", "## 3. Alternatives considered", ""]
     for r in rows:
         if not r["alternatives"]:
             continue

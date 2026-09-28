@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "note": "Curated marketplace -> Gajab vocabulary. Applied to the SCRAPED path before matching, so a marketplace phrase can be taught to look like Gajab's wording. Keys are matched on the normalised (lowercase, punctuation-free) breadcrumb.",
+  "aliases": {
+    "plain cases & covers": "mobile back cover",
+    "cases & covers": "mobile back cover",
+    "household supplies": "household care & supplies",
+    "household cleaners": "home care",
+    "indoor insect & pest control": "pest control",
+    "unisex personal care": "health & beauty",
+    "mens personal care & grooming": "health & beauty",
+    "women personal care & makeup": "health & beauty",
+    "unisex fragrances & deodorants": "fragrances",
+    "men face care": "face care",
+    "kitchen storage & organisers": "kitchen storage",
+    "kitchen & dining": "kitchen accessories",
+    "jars & containers": "container",
+    "baking tools": "kitchen tools"
+  }
+}
