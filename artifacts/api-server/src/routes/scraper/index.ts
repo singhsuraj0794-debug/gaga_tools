@@ -14,6 +14,7 @@ import {
   ExportProductsToExcelBody,
 } from "@workspace/api-zod";
 import type { EcommerceProduct } from "@workspace/api-zod";
+import { sendGajabExport } from "./gajabExport";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,6 +63,7 @@ interface FlipkartDetailedProduct {
   dimensions: string | null;
   weight: string | null;
   specifications: Record<string, string> | null;
+  source_category_path?: string | null;
   variants: string | null;
   price: string | null;
   url: string;
@@ -390,73 +392,8 @@ router.post("/flipkart/export", async (req: Request, res: Response): Promise<voi
       res.status(400).json({ error: "Invalid request, 'products' array required" });
       return;
     }
-
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Flipkart Products");
-
-    const maxImages = Math.max(...products.map((p: FlipkartDetailedProduct) => p.images?.length || 0), 1);
-
-    const columns: any[] = [
-      { header: "Product ID", key: "id", width: 30 },
-      { header: "Title", key: "title", width: 50 },
-      { header: "Description", key: "description", width: 80 },
-      { header: "Meta Description", key: "meta_description", width: 80 },
-    ];
-    for (let i = 1; i <= maxImages; i++) {
-      columns.push({ header: `Image ${i}`, key: `image${i}`, width: 60 });
-    }
-    columns.push(
-      { header: "HSN", key: "hsn", width: 20 },
-      { header: "GST", key: "gst", width: 15 },
-      { header: "Dimensions", key: "dimensions", width: 30 },
-      { header: "Weight", key: "weight", width: 20 },
-      { header: "Specifications", key: "specifications", width: 100 },
-      { header: "Variants", key: "variants", width: 100 },
-      { header: "Price", key: "price", width: 20 },
-      { header: "Product URL", key: "url", width: 80 },
-    );
-    worksheet.columns = columns;
-
-    products.forEach((product: FlipkartDetailedProduct) => {
-      const specsStr = product.specifications
-        ? Object.entries(product.specifications).map(([k, v]) => `${k}: ${v}`).join("\n")
-        : "";
-      const row: any = {
-        id: product.id,
-        title: product.title,
-        description: product.description,
-        meta_description: product.meta_description,
-        hsn: product.hsn,
-        gst: product.gst,
-        dimensions: product.dimensions,
-        weight: product.weight,
-        specifications: specsStr,
-        variants: product.variants,
-        price: product.price,
-        url: product.url,
-      };
-      (product.images || []).forEach((img: string, i: number) => {
-        row[`image${i + 1}`] = img;
-      });
-      worksheet.addRow(row);
-    });
-
-    const headerRow = worksheet.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF28A745" },
-    };
-    headerRow.eachCell((cell) => {
-      cell.font = { color: { argb: "FFFFFFFF" }, bold: true };
-    });
-
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-    await workbook.xlsx.write(res);
-    res.end();
+    // Gajab ProductImport layout — see gajabExport.ts
+    await sendGajabExport(products, filename, res);
   } catch (err: any) {
     logger.error({ err }, "Flipkart Excel export failed");
     res.status(500).json({ error: "Export failed: " + err.message });
