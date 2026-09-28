@@ -91,6 +91,42 @@ def split_value_unit(value: str) -> tuple[str | None, str | None]:
     return num, _UOM.get(unit, unit)
 
 
+# Dimensions on the Gajab template are always CENTIMETRES. Marketplaces send cm,
+# mm, inch, ft, m (or a bare number), so every axis is converted to cm.
+_TO_CM = {
+    "cm": 1.0, "centimetre": 1.0, "centimeter": 1.0, "centimetres": 1.0, "centimeters": 1.0,
+    "mm": 0.1, "millimetre": 0.1, "millimeter": 0.1, "millimetres": 0.1, "millimeters": 0.1,
+    "m": 100.0, "meter": 100.0, "metre": 100.0, "meters": 100.0, "metres": 100.0,
+    "in": 2.54, "inch": 2.54, "inches": 2.54, '"': 2.54,
+    "ft": 30.48, "foot": 30.48, "feet": 30.48, "'": 30.48,
+}
+
+
+def to_cm(value: str, default_unit: str = "cm") -> str:
+    """Normalise a dimension to centimetres.
+
+    '10 Cm' -> '10 cm'      '5 inch' -> '12.7 cm'
+    '1 m'   -> '100 cm'     '10'     -> '10 cm'   (bare number assumes cm)
+    Non-numeric values are returned unchanged.
+    """
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z\".']*)$", v)
+    if not m:
+        return v
+    num = float(m.group(1))
+    unit = (m.group(2) or "").strip().lower() or str(default_unit or "cm").strip().lower()
+    factor = _TO_CM.get(unit)
+    if factor is None:
+        return v
+    cm = num * factor
+    cm = round(cm, 2)
+    if cm == int(cm):
+        cm = int(cm)
+    return f"{cm} cm"
+
+
 def load_aliases(path: str | Path | None = None) -> dict[str, list[str]]:
     """Curated aliases. A value may be a single target or a candidate list —
     the first candidate the category actually declares wins (e.g. 'type' is
@@ -240,7 +276,8 @@ class SpecAttributeMapper:
             if key in FIXED_COLUMN_KEYS:
                 col = FIXED_COLUMN_KEYS[key]
                 if col.startswith("dim_"):
-                    dims[col] = f"{val} {dim_unit}".strip()
+                    # dimensions are always exported in centimetres
+                    dims[col] = to_cm(val, default_unit=dim_unit or "cm")
                 else:
                     if key in unit_suffix:
                         val = f"{val} {unit_suffix[key]}".strip()
@@ -293,15 +330,12 @@ class SpecAttributeMapper:
             unmapped.append({"key": raw_key, "value": val, "reason": "no matching Gajab attribute"})
 
         # Assemble Package Length x Width x Height as one dimension string.
+        # Gajab's template has Package Length / Width / Height; marketplaces send
+        # length / breadth(=width) / height. All axes are already in cm.
         if dims:
             order = ["dim_length", "dim_width", "dim_breadth", "dim_height"]
             parts = [dims[k] for k in order if k in dims]
-            # de-duplicate identical values (marketplaces often repeat one axis)
-            uniq = []
-            for part in parts:
-                if part not in uniq:
-                    uniq.append(part)
-            out["_fixed_dimensions"] = " x ".join(uniq)
+            out["_fixed_dimensions"] = " x ".join(parts)
 
         return {
             "attributes": {k: v for k, v in out.items() if not k.startswith("_fixed_")},
