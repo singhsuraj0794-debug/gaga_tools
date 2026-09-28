@@ -2,8 +2,6 @@
   "version": "1.0",
   "map": {
     "amazon": {
-      "Health & Personal Care > Household Supplies > Indoor Insect & Pest Control > Sprays": "Home & Kitchen > Household Care & Supplies > Home Care > Insect Net",
-      "Health & Personal Care > Household Supplies > Household Cleaners > Furniture & Wood Polishes": "Furniture > Home and Office Furniture > Home Furniture > Furniture Accessories",
       "Health & Personal Care > Household Supplies > Household Cleaners > Drain Openers": "Home & Kitchen > Household Care & Supplies > Home Care > Drain Opener",
       "Health & Personal Care > Household Supplies > Household Cleaners > All-Purpose Cleaners": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > All Purpose Cleaner"
     },
@@ -13,7 +11,9 @@
     "meesho": {
       "Home & Kitchen > Kitchen Storage & Organisers > Jars & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
       "Home & Kitchen > Kitchen & Dining > Baking Tools": "Home & Kitchen > Kitchen Accessories > Kitchen Tools > Kitchen Tool Set",
-      "Unisex Personal Care > Unisex Fragrances & Deodorants > Unisex Perfumes": "Beauty & Health Care > Health & Beauty > Fragrances > Deodorants"
+      "Unisex Personal Care > Face Care > Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes",
+      "Unisex Personal Care > Unisex Fragrances & Deodorants > Unisex Perfumes": "Beauty & Health Care > Health & Beauty > Fragrances > Perfumes",
+      "Mens Personal Care & Grooming > Men Face Care > Men'S Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes"
     }
   }
 }
