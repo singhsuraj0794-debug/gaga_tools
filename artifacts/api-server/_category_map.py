@@ -258,7 +258,62 @@ class CategoryMapper:
             (p for p in (self.taxonomy.get("ids") or {}) if p.count(" > ") <= 2),
             key=lambda p: -p.count(" > "),
         )
+        # name -> full path, for single-level category names (Meesho supplies
+        # `catalog.sub_sub_category_name` when its breadcrumb comes back empty).
+        self._by_name: dict[str, str] = {}
+        for path in (self.taxonomy.get("ids") or {}):
+            leaf = path.split(" > ")[-1]
+            n = _norm_key(leaf)
+            if not n:
+                continue
+            # prefer the DEEPEST path for a given name (most specific category)
+            cur = self._by_name.get(n)
+            if cur is None or path.count(" > ") > cur.count(" > "):
+                self._by_name[n] = path
         self._warned: set[str] = set()
+
+    def resolve_by_name(self, name: str) -> dict | None:
+        """Resolve a bare category NAME (no parents) to a Gajab path.
+
+        Used when a platform gives only a leaf name — e.g. Meesho's
+        `sub_sub_category_name` ('Kitchen Napkins'). Exact name, then
+        singular/plural variants, then a multi-word containment match.
+        """
+        if not name or ">" in name:
+            return None
+        n = _norm_key(name)
+        if not n:
+            return None
+        cand = self._by_name.get(n)
+        if not cand:
+            for v in _key_variants(n):
+                cand = self._by_name.get(v)
+                if cand:
+                    break
+        if not cand and len(n.split()) >= 2:
+            for k, v in self._by_name.items():
+                if len(k.split()) >= 2 and (n in k or k in n):
+                    cand = v
+                    break
+        # NOTE: a looser "head noun" match was tried here and REMOVED — it
+        # produced confident nonsense ('Mop Sticks' -> 'Lip Care',
+        # 'Diwali Lightings' -> 'Automation & Robotics'). A wrong category pulls
+        # the wrong attribute set, which is worse than leaving the row blank and
+        # flagged, so anything short of an exact/multi-word match is left for the
+        # curated map.
+        if not cand:
+            return None
+        lv = cand.split(" > ")
+        return {
+            "full": cand,
+            "l1": lv[0],
+            "l2": lv[1] if len(lv) > 1 else "",
+            "l3": lv[2] if len(lv) > 2 else "",
+            "l4": lv[3] if len(lv) > 3 else "",
+            "level": len(lv),
+            "confidence": 0.6,
+            "method": "name",
+        }
 
     def _coarse_candidates(self, l1: str) -> list[str]:
         return [p for p in self._coarse if p == l1 or p.startswith(l1 + " > ")]
@@ -327,6 +382,12 @@ class CategoryMapper:
         dest = _lookup(bucket, source_path) if bucket else None
 
         if not dest:
+            # Single-level name (no parents) — e.g. Meesho's
+            # catalog.sub_sub_category_name when its breadcrumb is empty.
+            if ">" not in source_path:
+                named = self.resolve_by_name(source_path)
+                if named:
+                    return named
             coarse = self.resolve_coarse(plat, source_path) if allow_coarse else None
             if coarse is None:
                 if source_path not in self._warned:

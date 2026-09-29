@@ -29,22 +29,36 @@ SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "") or f"https://a
 SCRAPPLEY_API_KEY = os.environ.get("SCRAPPLEY_API_KEY", "")
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), ".product_cache.json")
+# Bump when the extraction logic changes: entries written by an older version are
+# dropped on load, otherwise a persistent cache keeps serving results produced by
+# code that no longer exists (this hid the source_category_path fix completely).
+CACHE_VERSION = "v3-category"
 _cache = {}  # url_hash -> product dict
+
 
 def _load_cache():
     global _cache
     try:
         with open(CACHE_FILE) as f:
-            _cache = json.load(f)
+            raw = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         _cache = {}
+        return
+    if isinstance(raw, dict) and raw.get("__version__") == CACHE_VERSION:
+        _cache = raw.get("entries") or {}
+    else:
+        # older/unknown format — start clean so stale results cannot be served
+        _cache = {}
+
 
 def _save_cache():
     with open(CACHE_FILE, "w") as f:
-        json.dump(_cache, f)
+        json.dump({"__version__": CACHE_VERSION, "entries": _cache}, f)
+
 
 def _cache_key(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()
+
 
 _load_cache()
 
@@ -548,7 +562,13 @@ def scrape_product(url: str, html: str = "") -> dict:
     # Category breadcrumb (e.g. "Unisex Personal Care > Face Care > Face Wash").
     # Populated on the canonical /<slug>/p/<id> URL; the short /s/p/<id> form
     # returns an empty list, so we prefer the pretty URL upstream.
+    #
+    # Meesho also leaves `breadcrumb` EMPTY for a sizeable share of products (no
+    # parent chain anywhere in the payload). The catalog object is still present
+    # though, so fall back to the category NAME it carries — enough for the
+    # curated map / coarse matcher to place the product.
     source_category_path = None
+    source_catalog_name = None
     bc = product_data.get("breadcrumb")
     if isinstance(bc, list):
         titles = [
@@ -559,6 +579,15 @@ def scrape_product(url: str, html: str = "") -> dict:
         titles = [t for t in titles if t]
         if titles:
             source_category_path = " > ".join(titles)
+    catalog = product_data.get("catalog") or {}
+    if isinstance(catalog, dict):
+        source_catalog_name = _clean(str(catalog.get("name") or "")) or None
+        if not source_category_path:
+            sub = _clean(str(catalog.get("sub_sub_category_name") or ""))
+            if not sub:
+                sub = source_catalog_name or ""
+            if sub:
+                source_category_path = sub
 
     hsn_val = None
     gst_val = None
@@ -590,6 +619,7 @@ def scrape_product(url: str, html: str = "") -> dict:
         "specifications": specs if specs else None,
         "variants": variants_str,
         "source_category_path": source_category_path,
+        "source_catalog_name": source_catalog_name,
         "price": f"\u20b9{price}" if price else None,
         "url": canonical_url,
         "error": None,
