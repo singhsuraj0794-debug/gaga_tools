@@ -222,8 +222,17 @@ class SpecAttributeMapper:
             for s in sets:
                 sigs[tuple(a["attribute"] for a in s)].append(s)
             best_sig, best_sets = max(sigs.items(), key=lambda kv: len(kv[1]))
-            if len(best_sig) and len(best_sets) >= max(1, len(sets) // 2):
-                derived[parent] = best_sets[0]
+            if not best_sig or len(best_sets) < max(1, len(sets) // 2):
+                continue
+            # Borrowed rows carry the CHILD's spec name (e.g. 'Bowls | color'),
+            # which would mislabel the column for a product actually in the
+            # parent. Re-point specification/leaf at the node we are serving.
+            parent_leaf = parent.split(" > ")[-1]
+            derived[parent] = [
+                {**a, "leaf": parent_leaf,
+                 "specification": f"{parent_leaf} | {a['attribute']}"}
+                for a in best_sets[0]
+            ]
         return derived
 
     # -- helpers ---------------------------------------------------------

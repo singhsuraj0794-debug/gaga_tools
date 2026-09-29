@@ -102,11 +102,20 @@ def prepare(products: list[dict]) -> dict:
         specs = p.get("specifications") or {}
 
         mapping_note = ""
+        mapping_method = ""
         if resolved:
             node = resolved["full"]
+            mapping_method = resolved.get("method", "curated")
             attrs = attr_mapper.attrs_for(node)
             mapped = attr_mapper.map_specs(specs, node)
             stats["mapped"] += 1
+            # A coarse assignment (no L4 fits) is valid but less specific — say so
+            # rather than presenting it as a precise match.
+            if resolved.get("level", 4) < 4 or mapping_method.startswith("coarse") \
+                    or mapping_method == "curated-coarse":
+                mapping_note = (f"coarse category: assigned at L{resolved.get('level')} "
+                                f"({mapping_method}) — no exact L4 match")
+                stats["coarse"] = stats.get("coarse", 0) + 1
         else:
             node = ""
             attrs = []
@@ -169,7 +178,11 @@ def prepare(products: list[dict]) -> dict:
             "Cod": "", "Cod Charge": "",
             "Product Videos": _clean(p.get("video")),
             # audit
-            "Mapping Status": "ok" if resolved else "unmapped",
+            "Mapping Status": (
+                "unmapped" if not resolved
+                else "ok-coarse" if mapping_note.startswith("coarse")
+                else "ok"
+            ),
             "Source Category": src_cat,
             "Mapped Category Path": node,
             "Review Notes": mapping_note,

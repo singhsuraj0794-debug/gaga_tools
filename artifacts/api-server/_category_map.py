@@ -169,6 +169,82 @@ def _default_map() -> dict:
     return {"version": "1.0", "map": {}}
 
 
+# ── Coarse fallback ────────────────────────────────────────────────────────
+# When nothing in the curated map matches, a product must still get a category.
+# The marketplace's TOP-LEVEL name is mapped to a Gajab L1 (curated, small and
+# stable), then we try to descend to the deepest Gajab L2/L3 whose name the
+# scraped breadcrumb actually mentions. The result is a coarser but valid master
+# category, and the export marks it "ok-coarse" so it is visibly less specific.
+_L1_ALIASES: dict[str, str] = {
+    # Meesho
+    "home & kitchen": "Home & Kitchen",
+    "kitchen utility": "Home & Kitchen",
+    "office supplies & stationery": "Stationery",
+    "stationery": "Stationery",
+    "beauty & health": "Beauty & Health Care",
+    "unisex personal care": "Beauty & Health Care",
+    "mens personal care & grooming": "Beauty & Health Care",
+    "women personal care & makeup": "Beauty & Health Care",
+    "health & beauty": "Beauty & Health Care",
+    "women": "Fashion",
+    "women western": "Fashion",
+    "men": "Fashion",
+    "lingerie": "Fashion",
+    "ethnic": "Fashion",
+    "footwear": "Fashion",
+    "jewellery & accessories": "Fashion Accessories",
+    "bags": "Luggage & Bags",
+    "kids clothing": "Kids & Baby",
+    "kids & toys": "Toys & Games",
+    "electronic accessories": "Electronics",
+    "electronics": "Electronics",
+    "car & bike accessories": "Automobile Accessories",
+    "furniture": "Furniture",
+    "grocery": "Grocery",
+    "watches": "Fashion Accessories",
+    "sports & fitness": "Sports & Fitness",
+    "books": "Books & General Merchandise",
+    "music": "Toys & General Merchandise",
+    # Amazon
+    "beauty": "Beauty & Health Care",
+    "health & personal care": "Beauty & Health Care",
+    "computers & accessories": "Electronics",
+    "office products": "Stationery",
+    "sports, fitness & outdoors": "Sports & Fitness",
+    "bags, wallets and luggage": "Luggage & Bags",
+    "home improvement": "Home & Kitchen",
+    "tools & home improvement": "Home & Kitchen",
+    "outdoor living": "Home & Kitchen",
+    "toys & games": "Toys & Games",
+    "baby": "Kids & Baby",
+    "musical instruments": "Toys & General Merchandise",
+    "grocery & gourmet foods": "Grocery",
+    "industrial & scientific": "Industrial & Scientific",
+    # Flipkart
+    "home": "Home & Kitchen",
+    "mobiles & accessories": "Electronics",
+    "tvs & appliances": "Electronics",
+    "baby & kids": "Kids & Baby",
+    "sports, books & more": "Sports & Fitness",
+    "beauty & personal care": "Beauty & Health Care",
+}
+
+
+def _build_l1_norm() -> None:
+    _L1_ALIASES_NORM.clear()
+    for k, v in _L1_ALIASES.items():
+        n = " ".join(str(k).lower().replace("&", "and").split())
+        if n:
+            _L1_ALIASES_NORM[n] = v
+
+
+# Normalised alias keys — built once so '&'/'and'/punctuation can never miss.
+_L1_ALIASES_NORM: dict[str, str] = {}
+
+
+_build_l1_norm()
+
+
 class CategoryMapper:
     """Resolves a scraped marketplace category path to a Gajab L1-L4 path."""
 
@@ -177,26 +253,86 @@ class CategoryMapper:
         self._by_full = {p["full"]: p for p in self.taxonomy.get("paths", [])}
         raw = json.loads(Path(map_path).read_text(encoding="utf-8")) if map_path else _default_map()
         self.map, self.errors = validate_map(raw, self.taxonomy)
+        # every valid master path at L1/L2/L3, longest first (most specific wins)
+        self._coarse: list[str] = sorted(
+            (p for p in (self.taxonomy.get("ids") or {}) if p.count(" > ") <= 2),
+            key=lambda p: -p.count(" > "),
+        )
+        self._warned: set[str] = set()
 
-    def resolve(self, platform: str, source_path: str | None) -> dict | None:
-        """Return {'full','l1'..'l4','level','confidence','method'} or None if unmapped.
+    def _coarse_candidates(self, l1: str) -> list[str]:
+        return [p for p in self._coarse if p == l1 or p.startswith(l1 + " > ")]
 
-        The target may be any level (L1-L4). When a deeper level is unavailable
-        the map can legitimately point at L3 or L2, and the returned `level`
-        records how specific the assignment is.
+    def _l1_alias(self, raw_l1: str) -> str | None:
+        """Marketplace top-level -> Gajab L1. Keys are normalised once at import
+        so '&' vs 'and' and punctuation can never cause a silent miss."""
+        norm = _norm_key(raw_l1)
+        hit = _L1_ALIASES_NORM.get(norm)
+        if hit:
+            return hit
+        for k, v in _L1_ALIASES_NORM.items():
+            if k and (k in norm or norm in k):
+                return v
+        return None
+
+    def resolve_coarse(self, platform: str, source_path: str | None) -> dict | None:
+        """Coarse but valid: map the marketplace's top level to a Gajab L1, then
+        descend to the deepest L2/L3 the scraped breadcrumb actually names."""
+        if not source_path:
+            return None
+        parts = [p.strip() for p in re.split(r"\s*>\s*", source_path) if p.strip()]
+        if not parts:
+            return None
+        gajab_l1 = self._l1_alias(parts[0])
+        if not gajab_l1:
+            return None
+
+        from_here_norm = {_norm_key(p) for p in parts[1:]}
+        # Descend only on a real BRANCH match: a multi-word marketplace crumb
+        # must appear in the candidate's path. Single words are too weak — e.g.
+        # 'Chargers' would otherwise drag a phone accessory into
+        # 'Electronics > Gaming > Batteries & Chargers'.
+        phrases = [c for c in from_here_norm if len(c.split()) >= 2]
+        chosen = gajab_l1
+        if phrases:
+            for cand in self._coarse_candidates(gajab_l1):
+                norm_cand = _norm_key(cand)
+                if any(ph in norm_cand for ph in phrases):
+                    chosen = cand
+                    break
+        lv = chosen.split(" > ")
+        return {
+            "full": chosen,
+            "l1": lv[0],
+            "l2": lv[1] if len(lv) > 1 else "",
+            "l3": lv[2] if len(lv) > 2 else "",
+            "l4": "",
+            "level": len(lv),
+            "confidence": 0.4,
+            "method": "coarse",
+        }
+
+    def resolve(self, platform: str, source_path: str | None, allow_coarse: bool = True) -> dict | None:
+        """Return {'full','l1'..'l4','level','confidence','method'} or None.
+
+        Order: curated exact/L4 (then L3/L2) -> curated-coarse -> mechanical
+        coarse (marketplace L1 -> Gajab L1, descended as far as the breadcrumb
+        names). A product should almost always leave with SOME valid category.
         """
         if not source_path:
             return None
         plat = (platform or "").lower()
         bucket = self.map.get("map", {}).get(plat, {})
-        if not bucket:
-            return None
 
-        key = _norm_key(source_path)
-        dest = _lookup(bucket, source_path)
+        dest = _lookup(bucket, source_path) if bucket else None
 
         if not dest:
-            return None
+            coarse = self.resolve_coarse(plat, source_path) if allow_coarse else None
+            if coarse is None:
+                if source_path not in self._warned:
+                    self._warned.add(source_path)
+                return None
+            return coarse
 
         parts = [p for p in re.split(r"\s*>\s*", dest) if p]
         node = self._by_full.get(dest)
@@ -220,7 +356,7 @@ class CategoryMapper:
             "l3": lv[2],
             "l4": lv[3],
             "level": len(parts),
-            "confidence": 1.0,
+            "confidence": 0.9,
             "method": "curated-coarse",
         }
 
