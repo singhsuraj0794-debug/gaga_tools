@@ -161,6 +161,26 @@ def main() -> None:
     out = build(sys.argv[1])
     dest = Path(sys.argv[2])
     dest.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+
+    # Slim, gzipped runtime copy: assignment only needs attribute/type/
+    # specification/leaf/mandatory per path plus the deduped valid entries (the
+    # full file is 38 MB, dominated by descriptions and the tooling-only
+    # `columns` array).
+    import gzip as _gz
+    slim = {
+        "version": out["version"],
+        "by_path": {
+            p: [
+                {k: a[k] for k in ("attribute", "type", "specification", "leaf", "mandatory")}
+                for a in attrs
+            ]
+            for p, attrs in out["by_path"].items()
+        },
+        "attribute_names": out["attribute_names"],
+    }
+    rt = dest.with_name(dest.stem + ".runtime.json.gz")
+    rt.write_bytes(_gz.compress(json.dumps(slim, ensure_ascii=False).encode("utf-8")))
+    print(f"wrote {rt} ({rt.stat().st_size/1e6:.2f} MB gz)")
     s = out["stats"]
     print(f"wrote {dest}")
     print(f"  rows parsed       : {s['rows']}")

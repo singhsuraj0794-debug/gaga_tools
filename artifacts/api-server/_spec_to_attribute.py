@@ -26,11 +26,33 @@ Public API:
 
 from __future__ import annotations
 
+import gzip
 import json
 import re
 from pathlib import Path
 
 _DEFAULT_ALIASES = Path(__file__).with_name("spec_attribute_map.json")
+# Runtime catalog: slim + gzipped. The full extraction (with per-row descriptions,
+# valid-entry arrays and the 46k tooling-only `columns`) is 38 MB — far too much
+# to load on every export request (it 500'd on the deployed host). The slim file
+# keeps only what assignment needs (8.7 MB raw / 0.27 MB gzipped).
+_RUNTIME_CATALOG = Path(__file__).with_name("gajab_attributes.runtime.json.gz")
+_FULL_CATALOG = Path(__file__).with_name("gajab_attributes.json")
+
+
+def load_catalog(path: str | Path | None = None) -> dict:
+    """Load the attribute catalog, preferring the slim gzipped runtime copy."""
+    if path is not None:
+        p = Path(path)
+        if p.suffix == ".gz":
+            return json.loads(gzip.decompress(p.read_bytes()).decode("utf-8"))
+        return json.loads(p.read_text(encoding="utf-8"))
+    if _RUNTIME_CATALOG.exists():
+        try:
+            return json.loads(gzip.decompress(_RUNTIME_CATALOG.read_bytes()).decode("utf-8"))
+        except Exception:
+            pass
+    return json.loads(_FULL_CATALOG.read_text(encoding="utf-8"))
 
 # Fields that belong in the template's FIXED columns, not in category attributes.
 FIXED_COLUMN_KEYS = {
@@ -267,9 +289,17 @@ class SpecAttributeMapper:
     def attrs_for(self, node_path: str, with_source: bool = False):
         return self._attrs_for(node_path)
 
-    @staticmethod
-    def _valid_values(entry: dict) -> list[str]:
-        return entry.get("valid") or []
+    def _valid_values(self, entry: dict) -> list[str]:
+        """Per-path valid entries, or the deduped per-attribute list.
+
+        The runtime catalog drops the (duplicated) per-path arrays to stay small,
+        so fall back to attribute_names[<attr>]['valid'].
+        """
+        v = entry.get("valid")
+        if v:
+            return v
+        meta = (self.catalog.get("attribute_names") or {}).get(entry.get("attribute") or "")
+        return (meta or {}).get("valid") or []
 
     def _match_valid(self, entry: dict, value: str) -> str | None:
         """If the attribute has enumerated values, snap the scraped value to one."""

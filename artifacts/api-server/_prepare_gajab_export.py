@@ -34,7 +34,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 from _category_map import CategoryMapper  # noqa: E402
-from _spec_to_attribute import SpecAttributeMapper  # noqa: E402
+from _spec_to_attribute import SpecAttributeMapper, load_catalog  # noqa: E402
 
 # The template's 38 fixed columns, in order (row-2 headers of Product excel sheet).
 FIXED_COLUMNS = [
@@ -85,7 +85,7 @@ def _price_number(v) -> str:
 
 
 def prepare(products: list[dict]) -> dict:
-    catalog = json.loads((HERE / "gajab_attributes.json").read_text(encoding="utf-8"))
+    catalog = load_catalog()
     attr_mapper = SpecAttributeMapper(catalog)
     cat_mapper = CategoryMapper()
 
