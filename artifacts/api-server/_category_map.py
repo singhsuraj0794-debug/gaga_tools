@@ -64,6 +64,68 @@ def _norm_key(raw: str) -> str:
     return s.strip()
 
 
+def _singular_leaf_variants(leaf: str) -> list[str]:
+    """Plausible singular forms of a leaf. Ambiguous by nature — 'cases' could be
+    'case'+s or 'cas'+es — so every candidate is offered and the caller tries
+    them in order."""
+    out = []
+    if len(leaf) > 4 and leaf.endswith("ies"):
+        out.append(leaf[:-3] + "y")
+    if leaf.endswith("s") and not leaf.endswith("ss"):
+        out.append(leaf[:-1])          # cases -> case, jars -> jar
+    if len(leaf) > 4 and leaf.endswith("es"):
+        out.append(leaf[:-2])          # washes -> wash, boxes -> box
+    return [x for x in out if x and x != leaf]
+
+
+def _singularise_path(key: str) -> str:
+    """Singularise the leaf of a normalised key (first plausible form)."""
+    parts = [p.strip() for p in key.split(">")]
+    if not parts:
+        return key
+    variants = _singular_leaf_variants(parts[-1])
+    if variants:
+        parts[-1] = variants[0]
+    return " > ".join(parts)
+
+
+def _key_variants(key: str) -> list[str]:
+    """The key itself plus every singular/plural leaf variant worth trying."""
+    parts = [p.strip() for p in key.split(">")]
+    if not parts:
+        return [key]
+    leaf = parts[-1]
+    head = parts[:-1]
+    out = [key]
+    for v in _singular_leaf_variants(leaf):
+        out.append(" > ".join(head + [v]))
+    # also allow a pluralised leaf (map may hold the singular)
+    if not leaf.endswith("s"):
+        out.append(" > ".join(head + [leaf + "s"]))
+    return out
+
+
+def _lookup(bucket: dict, source_path: str) -> str | None:
+    """Exact key, singular/plural variants, then progressively shorter prefixes."""
+    if not bucket:
+        return None
+    key = _norm_key(source_path)
+    for cand in _key_variants(key):
+        hit = bucket.get(cand)
+        if hit:
+            return hit
+    # marketplaces often append the brand/product name as the final crumb
+    parts = [p for p in re.split(r"\s*>\s*", normalise_path(source_path)) if p]
+    while len(parts) > 1:
+        parts.pop()
+        cand = _norm_key(" > ".join(parts))
+        for c in _key_variants(cand):
+            hit = bucket.get(c)
+            if hit:
+                return hit
+    return None
+
+
 def load_taxonomy(path: str | Path | None = None) -> dict:
     p = Path(path) if path else _TAXONOMY
     return json.loads(p.read_text(encoding="utf-8"))
@@ -131,17 +193,7 @@ class CategoryMapper:
             return None
 
         key = _norm_key(source_path)
-        dest = bucket.get(key)
-
-        # Exact miss: try dropping trailing crumb(s) — marketplaces often append
-        # the brand/product name as the final breadcrumb level.
-        if not dest:
-            parts = [p for p in re.split(r"\s*>\s*", normalise_path(source_path)) if p]
-            while parts and not dest:
-                parts.pop()
-                if not parts:
-                    break
-                dest = bucket.get(_norm_key(" > ".join(parts)))
+        dest = _lookup(bucket, source_path)
 
         if not dest:
             return None
