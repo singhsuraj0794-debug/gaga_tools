@@ -192,24 +192,67 @@ class SpecAttributeMapper:
         self.attr_index: dict[str, str] = {}
         for name in (catalog.get("attribute_names") or {}):
             self.attr_index[normalise_key(name)] = name
+        self._derived = self._build_derived()
+
+    def _build_derived(self) -> dict[str, list[dict]]:
+        """Attribute sets for nodes that have none, taken from their children.
+
+        Attribute Final defines attributes on 2,620 L4 leaves and 496 L3 nodes —
+        so a valid L3 target like 'Kitchen Accessories > Kitchen Tools' has ZERO
+        attributes of its own. Measured across the master, 148 of 150 L3 groups
+        give EVERY L4 child the identical attribute set, so a child's set is a
+        faithful stand-in for the parent. This keeps us inside the existing
+        master — no taxonomy changes required.
+        """
+        from collections import defaultdict as _dd
+
+        kids: dict[str, list[list[dict]]] = _dd(list)
+        for path, attrs in self.by_path.items():
+            parts = path.split(" > ")
+            if len(parts) < 2 or not attrs:
+                continue
+            kids[" > ".join(parts[:-1])].append(attrs)
+
+        derived: dict[str, list[dict]] = {}
+        for parent, sets in kids.items():
+            if parent in self.by_path:
+                continue  # it defines its own
+            # group by the attribute-name signature; require a clear majority
+            sigs: dict[tuple, list[list[dict]]] = _dd(list)
+            for s in sets:
+                sigs[tuple(a["attribute"] for a in s)].append(s)
+            best_sig, best_sets = max(sigs.items(), key=lambda kv: len(kv[1]))
+            if len(best_sig) and len(best_sets) >= max(1, len(sets) // 2):
+                derived[parent] = best_sets[0]
+        return derived
 
     # -- helpers ---------------------------------------------------------
     def _attrs_for(self, node_path: str) -> list[dict]:
-        """Attributes for a node, walking UP the path when it has none.
+        """Attributes for a node.
 
-        Attribute Final defines attributes on 2,620 L4 leaves and only 496 L3
-        nodes — L1/L2 have none. So a coarse (L2/L3) category target would
-        otherwise yield zero attribute columns; falling back to the nearest
-        ancestor that defines any keeps the export useful.
+        Resolution order, all from the existing master:
+          1. the node's own attribute rows;
+          2. the agreed attribute set of its L4 children (for L1/L2/L3 nodes,
+             which the attributes file generally leaves empty);
+          3. the nearest ancestor that has attributes (walking up).
         """
         if not node_path:
             return []
+        hit = self.by_path.get(node_path)
+        if hit:
+            return hit
+        hit = self._derived.get(node_path)
+        if hit:
+            return hit
         parts = [p for p in node_path.split(" > ") if p]
         while parts:
-            hit = self.by_path.get(" > ".join(parts))
+            parts.pop()
+            if not parts:
+                break
+            p = " > ".join(parts)
+            hit = self.by_path.get(p) or self._derived.get(p)
             if hit:
                 return hit
-            parts.pop()
         return []
 
     def attrs_for(self, node_path: str, with_source: bool = False):
@@ -238,12 +281,15 @@ class SpecAttributeMapper:
     def map_specs(self, specs: dict, node_path: str) -> dict:
         attrs = self._attrs_for(node_path)
         by_name = {normalise_key(a["attribute"]): a for a in attrs}
-        # unit pairs, e.g. 'capacity (Unit Value)' + 'capacity (UOM)'
+        # unit pairs, e.g. 'capacity (Unit Value)' + 'capacity (UOM)'.
+        # NOTE: match on the RAW attribute name — normalise_key() strips the
+        # parentheses, so '(Unit Value)'/' (UOM)' would never be seen and the
+        # pair would silently never fire.
         pairs: dict[str, dict] = {}
         for a in attrs:
-            m = re.match(r"^(.*?)\s*\((unit value|uom)\)$", normalise_key(a["attribute"]))
+            m = re.match(r"^(.*?)\s*\((unit value|uom)\)\s*$", a["attribute"], re.I)
             if m:
-                pairs.setdefault(m.group(1).strip(), {})[m.group(2)] = a
+                pairs.setdefault(normalise_key(m.group(1)), {})[m.group(2).strip().lower()] = a
 
         out: dict[str, str] = {}
         unmapped: list[dict] = []
