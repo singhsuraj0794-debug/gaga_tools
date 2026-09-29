@@ -1,16 +1,25 @@
 {
   "version": "1.0",
   "map": {
-    "amazon": {
-      "Health & Personal Care > Household Supplies > Household Cleaners > Drain Openers": "Home & Kitchen > Household Care & Supplies > Home Care > Drain Opener",
-      "Health & Personal Care > Household Supplies > Household Cleaners > All-Purpose Cleaners": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > All Purpose Cleaner"
-    },
     "meesho": {
       "Home & Kitchen > Kitchen Storage & Organisers > Jars & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
       "Home & Kitchen > Kitchen & Dining > Baking Tools": "Home & Kitchen > Kitchen Accessories > Kitchen Tools > Kitchen Tool Set",
       "Unisex Personal Care > Face Care > Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes",
       "Unisex Personal Care > Unisex Fragrances & Deodorants > Unisex Perfumes": "Beauty & Health Care > Health & Beauty > Fragrances > Perfumes",
       "Mens Personal Care & Grooming > Men Face Care > Men'S Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes"
+    },
+    "amazon": {
+      "Home & Kitchen > Kitchen & Dining > Kitchen Storage & Containers > Jars & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
+      "Beauty > Skin Care > Face > Cleansing Creams & Milks > Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes",
+      "Home & Kitchen > Home & Décor > Decorative Accessories > Showpieces & Collectibles > Figurines": "Home & Kitchen > Home Decor > Clocks & Wall Decor > Showpiece Figurine",
+      "Sports, Fitness & Outdoors > Exercise & Fitness > Strength Training Equipment > Strength Training Sets": "Furniture > Home and Office Furniture > Outdoor & Cafeteria Furniture > Outdoor Set",
+      "Home & Kitchen > Kitchen & Home Appliances > Small Kitchen Appliances > Juicer Mixer Grinders": "Home & Kitchen > Home & Kitchen Appliances > Kitchen Appliances > Mixers, Grinders & Juicers",
+      "Home & Kitchen > Kitchen & Home Appliances > Small Kitchen Appliances > Hand Blenders": "Home & Kitchen > Home & Kitchen Appliances > Kitchen Appliances > Hand Blender",
+      "Home & Kitchen > Home & Décor > Clocks > Wall Clocks": "Home & Kitchen > Home Decor > Clocks & Wall Decor > Wall Clocks",
+      "Bags, Wallets and Luggage > Luggage > Suitcases & Trolley Bags": "Fashion > Leather & Travel Products > Bags & Fashion Accessories > Bag",
+      "Home & Kitchen > Home Furnishing > Cushions & Cushion Covers > Cushion Covers": "Home & Kitchen > Home Furnishing > Living Room Furnishing > Cushion Pillow Cover",
+      "Health & Personal Care > Household Supplies > Household Cleaners > Drain Openers": "Home & Kitchen > Household Care & Supplies > Home Care > Drain Opener",
+      "Health & Personal Care > Household Supplies > Household Cleaners > All-Purpose Cleaners": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > All Purpose Cleaner"
     }
   }
 }

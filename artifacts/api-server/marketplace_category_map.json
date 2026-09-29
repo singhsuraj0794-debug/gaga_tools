@@ -1,22 +1,51 @@
 {
   "version": "1.0",
   "map": {
-    "amazon": {
-      "Health & Personal Care > Household Supplies > Household Cleaners > Drain Openers": "Home & Kitchen > Household Care & Supplies > Home Care > Drain Opener",
-      "Health & Personal Care > Household Supplies > Household Cleaners > All-Purpose Cleaners": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > All Purpose Cleaner",
-      "Health & Personal Care > Household Supplies > Indoor Insect & Pest Control > Sprays": "Home & Kitchen > Household Care & Supplies > Home Care > Insect Repellents",
-      "Outdoor Living > Pest Control > Rodent Control": "Home & Kitchen > Home Decor > Home Utilities > Rodent Repellant Device"
-    },
     "meesho": {
       "Home & Kitchen > Kitchen Storage & Organisers > Jars & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
-      "Home & Kitchen > Kitchen & Dining > Baking Tools": "Home & Kitchen > Kitchen Accessories > Kitchen Tools > Kitchen Tool Set",
+      "Home & Kitchen > Kitchen & Dining > Baking Tools": "Home & Kitchen > Kitchen Accessories > Bakeware",
       "Unisex Personal Care > Face Care > Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes",
       "Unisex Personal Care > Unisex Fragrances & Deodorants > Unisex Perfumes": "Beauty & Health Care > Health & Beauty > Fragrances > Perfumes",
       "Mens Personal Care & Grooming > Men Face Care > Men'S Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes"
     },
+    "amazon": {
+      "Home & Kitchen > Kitchen & Dining > Kitchen Storage & Containers > Jars & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
+      "Beauty > Skin Care > Face > Cleansing Creams & Milks > Face Wash": "Beauty & Health Care > Health & Beauty > Bath and Spa > Face Washes",
+      "Home & Kitchen > Home & Décor > Decorative Accessories > Showpieces & Collectibles > Figurines": "Home & Kitchen > Home Decor > Clocks & Wall Decor > Showpiece Figurine",
+      "Sports, Fitness & Outdoors > Exercise & Fitness > Strength Training Equipment > Strength Training Sets": "Sports & Fitness > Fitness Accessories",
+      "Home & Kitchen > Kitchen & Home Appliances > Small Kitchen Appliances > Juicer Mixer Grinders": "Home & Kitchen > Home & Kitchen Appliances > Kitchen Appliances > Mixers, Grinders & Juicers",
+      "Home & Kitchen > Kitchen & Home Appliances > Small Kitchen Appliances > Hand Blenders": "Home & Kitchen > Home & Kitchen Appliances > Kitchen Appliances > Hand Blender",
+      "Home & Kitchen > Home & Décor > Clocks > Wall Clocks": "Home & Kitchen > Home Decor > Clocks & Wall Decor > Wall Clocks",
+      "Bags, Wallets and Luggage > Luggage > Suitcases & Trolley Bags": "Fashion > Leather & Travel Products > Luggage & Travel > Suitcases",
+      "Home & Kitchen > Home Furnishing > Cushions & Cushion Covers > Cushion Covers": "Home & Kitchen > Home Furnishing > Living Room Furnishing > Cushion Pillow Cover",
+      "Health & Personal Care > Household Supplies > Household Cleaners > Drain Openers": "Home & Kitchen > Household Care & Supplies > Home Care > Drain Opener",
+      "Health & Personal Care > Household Supplies > Household Cleaners > All-Purpose Cleaners": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > All Purpose Cleaner",
+      "Bags, Wallets and Luggage > Luggage > Luggage Sets": "Fashion > Leather & Travel Products > Luggage & Travel > Suitcases",
+      "Home & Kitchen > Kitchen & Dining > Kitchen Storage & Containers > Water Bottles": "Home & Kitchen > Kitchen Accessories > Bottle, Flasks & Thermoware",
+      "Electronics > Mobiles & Accessories > Mobile Accessories > Stands": "Electronics > Mobile, Tablets and Accessories > Mobile & Tablet Accessories > Mobile Holder",
+      "Computers & Accessories > Accessories & Peripherals > Laptop Accessories > Bags & Sleeves": "Electronics > Computer - Accessories and Components > Laptop Accessories > Bags",
+      "Industrial & Scientific > Robotics > Robotic Kits & Accessories": "Electronics > Smart Devices > Automation & Robotics",
+      "Home & Kitchen > Home & Décor > Decorative Accessories > Showpieces & Collectibles": "Home & Kitchen > Home Decor > Table Decor & Handicrafts",
+      "Health & Personal Care > Household Supplies > Indoor Insect & Pest Control > Sprays": "Home & Kitchen > Household Care & Supplies > Home Care > Insect Repellents",
+      "Outdoor Living > Pest Control > Rodent Control": "Home & Kitchen > Home Decor > Home Utilities > Rodent Repellant Device",
+      "Home & Kitchen > Home & Décor > Decorative Accessories > Idols & Figurines": "Home & Kitchen > Home Decor > Table Decor & Handicrafts",
+      "Home & Kitchen > Home & Décor > Decorative Accessories > Idols & Figurines > Idols": "Home & Kitchen > Home Decor > Table Decor & Handicrafts",
+      "Office Products > Office Supplies > Desk Accessories & Storage Products": "Stationery > Office, School and College Supplies > Office Supplies & Accessories",
+      "Home Improvement > Lighting Fixtures > Outdoor Lighting": "Home & Kitchen > Home Improvement Tools > Light Fixtures",
+      "Home & Kitchen > Indoor Lighting > Specialty Lighting > LED Strips": "Home & Kitchen > Home Decor > Lights & Lamps",
+      "Electronics > Mobiles & Accessories > Mobile Accessories > Automobile Accessories": "Electronics > Mobile, Tablets and Accessories",
+      "Home & Kitchen > Home & Décor > Decorative Accessories": "Home & Kitchen > Home Decor > Table Decor & Handicrafts",
+      "Home & Kitchen > Home & Décor > Clocks": "Home & Kitchen > Home Decor > Clocks & Wall Decor"
+    },
     "flipkart": {
-      "Mobiles & Accessories > Mobile Accessories > Cases & Covers > Plain Cases & Covers": "Electronics > Mobile, Tablets and Accessories"
+      "Mobiles & Accessories > Mobile Accessories > Cases & Covers > Plain Cases & Covers": "Electronics > Mobile, Tablets and Accessories",
+      "Home > Kitchen, Cookware & Serveware > Kitchen Storage & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
+      "Home > Kitchen, Cookware & Serveware > Kitchen Storage & Containers > Kitchen Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container"
     }
   },
-  "_note_coarse": "Targets may be L1-L4. Where the master has no L4 for a scraped category, a shallower (L2/L3) path is an explicit, valid fallback."
+  "_taxonomy_gaps_observed": [
+    "Pet Supplies > ...  — All Categories has NO pet category (only toy puppets / dog-tag jewellery)",
+    "Furniture & Wood Polishes — no furniture-polish category exists",
+    "Electronics > Mobile, Tablets and Accessories > Mobile & Tablet Accessories > Cases & Covers — defined in the ATTRIBUTES file (23 attrs) but NOT a row in All Categories"
+  ]
 }

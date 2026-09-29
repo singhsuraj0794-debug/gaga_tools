@@ -132,27 +132,33 @@ def _try_playwright(url: str, ua: str = "") -> str:
                 pass
             html = page.content()
             # Capture the category breadcrumb while we still have a live page
-            # (Flipkart renders it only in the DOM). Embed it in the HTML we
-            # return so _parse_html can pick it up without a second browser pass.
-            try:
-                bc = page.evaluate("""() => {
-                    for (const a of document.querySelectorAll('a')) {
-                        if ((a.innerText || '').trim() !== 'Home') continue;
-                        let el = a.parentElement, depth = 0;
-                        while (el && depth < 8) {
-                            const links = [...el.querySelectorAll('a')]
-                                .map(x => (x.innerText || '').trim()).filter(Boolean);
-                            if (links.length >= 3) return links.join(' > ');
-                            el = el.parentElement; depth++;
+            # (Flipkart renders it client-side, and only after the rest of the
+            # PDP has settled — a single check 3s in regularly missed it).
+            # Poll for up to ~10s before giving up.
+            bc = None
+            for _ in range(10):
+                try:
+                    bc = page.evaluate("""() => {
+                        for (const a of document.querySelectorAll('a')) {
+                            if ((a.innerText || '').trim() !== 'Home') continue;
+                            let el = a.parentElement, depth = 0;
+                            while (el && depth < 8) {
+                                const links = [...el.querySelectorAll('a')]
+                                    .map(x => (x.innerText || '').trim()).filter(Boolean);
+                                if (links.length >= 3) return links.join(' > ');
+                                el = el.parentElement; depth++;
+                            }
                         }
-                    }
-                    return null;
-                }""")
+                        return null;
+                    }""")
+                except Exception:
+                    bc = None
                 if bc:
-                    html += ('<script id="__gajab_src_category__" type="application/json">'
-                             + json.dumps(bc) + '</script>')
-            except Exception:
-                pass
+                    break
+                page.wait_for_timeout(1000)
+            if bc:
+                html += ('<script id="__gajab_src_category__" type="application/json">'
+                         + json.dumps(bc) + '</script>')
             ctx.close()
             if not _is_bot_page(html):
                 return html
@@ -256,7 +262,7 @@ def _parse_html(html: str, url: str) -> dict:
         real_texts = [t for t in long_texts if not re.search(r'color of the product may vary|picture displayed|product\'s dimensions|fit through the entrance|civil work|drilling holes|wiping the surface|assembly is required', t, re.IGNORECASE)]
         if real_texts:
             combined = " ".join(real_texts)
-            if len(combined) > len(result.get("description", "")):
+            if len(combined) > len(result.get("description") or ""):
                 result["description"] = combined
     if (not result.get("description") or len(result.get("description", "")) < 100) and re.search(r'>\s*Description\s*<', html, re.IGNORECASE | re.DOTALL):
         dom_desc = _try_description_from_dom(url)
