@@ -60,6 +60,27 @@ def _clean(v) -> str:
     return re.sub(r"\s+", " ", str(v)).strip()
 
 
+def _platform_of(p: dict) -> str:
+    """Which marketplace this product came from.
+
+    The frontend export body is just { products } with no platform field, and
+    defaulting to 'amazon' meant EVERY Meesho/Flipkart row was looked up in the
+    Amazon map — producing 'unmapped' for all of them with no attribute columns.
+    Fall back to the product URL host so the caller cannot get this wrong.
+    """
+    plat = _clean(p.get("platform") or p.get("source"))
+    if plat:
+        return plat.lower()
+    url = _clean(p.get("url")).lower()
+    if "meesho.com" in url:
+        return "meesho"
+    if "flipkart.com" in url:
+        return "flipkart"
+    if "amazon." in url or "amzn." in url:
+        return "amazon"
+    return "amazon"
+
+
 def _sku_for(p: dict, idx: int) -> str:
     for k in ("sku", "id", "asin", "productId", "product_id"):
         v = _clean(p.get(k))
@@ -96,7 +117,7 @@ def prepare(products: list[dict]) -> dict:
     stats = {"products": len(products), "mapped": 0, "unmapped": 0, "attributes_assigned": 0}
 
     for idx, p in enumerate(products):
-        platform = _clean(p.get("platform")) or "amazon"
+        platform = _platform_of(p)
         src_cat = _clean(p.get("source_category_path") or p.get("sourceCategoryPath"))
         resolved = cat_mapper.resolve(platform, src_cat)
         specs = p.get("specifications") or {}

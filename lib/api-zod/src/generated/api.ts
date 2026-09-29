@@ -34,7 +34,7 @@ export const SearchEcommerceProductsResponse = zod.object({
   "price": zod.string().nullish().describe('Product price'),
   "url": zod.string().nullish().describe('Product page URL'),
   "platform": zod.string().optional().describe('Platform this product is from')
-})),
+}).passthrough()),
   "warnings": zod.array(zod.string()).optional()
 })
 

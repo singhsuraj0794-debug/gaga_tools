@@ -37,7 +37,7 @@ export default function Scraper({ initialPlatform = "flipkart" }: { initialPlatf
       const response = await fetch(`${API_BASE}/api/scraper/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products, filename: `${platform}-products.xlsx` }),
+        body: JSON.stringify({ products, platform, filename: `${platform}-products.xlsx` }),
       });
 
       if (!response.ok) throw new Error("Export failed");

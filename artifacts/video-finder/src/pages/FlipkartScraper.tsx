@@ -279,7 +279,7 @@ export default function FlipkartScraper() {
       const response = await fetch(`${API_BASE}/api/scraper/flipkart/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products }),
+        body: JSON.stringify({ products, platform: "flipkart" }),
       });
       if (response.ok) {
         const blob = await response.blob();

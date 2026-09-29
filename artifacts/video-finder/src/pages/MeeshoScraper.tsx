@@ -286,7 +286,7 @@ export default function MeeshoScraper() {
       const response = await fetch(`${API_BASE}/api/scraper/meesho/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products: scrapedProducts }),
+        body: JSON.stringify({ products: scrapedProducts, platform: "meesho" }),
       });
 
       if (response.ok) {

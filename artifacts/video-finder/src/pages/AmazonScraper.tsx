@@ -377,7 +377,7 @@ export default function AmazonScraper() {
       const response = await fetch(`${API_BASE}/api/scraper/amazon/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products }),
+        body: JSON.stringify({ products, platform: "amazon" }),
       });
       if (response.ok) {
         const blob = await response.blob();

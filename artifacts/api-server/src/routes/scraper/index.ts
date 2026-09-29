@@ -238,56 +238,15 @@ router.post("/export", async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({ error: "Invalid request body" });
       return;
     }
-    const { products, filename = "scraped-products.xlsx" } = parseResult.data;
-
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Products");
-
-    worksheet.columns = [
-      { header: "Product ID", key: "id", width: 30 },
-      { header: "Title", key: "title", width: 50 },
-      { header: "Description", key: "description", width: 80 },
-      { header: "Image URL", key: "imageUrl", width: 50 },
-      { header: "Price", key: "price", width: 20 },
-      { header: "Product URL", key: "url", width: 50 },
-      { header: "Platform", key: "platform", width: 15 },
-    ];
-
-    products.forEach((product) => {
-      worksheet.addRow({
-        id: product.id,
-        title: product.title,
-        description: product.description,
-        imageUrl: product.imageUrl,
-        price: product.price,
-        url: product.url,
-        platform: product.platform,
-      });
-    });
-
-    const headerRow = worksheet.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF4F46E5" },
-    };
-    headerRow.eachCell((cell) => {
-      cell.font = { color: { argb: "FFFFFFFF" }, bold: true };
-    });
-
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-    await workbook.xlsx.write(res);
-    res.end();
+    const { products, filename = "scraped-products.xlsx" } = parseResult.data as any;
+    // Same Gajab ProductImport layout as the platform-specific routes.
+    await sendGajabExport(products, filename, res);
   } catch (err: any) {
     logger.error({ err }, "Excel export failed");
-    res.status(500).json({ error: "Export failed" });
+    res.status(500).json({ error: "Export failed: " + err.message });
   }
 });
 
-// New endpoints for Flipkart detailed scraping
 router.post("/flipkart/upload", upload.single("file"), async (req: Request, res: Response): Promise<void> => {
   try {
     if (!req.file) {
