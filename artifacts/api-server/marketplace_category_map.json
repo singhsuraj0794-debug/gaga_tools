@@ -28,7 +28,11 @@
       "Wind Chimes": "Home & Kitchen > Home Decor > Garden Decor > Wind Chimes",
       "Mop Sticks": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > Mops & Cleaning Wipes",
       "Floor Mats": "Home & Kitchen > Home Furnishing > Floor Coverings",
-      "Cleaning Wipes": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry"
+      "Cleaning Wipes": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry",
+      "Carpets": "Home & Kitchen > Home Furnishing > Floor Coverings > Mat",
+      "Brushes": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry > Scrub Pads",
+      "Idols & Figurines": "Home & Kitchen > Home Decor > Table Decor & Handicrafts",
+      "Car Cloths & Towels": "Automobile Accessories > Car Accessories"
     },
     "amazon": {
       "Home & Kitchen > Kitchen & Dining > Kitchen Storage & Containers > Jars & Containers": "Home & Kitchen > Household Care & Supplies > Home Organizers & Storage > Container",
@@ -69,5 +73,6 @@
     "Pet Supplies > ...  — All Categories has NO pet category (only toy puppets / dog-tag jewellery)",
     "Furniture & Wood Polishes — no furniture-polish category exists",
     "Electronics > Mobile, Tablets and Accessories > Mobile & Tablet Accessories > Cases & Covers — defined in the ATTRIBUTES file (23 attrs) but NOT a row in All Categories"
-  ]
+  ],
+  "_note_generic_names": "Names like 'Parts & Accessories' vary per product and are deliberately left unmapped rather than guessed — a wrong category pulls the wrong attributes."
 }

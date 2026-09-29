@@ -121,10 +121,11 @@ def prepare(products: list[dict]) -> dict:
             attrs = []
             mapped = {"attributes": {}, "fixed": {}, "unmapped": [], "stats": {}}
             stats["unmapped"] += 1
-            mapping_note = "no curated mapping for the scraped category"
-
-        if not src_cat:
-            mapping_note = (mapping_note + "; " if mapping_note else "") + "platform exposed no category"
+            mapping_note = (
+                "platform exposed no category — nothing to map"
+                if not src_cat
+                else f"no curated mapping for '{src_cat[:60]}' (and no coarse/name match)"
+            )
 
         vals = mapped["attributes"]
         fixed = mapped["fixed"]
