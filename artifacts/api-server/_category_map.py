@@ -245,6 +245,43 @@ _L1_ALIASES_NORM: dict[str, str] = {}
 _build_l1_norm()
 
 
+
+# Marketplace crumbs that carry no product meaning. Meesho files whole swathes
+# of its catalogue under a bare "Others" — descending that gives garbage (and
+# the master taxonomy has leaves literally named "Others"), so these products
+# are routed by their TITLE instead.
+_GENERIC_PLACEHOLDERS = {
+    "others", "other", "misc", "miscellaneous", "mixed", "general",
+    "unknown", "unspecified", "n/a", "na", "all products", "products",
+    "no category", "not specified",
+}
+
+# High-precision title keywords -> exact taxonomy path. Only used when the
+# breadcrumb itself is unusable (generic placeholder, or nothing matched).
+# Every target is validated against category_l1l4.json at load time; a typo
+# fails loudly rather than silently mis-filing a product.
+_TITLE_KEYWORDS: list[tuple[str, str]] = [
+    (r"\bovulation|\blh\s*test|\bfertility\s*test|\bovu\s*kit",
+     "Beauty & Health Care > Health & Beauty > Sexual Wellness > Fertility Kits"),
+    (r"\bpregnancy\s*test|\bpregnancy\s*kit|\bhcg\s*test",
+     "Beauty & Health Care > Health & Beauty > Sexual Wellness > Pregnancy Kits"),
+    (r"\burine\s*test|\bdrug\s*test|\bdip\s*kit|\btest\s*strip",
+     "Beauty & Health Care > Medical Supplies > Health Monitors > Health Test Kit"),
+]
+
+
+def _last_crumb(path: str) -> str:
+    parts = [x for x in re.split(r"\s*>\s*", path or "") if x]
+    return parts[-1] if parts else ""
+
+
+def _norm_name(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def _is_generic(path: str) -> bool:
+    return _norm_name(_last_crumb(path)) in _GENERIC_PLACEHOLDERS
+
 class CategoryMapper:
     """Resolves a scraped marketplace category path to a Gajab L1-L4 path."""
 
@@ -274,6 +311,23 @@ class CategoryMapper:
             if cur is None or path.count(" > ") > cur.count(" > "):
                 self._by_name[n] = path
         self._warned: set[str] = set()
+
+    def resolve_by_title(self, title: str | None) -> dict | None:
+        """Last resort when the breadcrumb says nothing usable.
+
+        Deliberately keyword-based and high-precision: a wrong category pulls
+        the wrong attribute set, so only product nouns that map to exactly one
+        place in the taxonomy are listed. Returns None for anything ambiguous.
+        """
+        t = (title or "").lower()
+        if not t:
+            return None
+        for rx, path in _TITLE_KEYWORDS:
+            if path not in self._by_full:
+                continue  # stale target — ignore rather than mis-file
+            if re.search(rx, t):
+                return self._result_for(path, "title-keyword", 0.6)
+        return None
 
     def resolve_by_name(self, name: str) -> dict | None:
         """Resolve a bare category NAME (no parents) to a Gajab path.
@@ -398,31 +452,47 @@ class CategoryMapper:
             "method": method,
         }
 
-    def resolve(self, platform: str, source_path: str | None, allow_coarse: bool = True) -> dict | None:
+    def resolve(self, platform: str, source_path: str | None, allow_coarse: bool = True,
+                 title: str | None = None) -> dict | None:
         """Return {'full','l1'..'l4','level','confidence','method'} or None.
 
         Order: curated exact/L4 (then L3/L2) -> curated-coarse -> mechanical
         coarse (marketplace L1 -> Gajab L1, descended as far as the breadcrumb
         names). A product should almost always leave with SOME valid category.
         """
-        if not source_path:
-            return None
+        src = (source_path or "").strip()
+        title = title or ""
         plat = (platform or "").lower()
-        bucket = self.map.get("map", {}).get(plat, {})
 
-        dest = _lookup(bucket, source_path) if bucket else None
+        # A generic placeholder ("Others") carries no signal, so descending it
+        # would attach an arbitrary branch's attributes. Route those by title.
+        if not src or _is_generic(src):
+            by_title = self.resolve_by_title(title) if title else None
+            if by_title:
+                return by_title
+            if src and src not in self._warned:
+                self._warned.add(src)
+            return None
+
+        bucket = self.map.get("map", {}).get(plat, {})
+        dest = _lookup(bucket, src) if bucket else None
 
         if not dest:
             # Single-level name (no parents) — e.g. Meesho's
             # catalog.sub_sub_category_name when its breadcrumb is empty.
-            if ">" not in source_path:
-                named = self.resolve_by_name(source_path)
+            if ">" not in src:
+                named = self.resolve_by_name(src)
                 if named:
                     return named
-            coarse = self.resolve_coarse(plat, source_path) if allow_coarse else None
+            coarse = self.resolve_coarse(plat, src) if allow_coarse else None
             if coarse is None:
-                if source_path not in self._warned:
-                    self._warned.add(source_path)
+                # Nothing in the breadcrumb mapped: a precise title keyword
+                # beats leaving the row unmapped.
+                by_title = self.resolve_by_title(title) if title else None
+                if by_title:
+                    return by_title
+                if src not in self._warned:
+                    self._warned.add(src)
                 return None
             return coarse
 

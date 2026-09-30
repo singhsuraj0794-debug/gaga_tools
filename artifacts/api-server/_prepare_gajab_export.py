@@ -34,7 +34,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
-from _category_map import CategoryMapper  # noqa: E402
+from _category_map import CategoryMapper, _is_generic  # noqa: E402
 from _spec_to_attribute import SpecAttributeMapper, load_catalog  # noqa: E402
 
 # The template's 38 fixed columns, in order (row-2 headers of Product excel sheet).
@@ -254,7 +254,7 @@ def prepare(products: list[dict]) -> dict:
                 p.get("source_category_path") if p.get("source_category_path") is not None
                 else p.get("sourceCategoryPath")
             )
-            resolved = cat_mapper.resolve(platform, src_cat)
+            resolved = cat_mapper.resolve(platform, src_cat, title=_clean(p.get("title")))
             specs = _normalise_specs(p.get("specifications"))
 
             mapping_note = ""
@@ -272,16 +272,22 @@ def prepare(products: list[dict]) -> dict:
                     mapping_note = (f"coarse category: assigned at L{resolved.get('level')} "
                                     f"({mapping_method}) — no exact L4 match")
                     stats["coarse"] = stats.get("coarse", 0) + 1
+                elif mapping_method == "title-keyword":
+                    mapping_note = (f"source category {src_cat!r} is a placeholder — "
+                                    f"mapped from the product title")
             else:
                 node = ""
                 attrs = []
                 mapped = {"attributes": {}, "fixed": {}, "unmapped": [], "stats": {}}
                 stats["unmapped"] += 1
-                mapping_note = (
-                    "platform exposed no category — nothing to map"
-                    if not src_cat
-                    else f"no curated mapping for '{src_cat[:60]}' (and no coarse/name match)"
-                )
+                if not src_cat:
+                    mapping_note = "platform exposed no category — nothing to map"
+                elif _is_generic(src_cat):
+                    mapping_note = (f"source category {src_cat!r} is a placeholder and the "
+                                    f"title matched no known product keyword")
+                else:
+                    mapping_note = (f"no curated mapping for '{src_cat[:60]}' "
+                                    f"(and no coarse/name/title match)")
 
             if attrs and node not in cat_attrs:
                 cat_attrs[node] = list(attrs)
@@ -338,6 +344,7 @@ def prepare(products: list[dict]) -> dict:
                 "Mapping Status": (
                     "unmapped" if not resolved
                     else "ok-coarse" if mapping_note.startswith("coarse")
+                    else "ok-title" if mapping_method == "title-keyword"
                     else "ok"
                 ),
                 "Source Category": src_cat,
@@ -472,8 +479,11 @@ def summarise(products: list[dict]) -> dict:
     cat_mapper = CategoryMapper()
     counts: "OrderedDict[str, int]" = OrderedDict()
     for p in products:
-        resolved = cat_mapper.resolve(_platform_of(p),
-                                      _clean(p.get("source_category_path") or p.get("sourceCategoryPath")))
+        resolved = cat_mapper.resolve(
+            _platform_of(p),
+            _clean(p.get("source_category_path") or p.get("sourceCategoryPath")),
+            title=_clean(p.get("title")),
+        )
         node = resolved["full"] if resolved else ""
         counts[node] = counts.get(node, 0) + 1
     used: set[str] = set()
