@@ -20,6 +20,7 @@ import {
 import { Link } from "wouter";
 import { API_BASE } from "@/lib/api";
 import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
+import { exportGajabWorkbook } from "@/lib/gajabExport";
 
 
 interface MeeshoDetailedProduct {
@@ -297,28 +298,11 @@ export default function MeeshoScraper() {
 
     setIsExporting(true);
     try {
-      const response = await fetch(`${API_BASE}/api/scraper/meesho/export`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products: scrapedProducts, platform: "meesho" }),
-      });
-
-      if (response.ok) {
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "meesho-products.xlsx";
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      } else {
-        alert("Failed to export products");
-      }
+      await exportGajabWorkbook("meesho", scrapedProducts, "meesho-products.xlsx");
     } catch (error) {
       console.error("Export error:", error);
-      alert("Failed to export products");
+      const detail = error instanceof Error ? error.message : String(error);
+      alert(`Export failed${detail ? `:\n${detail}` : ""}`);
     } finally {
       setIsExporting(false);
     }

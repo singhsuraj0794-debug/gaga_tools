@@ -150,6 +150,82 @@ def _price_number(v) -> str:
     return m.group(1).replace(",", "") if m else s
 
 
+
+def _normalise_specs(v) -> dict:
+    """Scrapers hand specifications over in several shapes. Only a mapping is
+    usable as-is; a list of key/value pairs is folded in; anything else is
+    treated as absent rather than crashing the whole export."""
+    if isinstance(v, dict):
+        return {str(k): val for k, val in v.items() if k is not None and str(k).strip()}
+    if isinstance(v, (list, tuple)):
+        out = {}
+        for item in v:
+            if isinstance(item, dict):
+                k = item.get("key") or item.get("name") or item.get("attribute")
+                val = item.get("value") or item.get("val")
+                if k is not None:
+                    out[str(k)] = val
+            elif isinstance(item, str) and ":" in item:
+                k, _, val = item.partition(":")
+                out[k.strip()] = val.strip()
+        return out
+    return {}
+
+
+def _normalise_images(v) -> list:
+    if isinstance(v, (list, tuple)):
+        return [x for x in v if isinstance(x, str) and x.strip()]
+    if isinstance(v, dict):
+        # numeric-keyed maps ({"0": url}) lose ordering in JSON; sort by key
+        def key(x):
+            try:
+                return (0, int(x[0]), "")
+            except (TypeError, ValueError):
+                return (1, 0, str(x[0]))
+        return [val for _, val in sorted(((k, val) for k, val in v.items()
+                                          if isinstance(val, str) and val.strip()), key=key)]
+    if isinstance(v, str) and v.strip():
+        return [v.strip()]
+    return []
+
+
+def _normalise_path(v) -> str:
+    """source_category_path arrives as "A > B > C" but sometimes as a list of
+    crumbs or an object; flatten to the same string the mapper expects."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (list, tuple)):
+        parts = []
+        for x in v:
+            if isinstance(x, dict):
+                x = x.get("title") or x.get("name") or ""
+            if x and str(x).strip():
+                parts.append(str(x).strip())
+        return " > ".join(parts)
+    if isinstance(v, dict):
+        return _normalise_path(v.get("titles") or v.get("crumbs") or "")
+    return ""
+
+
+def _as_list(v) -> list:
+    """variants sometimes arrive as a list; the template cell wants text."""
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip() for x in v if x is not None and str(x).strip()]
+    return []
+
+def _error_row(idx: int, raw) -> dict:
+    """Row emitted when a product could not be processed at all — keeps the
+    rest of the export alive and flags the bad entry instead of hiding it."""
+    row = {k: "" for k in FIXED_COLUMNS}
+    row["Sku *"] = f"ERROR-{idx + 1}"
+    row["Product  Name *"] = str(raw)[:120] if not isinstance(raw, dict) else str(raw.get("title") or "")[:120]
+    row["Mapping Status"] = "error"
+    row["Review Notes"] = f"row {idx + 1} could not be processed ({type(raw).__name__})"
+    for k in AUDIT_COLUMNS:
+        row.setdefault(k, "")
+    return row
+
+
 def prepare(products: list[dict]) -> dict:
     catalog = load_catalog()
     attr_mapper = SpecAttributeMapper(catalog)
@@ -165,104 +241,124 @@ def prepare(products: list[dict]) -> dict:
     stats = {"products": len(products), "mapped": 0, "unmapped": 0, "attributes_assigned": 0}
 
     for idx, p in enumerate(products):
-        platform = _platform_of(p)
-        src_cat = _clean(p.get("source_category_path") or p.get("sourceCategoryPath"))
-        resolved = cat_mapper.resolve(platform, src_cat)
-        specs = p.get("specifications") or {}
-
-        mapping_note = ""
-        mapping_method = ""
-        if resolved:
-            node = resolved["full"]
-            mapping_method = resolved.get("method", "curated")
-            attrs = attr_mapper.attrs_for(node)
-            mapped = attr_mapper.map_specs(specs, node)
-            stats["mapped"] += 1
-            # A coarse assignment (no L4 fits) is valid but less specific — say so
-            # rather than presenting it as a precise match.
-            if resolved.get("level", 4) < 4 or mapping_method.startswith("coarse") \
-                    or mapping_method == "curated-coarse":
-                mapping_note = (f"coarse category: assigned at L{resolved.get('level')} "
-                                f"({mapping_method}) — no exact L4 match")
-                stats["coarse"] = stats.get("coarse", 0) + 1
-        else:
-            node = ""
-            attrs = []
-            mapped = {"attributes": {}, "fixed": {}, "unmapped": [], "stats": {}}
+        if not isinstance(p, dict):
+            # a single non-object row must not abort the whole workbook
             stats["unmapped"] += 1
-            mapping_note = (
-                "platform exposed no category — nothing to map"
-                if not src_cat
-                else f"no curated mapping for '{src_cat[:60]}' (and no coarse/name match)"
+            stats.setdefault("errors", 0)
+            stats["errors"] += 1
+            rows.append(_error_row(idx, p))
+            continue
+        try:
+            platform = _platform_of(p)
+            src_cat = _normalise_path(
+                p.get("source_category_path") if p.get("source_category_path") is not None
+                else p.get("sourceCategoryPath")
+            )
+            resolved = cat_mapper.resolve(platform, src_cat)
+            specs = _normalise_specs(p.get("specifications"))
+
+            mapping_note = ""
+            mapping_method = ""
+            if resolved:
+                node = resolved["full"]
+                mapping_method = resolved.get("method", "curated")
+                attrs = attr_mapper.attrs_for(node)
+                mapped = attr_mapper.map_specs(specs, node)
+                stats["mapped"] += 1
+                # A coarse assignment (no L4 fits) is valid but less specific — say so
+                # rather than presenting it as a precise match.
+                if resolved.get("level", 4) < 4 or mapping_method.startswith("coarse") \
+                        or mapping_method == "curated-coarse":
+                    mapping_note = (f"coarse category: assigned at L{resolved.get('level')} "
+                                    f"({mapping_method}) — no exact L4 match")
+                    stats["coarse"] = stats.get("coarse", 0) + 1
+            else:
+                node = ""
+                attrs = []
+                mapped = {"attributes": {}, "fixed": {}, "unmapped": [], "stats": {}}
+                stats["unmapped"] += 1
+                mapping_note = (
+                    "platform exposed no category — nothing to map"
+                    if not src_cat
+                    else f"no curated mapping for '{src_cat[:60]}' (and no coarse/name match)"
+                )
+
+            if attrs and node not in cat_attrs:
+                cat_attrs[node] = list(attrs)
+            for a in attrs:
+                col_meta.setdefault(a["specification"], {
+                    "specification": a["specification"],
+                    "attribute": a["attribute"],
+                    "leaf": a["leaf"],
+                    "type": a.get("type"),
+                    "mandatory": a.get("mandatory"),
+                    "valid": a.get("valid", []),
+                })
+
+            vals = mapped["attributes"]
+            fixed = mapped["fixed"]
+            stats["attributes_assigned"] += len(vals)
+
+            dims = _clean(fixed.get("dimensions"))
+            dim_parts = [d.strip() for d in dims.split(" x ")] if dims else []
+            images = _normalise_images(
+                p.get("images") if p.get("images") is not None else p.get("imageUrl")
             )
 
-        if attrs and node not in cat_attrs:
-            cat_attrs[node] = list(attrs)
-        for a in attrs:
-            col_meta.setdefault(a["specification"], {
-                "specification": a["specification"],
-                "attribute": a["attribute"],
-                "leaf": a["leaf"],
-                "type": a.get("type"),
-                "mandatory": a.get("mandatory"),
-                "valid": a.get("valid", []),
-            })
+            row: dict = {
+                "Sku *": _sku_for(p, idx),
+                "Listing  Type *": _clean(p.get("listing_type")) or "Make an Offer",
+                "Category  Name *": node,
+                "Brand  Name *": _clean(p.get("brand")) or _clean(fixed.get("brand")),
+                "Product  Name *": _clean(p.get("title")),
+                "Description *": _html_description(_clean(p.get("description"))),
+                "Hsn *": _clean(p.get("hsn")),
+                "Tax *": _clean(p.get("gst")).replace("%", ""),
+                "Product  Location *": _clean(p.get("location")),
+                "Auto  Renewal": "",
+                "Start  Date": "",
+                "Quantity *": _clean(p.get("quantity")) or "1",
+                "Low  Stock  Alert": "",
+                "Package  Weight *": _clean(fixed.get("weight")),
+                "Package  Height *": dim_parts[2] if len(dim_parts) > 2 else "",
+                "Package  Width  *": dim_parts[1] if len(dim_parts) > 1 else "",
+                "Package  Length *": dim_parts[0] if dim_parts else "",
+                "Relationship *": "Simple",
+                "Parent  Sku*": _clean(p.get("sku")) or _sku_for(p, idx),
+                "Variantion  Name": (_clean(p.get("variants")) if not isinstance(p.get("variants"), list)
+                                     else ", ".join(_as_list(p.get("variants")))),
+                "Mrp  Price *": _price_number(p.get("price")),
+                "Transfer  Price *": "",
+                "Meta  Tag  Title": _clean(p.get("title"))[:60],
+                "Meta  Tag  Description": _clean(p.get("meta_description")) or _clean(p.get("description"))[:160],
+                "Meta  Tag  Keyword": "",
+                "Cod": "", "Cod Charge": "",
+                "Product Videos": _clean(p.get("video")),
+                # audit
+                "Mapping Status": (
+                    "unmapped" if not resolved
+                    else "ok-coarse" if mapping_note.startswith("coarse")
+                    else "ok"
+                ),
+                "Source Category": src_cat,
+                "Mapped Category Path": node,
+                "Review Notes": mapping_note,
+            }
+            for i in range(1, 11):
+                row[f"Product Image {i}" + (" *" if i == 1 else "")] = images[i - 1] if len(images) >= i else ""
+            # attribute values, keyed by specification so they land in the right column
+            for a in attrs:
+                v = vals.get(a["attribute"])
+                if v not in (None, ""):
+                    row["spec::" + a["specification"]] = v
 
-        vals = mapped["attributes"]
-        fixed = mapped["fixed"]
-        stats["attributes_assigned"] += len(vals)
-
-        dims = _clean(fixed.get("dimensions"))
-        dim_parts = [d.strip() for d in dims.split(" x ")] if dims else []
-        images = p.get("images") or ([p["imageUrl"]] if p.get("imageUrl") else [])
-
-        row: dict = {
-            "Sku *": _sku_for(p, idx),
-            "Listing  Type *": _clean(p.get("listing_type")) or "Make an Offer",
-            "Category  Name *": node,
-            "Brand  Name *": _clean(p.get("brand")) or _clean(fixed.get("brand")),
-            "Product  Name *": _clean(p.get("title")),
-            "Description *": _html_description(_clean(p.get("description"))),
-            "Hsn *": _clean(p.get("hsn")),
-            "Tax *": _clean(p.get("gst")).replace("%", ""),
-            "Product  Location *": _clean(p.get("location")),
-            "Auto  Renewal": "",
-            "Start  Date": "",
-            "Quantity *": _clean(p.get("quantity")) or "1",
-            "Low  Stock  Alert": "",
-            "Package  Weight *": _clean(fixed.get("weight")),
-            "Package  Height *": dim_parts[2] if len(dim_parts) > 2 else "",
-            "Package  Width  *": dim_parts[1] if len(dim_parts) > 1 else "",
-            "Package  Length *": dim_parts[0] if dim_parts else "",
-            "Relationship *": "Simple",
-            "Parent  Sku*": _clean(p.get("sku")) or _sku_for(p, idx),
-            "Variantion  Name": _clean(p.get("variants")),
-            "Mrp  Price *": _price_number(p.get("price")),
-            "Transfer  Price *": "",
-            "Meta  Tag  Title": _clean(p.get("title"))[:60],
-            "Meta  Tag  Description": _clean(p.get("meta_description")) or _clean(p.get("description"))[:160],
-            "Meta  Tag  Keyword": "",
-            "Cod": "", "Cod Charge": "",
-            "Product Videos": _clean(p.get("video")),
-            # audit
-            "Mapping Status": (
-                "unmapped" if not resolved
-                else "ok-coarse" if mapping_note.startswith("coarse")
-                else "ok"
-            ),
-            "Source Category": src_cat,
-            "Mapped Category Path": node,
-            "Review Notes": mapping_note,
-        }
-        for i in range(1, 11):
-            row[f"Product Image {i}" + (" *" if i == 1 else "")] = images[i - 1] if len(images) >= i else ""
-        # attribute values, keyed by specification so they land in the right column
-        for a in attrs:
-            v = vals.get(a["attribute"])
-            if v not in (None, ""):
-                row["spec::" + a["specification"]] = v
-
-        rows.append(row)
+            rows.append(row)
+        except Exception as exc:  # noqa: BLE001 — one bad row must not
+            # abort the workbook; emit a flagged row and keep going
+            stats["errors"] = stats.get("errors", 0) + 1
+            err = _error_row(idx, p)
+            err["Review Notes"] = f"row {idx + 1} failed: {type(exc).__name__}: {exc}"[:300]
+            rows.append(err)
 
     return build_sheets(rows, stats, col_meta, cat_attrs)
 
