@@ -64,6 +64,7 @@ interface FlipkartDetailedProduct {
   weight: string | null;
   specifications: Record<string, string> | null;
   source_category_path?: string | null;
+  source_catalog_name?: string | null;
   variants: string | null;
   price: string | null;
   url: string;
@@ -78,7 +79,7 @@ function buildFlipkartProduct(pid: string, url: string, result: any): FlipkartDe
   if (result.status === "failed") {
     return { id: pid, title: "Failed to scrape", description: null, meta_description: null, imageUrl: null, images: [], hsn: null, gst: null, dimensions: null, weight: null, specifications: null, variants: null, price: null, url, status: "failed", error: result.error || "Scraping failed" };
   }
-  return { id: pid, title: result.title || "Untitled Product", description: result.description || null, meta_description: result.meta_description || null, imageUrl: (result.images || [])[0] || null, images: result.images || [], hsn: result.hsn || null, gst: result.gst || null, dimensions: result.dimensions || null, weight: result.weight || null, specifications: result.specifications || null, variants: null, price: result.price || null, url, status: "success", error: null };
+  return { id: pid, title: result.title || "Untitled Product", description: result.description || null, meta_description: result.meta_description || null, imageUrl: (result.images || [])[0] || null, images: result.images || [], hsn: result.hsn || null, gst: result.gst || null, dimensions: result.dimensions || null, weight: result.weight || null, specifications: result.specifications || null, source_category_path: result.source_category_path || null, variants: null, price: result.price || null, url, status: "success", error: null };
 }
 
 async function scrapeFlipkartProduct(url: string): Promise<FlipkartDetailedProduct> {

@@ -33,6 +33,7 @@ interface AmazonDetailedProduct {
   weight: string | null;
   specifications: Record<string, string> | null;
   source_category_path?: string | null;
+  source_catalog_name?: string | null;
   variants: string | null;
   price: string | null;
   url: string;
@@ -140,6 +141,7 @@ async function scrapeAmazonProduct(url: string): Promise<AmazonDetailedProduct> 
       dimensions: result.dimensions || null,
       weight: result.weight || null,
       specifications: result.specifications || null,
+      source_category_path: result.source_category_path || null,
       variants: null,
       price: result.price || null,
       url,

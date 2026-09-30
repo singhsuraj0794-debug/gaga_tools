@@ -29,6 +29,7 @@ interface MeeshoDetailedProduct {
   weight: string | null;
   specifications: Record<string, string> | null;
   source_category_path?: string | null;
+  source_catalog_name?: string | null;
   variants: string | null;
   price: string | null;
   url: string;
@@ -89,6 +90,8 @@ async function scrapeProduct(url: string): Promise<MeeshoDetailedProduct> {
         dimensions: localResult.dimensions || null,
         weight: localResult.weight || null,
         specifications: localResult.specifications || null,
+        source_category_path: localResult.source_category_path || null,
+        source_catalog_name: localResult.source_catalog_name || null,
         variants: localResult.variants || null,
         price: localResult.price || null,
         url,
@@ -112,6 +115,8 @@ async function scrapeProduct(url: string): Promise<MeeshoDetailedProduct> {
       dimensions: result.dimensions || null,
       weight: result.weight || null,
       specifications: result.specifications || null,
+      source_category_path: result.source_category_path || null,
+      source_catalog_name: result.source_catalog_name || null,
       variants: result.variants || null,
       price: result.price || null,
       url,
