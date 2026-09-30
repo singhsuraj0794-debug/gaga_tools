@@ -13,7 +13,7 @@ Usage:
 import json
 import sys
 import traceback
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 
 PORT = 9000
 
@@ -198,8 +198,14 @@ class ScraperHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", PORT), ScraperHandler)
-    print(f"Local scraper server listening on port {PORT}", flush=True)
+    # ThreadingHTTPServer, NOT HTTPServer: with the single-threaded server one
+    # long request (a sheet-duplicates job, a catalogue extract) blocked every
+    # other connection — including the /api/* proxy to the compute API — so the
+    # validator reported "Not reachable" and scrapes timed out with 000 while the
+    # process was still alive. daemon_threads lets the process exit cleanly.
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), ScraperHandler)
+    server.daemon_threads = True
+    print(f"Local scraper server listening on port {PORT} (threaded)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
