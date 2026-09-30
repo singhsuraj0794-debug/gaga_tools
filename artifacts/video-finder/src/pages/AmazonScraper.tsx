@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { API_BASE } from "@/lib/api";
+import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
+
 
 interface AmazonDetailedProduct {
   id: string;
@@ -66,6 +68,7 @@ export default function AmazonScraper() {
   const [isScraping, setIsScraping] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const catSummary = useCategorySummary("amazon", products);
   const [uploadStatus, setUploadStatus] = useState<{ total: number; valid: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
@@ -947,6 +950,7 @@ export default function AmazonScraper() {
             {/* Scraped Products */}
             {(products.length > 0 || isScraping) && (
               <div className="space-y-4">
+                <CategorySummary summary={catSummary} />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-amber-600" />

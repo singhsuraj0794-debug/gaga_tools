@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
 import { runLocalScraper, runLocalExtract, runLocalExtractPage, hasLocalScraper } from "../../lib/localScraper.js";
-import { sendGajabExport } from "./gajabExport";
+import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 
 const execFileAsync = promisify(execFile);
 
@@ -347,6 +347,22 @@ router.post("/cancel/:jobId", (req: Request, res: Response): void => {
     job.status = "cancelled";
   }
   res.json({ status: "cancelled" });
+});
+
+router.post("/category-summary", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { products } = req.body;
+    if (!products || !Array.isArray(products)) {
+      res.status(400).json({ error: "Products array required" });
+      return;
+    }
+    // Pre-export: how many categories this scraped file holds, and how many
+    // products / attribute columns each resulting sheet will get.
+    await sendGajabSummary(products, res);
+  } catch (err: any) {
+    logger.error({ err }, "Category summary failed");
+    res.status(500).json({ error: "Category summary failed: " + err.message });
+  }
 });
 
 router.post("/export", async (req: Request, res: Response): Promise<void> => {

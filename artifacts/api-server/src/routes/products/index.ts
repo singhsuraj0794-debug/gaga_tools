@@ -1121,6 +1121,125 @@ router.post("/products/hsn-suggest", async (req, res): Promise<void> => {
   }
 });
 
+// ── Category Validation (Marqo image → L1..L4 taxonomy) ────────────────────
+
+router.post("/products/category-validate", async (req, res): Promise<void> => {
+  try {
+    const { products } = req.body as {
+      products: {
+        sku?: string;
+        title?: string;
+        url?: string;
+        l1?: string;
+        l2?: string;
+        l3?: string;
+        l4?: string;
+        images?: string[];
+      }[];
+    };
+
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+
+    // Prefer the persistent analysis server (Marqo resident — fast, fits the
+    // tunnel's ~100s request limit). Fall back to the one-shot CLI.
+    const serverResult = await tryAnalysisServer("category-validate", { products });
+    if (serverResult) {
+      req.log.info({ count: products.length, mode: "server" }, "Category validation (persistent server)");
+      res.json(serverResult);
+      return;
+    }
+
+    const scriptPath = resolveScript("_category_validate.py");
+    const { writeFile, unlink } = await import("node:fs/promises");
+    const inputPath = `/tmp/category_validate_input_${Date.now()}.json`;
+    await writeFile(inputPath, JSON.stringify({ products }));
+
+    req.log.info({ count: products.length }, "Running category validation (one-shot)");
+
+    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 1800000,
+    });
+    await unlink(inputPath).catch(() => {});
+
+    const result = JSON.parse(stdout);
+    res.json(result);
+  } catch (err: any) {
+    req.log.error({ err }, "Category validation failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Category Validation background job (large sheets) ──────────────────────
+// POST /api/products/category-validate/job  -> { jobId }
+router.post("/products/category-validate/job", async (req, res): Promise<void> => {
+  try {
+    const { products } = req.body as { products: Record<string, unknown>[] };
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+    const port = process.env.ANALYSIS_PORT || "8003";
+    const resp = await fetch(`http://127.0.0.1:${port}/category-validate/job`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ products }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!resp.ok) {
+      res.status(502).json({ error: `analysis server job start failed: ${resp.status}` });
+      return;
+    }
+    const data = (await resp.json()) as { jobId?: string };
+    req.log.info({ count: products.length, jobId: data.jobId }, "Category validation job started");
+    res.json(data);
+  } catch (err: any) {
+    req.log.error({ err }, "Category validation job start failed");
+    res.status(502).json({ error: `analysis server unreachable: ${err.message}` });
+  }
+});
+
+// GET /api/products/category-validate/job/:jobId  and  .../job/:jobId/:what
+// (Express 5's path-to-regexp rejects the optional `?` param syntax, so the
+//  two variants are registered explicitly.)
+router.get("/products/category-validate/job/:jobId/:what", async (req, res): Promise<void> => {
+  try {
+    const port = process.env.ANALYSIS_PORT || "8003";
+    const jobId = req.params.jobId;
+    const what = req.params.what === "results" ? "results" : "progress";
+    const resp = await fetch(`http://127.0.0.1:${port}/category-validate/job/${jobId}/${what}`, {
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!resp.ok) {
+      res.status(resp.status).json({ error: "job not found" });
+      return;
+    }
+    res.json(await resp.json());
+  } catch (err: any) {
+    res.status(502).json({ error: `analysis server unreachable: ${err.message}` });
+  }
+});
+
+router.get("/products/category-validate/job/:jobId", async (req, res): Promise<void> => {
+  try {
+    const port = process.env.ANALYSIS_PORT || "8003";
+    const jobId = req.params.jobId;
+    const resp = await fetch(`http://127.0.0.1:${port}/category-validate/job/${jobId}/progress`, {
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!resp.ok) {
+      res.status(resp.status).json({ error: "job not found" });
+      return;
+    }
+    res.json(await resp.json());
+  } catch (err: any) {
+    res.status(502).json({ error: `analysis server unreachable: ${err.message}` });
+  }
+});
+
 router.post("/products/clip-verify", async (req, res): Promise<void> => {
   try {
     const { products, useQwenVerify } = req.body as {
@@ -1188,7 +1307,7 @@ async function tryClipVerifyServer(
 
 // Proxy to the persistent analysis server (Qwen + HSN + text correction) so the
 // heavy models stay resident and requests finish under the tunnel's ~100s limit.
-async function tryAnalysisServer(path: "hsn-suggest" | "correct-text", payload: Record<string, unknown>): Promise<unknown | null> {
+async function tryAnalysisServer(path: "hsn-suggest" | "correct-text" | "category-validate", payload: Record<string, unknown>): Promise<unknown | null> {
   const port = process.env.ANALYSIS_PORT || "8003";
   try {
     const resp = await fetch(`http://127.0.0.1:${port}/${path}`, {

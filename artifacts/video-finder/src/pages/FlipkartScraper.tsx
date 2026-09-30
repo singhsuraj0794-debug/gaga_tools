@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { API_BASE } from "@/lib/api";
+import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
+
 
 interface FlipkartDetailedProduct {
   id: string;
@@ -63,6 +65,7 @@ export default function FlipkartScraper() {
   const [isScraping, setIsScraping] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const catSummary = useCategorySummary("flipkart", products);
   const [uploadStatus, setUploadStatus] = useState<{ total: number; valid: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
@@ -657,6 +660,7 @@ export default function FlipkartScraper() {
             {/* Scraped Products */}
             {(products.length > 0 || isScraping) && (
               <div className="space-y-4">
+                <CategorySummary summary={catSummary} />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-green-600" />

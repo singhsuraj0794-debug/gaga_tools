@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
-import { sendGajabExport } from "./gajabExport";
+import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 
 const execFileAsync = promisify(execFile);
 
@@ -327,6 +327,22 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
   } catch (err: any) {
     logger.error({ err }, "Failed to scrape products");
     res.status(500).json({ error: "Failed to scrape products: " + err.message });
+  }
+});
+
+router.post("/category-summary", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { products } = req.body;
+    if (!products || !Array.isArray(products)) {
+      res.status(400).json({ error: "Products array required" });
+      return;
+    }
+    // Pre-export: how many categories this scraped file holds, and how many
+    // products / attribute columns each resulting sheet will get.
+    await sendGajabSummary(products, res);
+  } catch (err: any) {
+    logger.error({ err }, "Category summary failed");
+    res.status(500).json({ error: "Category summary failed: " + err.message });
   }
 });
 

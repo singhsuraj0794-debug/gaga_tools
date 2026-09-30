@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { API_BASE } from "@/lib/api";
+import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
+
 
 interface MeeshoDetailedProduct {
   id: string;
@@ -67,6 +69,7 @@ export default function MeeshoScraper() {
   const [isScraping, setIsScraping] = useState(() => !!sessionStorage.getItem("meesho_jobId"));
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(() => sessionStorage.getItem("meesho_jobId"));
   const [isExporting, setIsExporting] = useState(false);
+  const catSummary = useCategorySummary("meesho", scrapedProducts);
   const [storeName, setStoreName] = useState("");
   const [extractError, setExtractError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -733,6 +736,7 @@ export default function MeeshoScraper() {
             {/* Scraped Products */}
             {scrapedProducts.length > 0 && (
               <div className="space-y-4">
+                <CategorySummary summary={catSummary} />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-orange-600" />
