@@ -39,6 +39,10 @@ interface MeeshoDetailedProduct {
   error: string | null;
 }
 
+// Bump when scraping/extraction output changes shape, so a sessionStorage payload
+// captured by older code is never reused for an export.
+const SCRAPE_CACHE_V = "v2-category";
+
 export default function MeeshoScraper() {
   const [storeUrl, setStoreUrl] = useState("");
   const [products, setProducts] = useState<MeeshoDetailedProduct[]>([]);
@@ -46,8 +50,15 @@ export default function MeeshoScraper() {
   const [selectedUrls, setSelectedUrls] = useState<Set<string>>(new Set());
   const [scrapedProducts, setScrapedProducts] = useState<MeeshoDetailedProduct[]>(() => {
     try {
-      const saved = sessionStorage.getItem("meesho_scraped");
-      return saved ? JSON.parse(saved) : [];
+      const raw = sessionStorage.getItem("meesho_scraped");
+      if (!raw) return [];
+      const saved = JSON.parse(raw);
+      // Versioned: a payload captured before the category work carries no
+      // source_category_path, and reusing it made the export come out with an
+      // empty Category Name and zero attribute columns. Drop stale payloads so
+      // a fresh scrape is forced instead of silently exporting old data.
+      if (saved?.__v !== SCRAPE_CACHE_V) return [];
+      return Array.isArray(saved.products) ? saved.products : [];
     } catch { return []; }
   });
   const [isExtracting, setIsExtracting] = useState(false);
@@ -64,7 +75,7 @@ export default function MeeshoScraper() {
 
   // Persist scrapedProducts across page reloads
   useEffect(() => {
-    sessionStorage.setItem("meesho_scraped", JSON.stringify(scrapedProducts));
+    sessionStorage.setItem("meesho_scraped", JSON.stringify({ __v: SCRAPE_CACHE_V, products: scrapedProducts }));
   }, [scrapedProducts]);
 
   // Resume / poll extract job
