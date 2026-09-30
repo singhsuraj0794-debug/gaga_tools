@@ -60,6 +60,50 @@ def _clean(v) -> str:
     return re.sub(r"\s+", " ", str(v)).strip()
 
 
+def _html_description(text: str) -> str:
+    """Render the description as HTML for the template.
+
+    The Gajab listing template expects markup, but marketplaces hand us plain
+    text (Meesho's description is stripped of tags before it reaches us). Rebuild
+    it as paragraphs, with simple bullet runs turned into <ul><li>.
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    # already markup? leave it alone (Amazon/Flipkart often give HTML)
+    if re.search(r"<\s*(p|br|ul|ol|li|div|span|strong|b|em|h[1-6])\b", t, re.I):
+        return t
+
+    # normalise whitespace and split into blocks on blank lines
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", t) if b.strip()]
+    if len(blocks) <= 1:
+        # no blank lines: split on bullets / lines instead
+        lines = [ln.strip() for ln in t.split("\n") if ln.strip()]
+        blocks = []
+        bullets: list[str] = []
+        for ln in lines:
+            m = re.match(r"^[\-\*•·▪]\s+(.*)$", ln)
+            if m:
+                bullets.append(m.group(1).strip())
+                continue
+            if bullets:
+                blocks.append("\x00" + "\x01".join(bullets))
+                bullets = []
+            blocks.append(ln)
+        if bullets:
+            blocks.append("\x00" + "\x01".join(bullets))
+
+    html: list[str] = []
+    for b in blocks:
+        if b.startswith("\x00"):
+            items = b[1:].split("\x01")
+            html.append("<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>")
+        else:
+            html.append(f"<p>{b}</p>")
+    return "".join(html)
+
+
 def _platform_of(p: dict) -> str:
     """Which marketplace this product came from.
 
@@ -177,7 +221,7 @@ def prepare(products: list[dict]) -> dict:
             "Category  Name *": node,
             "Brand  Name *": _clean(p.get("brand")) or _clean(fixed.get("brand")),
             "Product  Name *": _clean(p.get("title")),
-            "Description *": _clean(p.get("description")),
+            "Description *": _html_description(_clean(p.get("description"))),
             "Hsn *": _clean(p.get("hsn")),
             "Tax *": _clean(p.get("gst")).replace("%", ""),
             "Product  Location *": _clean(p.get("location")),

@@ -217,44 +217,66 @@ class SpecAttributeMapper:
         self._derived = self._build_derived()
 
     def _build_derived(self) -> dict[str, list[dict]]:
-        """Attribute sets for nodes that have none, taken from their children.
+        """Attribute sets for nodes that have none, taken from their DESCENDANTS.
 
         Attribute Final defines attributes on 2,620 L4 leaves and 496 L3 nodes —
-        so a valid L3 target like 'Kitchen Accessories > Kitchen Tools' has ZERO
-        attributes of its own. Measured across the master, 148 of 150 L3 groups
-        give EVERY L4 child the identical attribute set, so a child's set is a
-        faithful stand-in for the parent. This keeps us inside the existing
-        master — no taxonomy changes required.
+        so a valid coarser target ('Home & Kitchen', 'Home & Kitchen > Home Decor')
+        has ZERO attributes of its own and the product would export no attribute
+        columns at all. Every node therefore borrows the most common attribute set
+        among the attribute-bearing nodes beneath it, which keeps us inside the
+        existing master (no taxonomy changes).
         """
         from collections import defaultdict as _dd
 
-        kids: dict[str, list[list[dict]]] = _dd(list)
+        # parent -> the attribute sets of its DIRECT children
+        direct: dict[str, list[list[dict]]] = _dd(list)
         for path, attrs in self.by_path.items():
             parts = path.split(" > ")
             if len(parts) < 2 or not attrs:
                 continue
-            kids[" > ".join(parts[:-1])].append(attrs)
+            direct[" > ".join(parts[:-1])].append(attrs)
 
-        derived: dict[str, list[dict]] = {}
-        for parent, sets in kids.items():
-            if parent in self.by_path:
-                continue  # it defines its own
-            # group by the attribute-name signature; require a clear majority
+        def agreed(sets: list[list[dict]], leaf: str) -> list[dict] | None:
+            """Most common attribute-name signature, if it has a clear majority."""
             sigs: dict[tuple, list[list[dict]]] = _dd(list)
             for s in sets:
                 sigs[tuple(a["attribute"] for a in s)].append(s)
             best_sig, best_sets = max(sigs.items(), key=lambda kv: len(kv[1]))
             if not best_sig or len(best_sets) < max(1, len(sets) // 2):
-                continue
-            # Borrowed rows carry the CHILD's spec name (e.g. 'Bowls | color'),
-            # which would mislabel the column for a product actually in the
-            # parent. Re-point specification/leaf at the node we are serving.
-            parent_leaf = parent.split(" > ")[-1]
-            derived[parent] = [
-                {**a, "leaf": parent_leaf,
-                 "specification": f"{parent_leaf} | {a['attribute']}"}
+                return None
+            return [
+                {**a, "leaf": leaf, "specification": f"{leaf} | {a['attribute']}"}
                 for a in best_sets[0]
             ]
+
+        derived: dict[str, list[dict]] = {}
+        for parent, sets in direct.items():
+            if parent in self.by_path:
+                continue
+            got = agreed(sets, parent.split(" > ")[-1])
+            if got:
+                derived[parent] = got
+
+        # Roll up: ancestors with no agreeing direct children (an L1 whose L2s are
+        # all attribute-less, say) borrow from ALL their descendants. Walk the
+        # WHOLE ancestor chain — stopping at the first hit left L1/L2 nodes with
+        # no attributes at all.
+        all_paths = list(self.by_path)
+        for path in all_paths:
+            if not self.by_path[path]:
+                continue
+            parts = path.split(" > ")
+            while len(parts) > 1:
+                parts.pop()
+                anc = " > ".join(parts)
+                if anc in self.by_path or anc in derived:
+                    continue
+                desc = [self.by_path[p] for p in all_paths if p.startswith(anc + " > ")]
+                if not desc:
+                    continue
+                got = agreed(desc, anc.split(" > ")[-1])
+                if got:
+                    derived[anc] = got
         return derived
 
     # -- helpers ---------------------------------------------------------

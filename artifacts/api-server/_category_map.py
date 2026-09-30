@@ -253,9 +253,12 @@ class CategoryMapper:
         self._by_full = {p["full"]: p for p in self.taxonomy.get("paths", [])}
         raw = json.loads(Path(map_path).read_text(encoding="utf-8")) if map_path else _default_map()
         self.map, self.errors = validate_map(raw, self.taxonomy)
-        # every valid master path at L1/L2/L3, longest first (most specific wins)
+        # Candidate targets for the coarse descent: EVERY valid path, deepest
+        # first. Restricting this to L1/L2/L3 meant a breadcrumb ending in a
+        # product noun that Gajab HAS as an L4 ('Artificial Flowers',
+        # 'First Aid Kit') could never reach it and stopped at the L1.
         self._coarse: list[str] = sorted(
-            (p for p in (self.taxonomy.get("ids") or {}) if p.count(" > ") <= 2),
+            (self.taxonomy.get("ids") or {}),
             key=lambda p: -p.count(" > "),
         )
         # name -> full path, for single-level category names (Meesho supplies
@@ -331,22 +334,47 @@ class CategoryMapper:
         return None
 
     def resolve_coarse(self, platform: str, source_path: str | None) -> dict | None:
-        """Coarse but valid: map the marketplace's top level to a Gajab L1, then
-        descend to the deepest L2/L3 the scraped breadcrumb actually names."""
+        """Coarse but valid placement, in two passes.
+
+        1. LEAF match across the WHOLE taxonomy: the marketplace's last crumb is
+           the product noun ('Wall Clocks', 'Artificial Flowers', 'First Aid
+           kits'). If a Gajab leaf matches it, that is the right home — and this
+           works across L1s, which the old L1-descend could never do (Meesho puts
+           'First Aid kits' under Grocery; Gajab keeps it under Health Care).
+        2. Otherwise descend inside the L1 the marketplace top level maps to.
+        """
         if not source_path:
             return None
         parts = [p.strip() for p in re.split(r"\s*>\s*", source_path) if p.strip()]
         if not parts:
             return None
+
+        # ── pass 1: leaf noun vs Gajab leaves ──────────────────────────────
+        leaf_crumb = _norm_key(parts[-1])
+        if len(leaf_crumb.split()) >= 2:
+            variants = _key_variants(leaf_crumb)
+            found = None
+            # exact leaf equality first (deepest path wins), then containment
+            for want_exact in (True, False):
+                for cand in self._coarse:          # deepest first
+                    cand_leaf = _norm_key(cand.split(" > ")[-1])
+                    if want_exact:
+                        if cand_leaf in variants:
+                            found = cand
+                            break
+                    elif any(v in cand_leaf or cand_leaf in v for v in variants if len(v) >= 6):
+                        found = cand
+                        break
+                if found:
+                    break
+            if found:
+                return self._result_for(found, "coarse-leaf", 0.7)
+
+        # ── pass 2: descend inside the mapped L1 ───────────────────────────
         gajab_l1 = self._l1_alias(parts[0])
         if not gajab_l1:
             return None
-
         from_here_norm = {_norm_key(p) for p in parts[1:]}
-        # Descend only on a real BRANCH match: a multi-word marketplace crumb
-        # must appear in the candidate's path. Single words are too weak — e.g.
-        # 'Chargers' would otherwise drag a phone accessory into
-        # 'Electronics > Gaming > Batteries & Chargers'.
         phrases = [c for c in from_here_norm if len(c.split()) >= 2]
         chosen = gajab_l1
         if phrases:
@@ -355,16 +383,19 @@ class CategoryMapper:
                 if any(ph in norm_cand for ph in phrases):
                     chosen = cand
                     break
-        lv = chosen.split(" > ")
+        return self._result_for(chosen, "coarse", 0.4)
+
+    def _result_for(self, full: str, method: str, confidence: float) -> dict:
+        lv = full.split(" > ")
         return {
-            "full": chosen,
+            "full": full,
             "l1": lv[0],
             "l2": lv[1] if len(lv) > 1 else "",
             "l3": lv[2] if len(lv) > 2 else "",
-            "l4": "",
+            "l4": lv[3] if len(lv) > 3 else "",
             "level": len(lv),
-            "confidence": 0.4,
-            "method": "coarse",
+            "confidence": confidence,
+            "method": method,
         }
 
     def resolve(self, platform: str, source_path: str | None, allow_coarse: bool = True) -> dict | None:
