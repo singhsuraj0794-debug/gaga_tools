@@ -21,6 +21,8 @@ warnings.filterwarnings("ignore", category=Warning, module="urllib3")
 
 logger = logging.getLogger(__name__)
 
+from _spec_to_attribute import _split_axes  # noqa: E402
+
 PROXY = os.environ.get("SCRAPER_PROXY", "")
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "")
 # scrape.do — residential-proxy fetcher. The local IP is blocked by Amazon
@@ -695,10 +697,23 @@ def _fill_derived(result: dict, specs: dict) -> None:
         ll = label.lower()
         if result["weight"] is None and "weight" in ll:
             result["weight"] = value
-        if result["dimensions"] is None and (
-            "dimension" in ll or ll in ("size", "product dimensions", "item dimensions l x w x h")
-        ):
-            result["dimensions"] = value.split(";")[0].strip() if ";" in value else value
+        if result["dimensions"] is not None or not ("dimension" in ll or ll == "size"):
+            continue
+        # 'Size' on Amazon is normally a VOLUME ('100 ml (Pack of 1)'), so only
+        # accept it when it is genuinely a multi-axis size; a dimension label is
+        # accepted either way, minus the field name Amazon echoes back into the
+        # value ('Product Dimensions : 5 x 5 x 18 cm; 100 g').
+        axes = _split_axes(value)
+        if axes:
+            result["dimensions"] = " x ".join(
+                axes[k] for k in ("dim_length", "dim_width", "dim_height") if k in axes)
+        elif "dimension" in ll:
+            v = value.split(";")[0].strip()
+            if ":" in v:
+                head, tail = v.split(":", 1)
+                if not re.search(r"\d", head):
+                    v = tail.strip()
+            result["dimensions"] = v
         if result["gst"] is None and "gst" in ll:
             result["gst"] = value
         if result["hsn"] is None and "hsn" in ll:

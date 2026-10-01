@@ -35,7 +35,10 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 from _category_map import CategoryMapper, _is_generic  # noqa: E402
-from _spec_to_attribute import SpecAttributeMapper, load_catalog  # noqa: E402
+from _spec_to_attribute import (  # noqa: E402
+    SpecAttributeMapper, load_catalog, normalise_key, _split_axes,
+    FIXED_COLUMN_KEYS, _COMBINED_DIM_KEYS,
+)
 
 # The template's 38 fixed columns, in order (row-2 headers of Product excel sheet).
 FIXED_COLUMNS = [
@@ -256,6 +259,22 @@ def prepare(products: list[dict]) -> dict:
             )
             resolved = cat_mapper.resolve(platform, src_cat, title=_clean(p.get("title")))
             specs = _normalise_specs(p.get("specifications"))
+            # The scraper ALSO reports size/weight at the top level of the
+            # product. Feed them in under canonical keys so the mandatory
+            # Package columns still fill when a page's detail table was not
+            # readable at all; map_specs ignores anything it cannot parse.
+            if specs is None:
+                specs = {}
+            if not any(normalise_key(k) in _COMBINED_DIM_KEYS
+                       or normalise_key(k) in FIXED_COLUMN_KEYS
+                       or "dimension" in normalise_key(k) for k in specs):
+                top_dims = _clean(p.get("dimensions"))
+                if top_dims and _split_axes(top_dims):
+                    specs["Product Dimensions"] = top_dims
+            if not any("weight" in normalise_key(k) for k in specs):
+                top_weight = _clean(p.get("weight"))
+                if top_weight:
+                    specs["Item Weight"] = top_weight
 
             mapping_note = ""
             mapping_method = ""
@@ -278,7 +297,13 @@ def prepare(products: list[dict]) -> dict:
             else:
                 node = ""
                 attrs = []
-                mapped = {"attributes": {}, "fixed": {}, "unmapped": [], "stats": {}}
+                # Fixed columns (brand, HSN, tax, weight, package dimensions)
+                # do not depend on the category and are starred in the template,
+                # so they must still be computed when the category is unknown.
+                # With node="" attrs_for() returns [] and map_specs yields the
+                # fixed columns only.
+                mapped = attr_mapper.map_specs(specs, "")
+                mapped["attributes"] = {}
                 stats["unmapped"] += 1
                 if not src_cat:
                     mapping_note = "platform exposed no category — nothing to map"

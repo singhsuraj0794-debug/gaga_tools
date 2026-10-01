@@ -69,6 +69,65 @@ FIXED_COLUMN_KEYS = {
     "brand name": "brand",
 }
 
+# Combined dimension keys — ONE field carrying all three axes instead of the
+# separate length/width/height keys above. Amazon always works this way
+# ('Product Dimensions : 5 x 5 x 18 cm; 100 g',
+#  'Item Dimensions LxWxH : 50 x 50 x 180 Millimeters') and so does
+# Flipkart-style 'Package Dimensions'. Without these the string never reached
+# `dims`, so Package Length / Width / Height exported blank for every Amazon
+# row. Higher number wins when a page carries more than one.
+_COMBINED_DIM_KEYS = {
+    "product dimensions": 3,
+    "product dimension": 3,
+    "package dimensions": 3,
+    "package dimension": 3,
+    "item dimensions l w h": 2,
+    "item dimensions": 2,
+    "dimensions": 1,
+}
+
+
+def _split_axes(value: str, default_unit: str = "cm") -> dict[str, str]:
+    """Parse a combined size string into ``dim_* -> '<n> cm'``.
+
+    'Product Dimensions : 5 x 5 x 18 cm; 100 g'      -> 5/5/18 cm
+    'Item Dimensions LxWxH : 50 x 50 x 180 Millimeters' -> 5/5/18 cm
+
+    Refuses anything that is not a multi-axis numeric size: a bare '100 ml',
+    a free-text 'Large' or an echoed field name must never reach a mandatory
+    Package column.
+    """
+    v = str(value or "").strip()
+    if not v:
+        return {}
+    # Amazon echoes the field name back: 'Product Dimensions : 5 x 5 x 18 cm'
+    if ":" in v:
+        head, tail = v.split(":", 1)
+        if not re.search(r"\d", head):
+            v = tail.strip()
+    # '5 x 5 x 18 cm; 100 g' — everything after ';' is a weight, not a size
+    v = v.split(";")[0].strip()
+    axes = [a.strip() for a in re.split(r"\s*[x×]\s*", v, flags=re.I) if a.strip()]
+    if len(axes) < 2:
+        return {}
+    # Amazon also writes axis directions straight onto the number:
+    # '7.5L x 5W x 7.5H Centimeters'. Strip them or to_cm sees '7.5L' as an
+    # unknown unit (it would match litre) and refuses the whole value.
+    axes = [re.sub(r"(?<=[0-9])[LWHlwhd](?![a-z])", "", a).strip() or a for a in axes]
+    # the unit is written once, at the end, and applies to every axis
+    unit = default_unit or "cm"
+    m = re.match(r"^[0-9.]+\s*([a-zA-Z.]+)$", axes[-1])
+    if m and m.group(1):
+        unit = m.group(1)
+    out: dict[str, str] = {}
+    for i, a in enumerate(axes[:3]):
+        cm = to_cm(a, default_unit=unit)
+        if not re.match(r"^[0-9.]+\s*cm$", str(cm)):
+            return {}          # to_cm left it unchanged -> not a size
+        out[("dim_length", "dim_width", "dim_height")[i]] = cm
+    return out
+
+
 # scraped key -> the shared unit token that applies to the dimension columns
 _DIMENSION_UNIT_KEYS = {"product unit", "product dimension unit", "dimension unit"}
 
@@ -369,6 +428,7 @@ class SpecAttributeMapper:
                     unit_suffix[base] = str(v or "").strip()
 
         dims: dict[str, str] = {}
+        combined: list[tuple[int, dict[str, str]]] = []
         for raw_key, raw_val in (specs or {}).items():
             key = normalise_key(raw_key)
             val = "" if raw_val is None else str(raw_val).strip()
@@ -378,6 +438,15 @@ class SpecAttributeMapper:
             if key in _DIMENSION_UNIT_KEYS:
                 used.add(key)
                 continue
+
+            # combined '5 x 5 x 18 cm' value — resolved after the loop so it can
+            # never override a real length/width/height key
+            if key in _COMBINED_DIM_KEYS:
+                axes = _split_axes(val, dim_unit or "cm")
+                if axes:
+                    combined.append((_COMBINED_DIM_KEYS[key], axes))
+                    used.add(key)
+                    continue
 
             # fixed template column, not a category attribute
             if key in FIXED_COLUMN_KEYS:
@@ -435,6 +504,11 @@ class SpecAttributeMapper:
                 continue
 
             unmapped.append({"key": raw_key, "value": val, "reason": "no matching Gajab attribute"})
+
+        # No separate axis keys on the page — take the best combined field.
+        if not dims and combined:
+            combined.sort(key=lambda t: -t[0])
+            dims.update(combined[0][1])
 
         # Assemble Package Length x Width x Height as one dimension string.
         # Gajab's template has Package Length / Width / Height; marketplaces send
