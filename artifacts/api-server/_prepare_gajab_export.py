@@ -154,6 +154,40 @@ def _price_number(v) -> str:
 
 
 
+# Marketplace weight unit -> kilograms. Gajab's Package Weight column takes a
+# bare number in KG: 1 kg = 1, 300 g = 0.3, 200 mg = 0.0002.
+_WEIGHT_TO_KG = {
+    "g": 1e-3, "gm": 1e-3, "gms": 1e-3, "gram": 1e-3, "grams": 1e-3,
+    "mg": 1e-6, "milligram": 1e-6, "milligrams": 1e-6,
+    "kg": 1.0, "kgs": 1.0, "kilogram": 1.0, "kilograms": 1.0,
+    "lb": 0.45359237, "lbs": 0.45359237, "pound": 0.45359237, "pounds": 0.45359237,
+    "oz": 0.028349523, "ounce": 0.028349523, "ounces": 0.028349523,
+}
+
+
+def _to_kg(v) -> str:
+    """'300 Grams' -> '0.3'   '1 kg' -> '1'   '200 Milligrams' -> '0.0002'.
+
+    The column is a bare kilogram digit — no unit, no trailing zeros, no
+    '1.0'. A value with no recognisable weight unit is left BLANK rather than
+    assumed: guessing whether a bare '5' means 5 g or 5 kg would write a wrong
+    number into a mandatory column.
+    """
+    s = _clean(v)
+    if not s:
+        return ""
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*(.*)$", s.replace(",", ""))
+    if not m:
+        return ""
+    num = float(m.group(1))
+    unit = re.split(r"[^a-z]", (m.group(2) or "").lower().strip())[0]
+    if unit not in _WEIGHT_TO_KG:
+        return ""
+    kg = round(num * _WEIGHT_TO_KG[unit], 6)
+    out = f"{kg:.6f}".rstrip("0").rstrip(".")
+    return out or "0"
+
+
 def _normalise_specs(v) -> dict:
     """Scrapers hand specifications over in several shapes. Only a mapping is
     usable as-is; a list of key/value pairs is folded in; anything else is
@@ -350,7 +384,7 @@ def prepare(products: list[dict]) -> dict:
                 "Start  Date": "",
                 "Quantity *": _clean(p.get("quantity")) or "1",
                 "Low  Stock  Alert": "",
-                "Package  Weight *": _clean(fixed.get("weight")),
+                "Package  Weight *": _to_kg(fixed.get("weight")),
                 "Package  Height *": dim_parts[2] if len(dim_parts) > 2 else "",
                 "Package  Width  *": dim_parts[1] if len(dim_parts) > 1 else "",
                 "Package  Length *": dim_parts[0] if dim_parts else "",
@@ -358,8 +392,11 @@ def prepare(products: list[dict]) -> dict:
                 "Parent  Sku*": _clean(p.get("sku")) or _sku_for(p, idx),
                 "Variantion  Name": (_clean(p.get("variants")) if not isinstance(p.get("variants"), list)
                                      else ", ".join(_as_list(p.get("variants")))),
-                "Mrp  Price *": _price_number(p.get("price")),
-                "Transfer  Price *": "",
+                # The scraped number is the marketplace's selling/transfer
+                # price. MRP is a separate field we have no source for, so it
+                # stays empty rather than carrying the same value twice.
+                "Mrp  Price *": "",
+                "Transfer  Price *": _price_number(p.get("price")),
                 "Meta  Tag  Title": _clean(p.get("title"))[:60],
                 "Meta  Tag  Description": _clean(p.get("meta_description")) or _clean(p.get("description"))[:160],
                 "Meta  Tag  Keyword": "",
