@@ -844,6 +844,75 @@ def _search_brand_hits(brand: str) -> int:
     return len(set(_re.findall(r"/dp/([A-Z0-9]{10})", html)))
 
 
+def _brand_candidates(store_url: str, path_name: str) -> list[str]:
+    """Every plausible display name for a store, best guess first.
+
+    Shared by the cheap HTTP probe and the browser probe so both consider the
+    same set (page-title brand, joined single-letter tokens, path-slug splits).
+    """
+    out: list[str] = []
+
+    def add(v: str):
+        v = " ".join((v or "").split())
+        if v and v not in out:
+            out.append(v)
+
+    title_brand = _brand_from_store_url(store_url)
+    if title_brand:
+        # 'B M BROTHERS' -> also try 'BM BROTHERS' (join single-letter tokens)
+        add(title_brand)
+        add(" ".join(re.sub(r"\b([A-Za-z])\b\s+", r"\1", title_brand).split()))
+    for c in _brand_filter_candidates(path_name):
+        add(c)
+    return out
+
+
+def _brand_hits_browser(page, brand: str, asin_re) -> int:
+    """How many products the brand-filtered search renders in a real browser.
+
+    The bare-HTTP probe (_search_brand_hits) is best-effort only: Amazon 503s
+    it and otherwise serves a JS shell with zero result cards, so it returns 0
+    for EVERY candidate — which used to disable the brand rewrite entirely and
+    leave the scraper on the un-paginated storefront (40 of 220 products).
+    """
+    from urllib.parse import quote_plus as _qp
+    url = f"https://www.amazon.in/s?rh=p_4%3A{_qp(brand)}&s=popularity-rank"
+    try:
+        page.goto(url, wait_until="commit", timeout=45000)
+        try:
+            page.wait_for_selector('[data-component-type="s-search-result"]', timeout=9000)
+        except Exception:
+            pass
+        page.wait_for_timeout(700)
+        html = page.content()
+    except Exception:
+        return 0
+    return len(set(asin_re.findall(html)))
+
+
+def _resolve_brand_filter_browser(page, store_url: str, path_name: str):
+    """Return (brand, search_url) using the browser; ("", store_url) if none.
+
+    Runs only when the HTTP probe could not confirm a brand — which is the
+    common case now, so this is the path that actually keeps the catalogue
+    complete.
+    """
+    import re as _re
+    asin_re = _re.compile(r"/dp/([A-Z0-9]{10})")
+    best, best_hits = "", 0
+    for c in _brand_candidates(store_url, path_name):
+        hits = _brand_hits_browser(page, c, asin_re)
+        logger.info("brand candidate %r -> %s products (browser)", c, hits)
+        if hits > best_hits:
+            best, best_hits = c, hits
+        if hits >= 20:      # a real catalogue is rarely smaller
+            break
+    if not best:
+        return "", store_url
+    from urllib.parse import quote_plus as _qp
+    return best, f"https://www.amazon.in/s?rh=p_4%3A{_qp(best)}&s=popularity-rank"
+
+
 def _brand_filter_candidates(path_name: str) -> list[str]:
     """Candidate brand strings for a store, best guess first.
 
@@ -877,20 +946,9 @@ def _brand_filter_candidates(path_name: str) -> list[str]:
 
 def _resolve_brand_filter(store_url: str, path_name: str) -> str:
     """Pick the p_4 brand string that actually returns the store's catalogue."""
-    cands = []
-    title_brand = _brand_from_store_url(store_url)
-    if title_brand:
-        # 'B M BROTHERS' -> also try 'BM BROTHERS' (join single-letter tokens)
-        joined = " ".join(re.sub(r"\b([A-Za-z])\b\s+", r"\1", title_brand).split())
-        cands.extend([title_brand, joined])
-    cands.extend(_brand_filter_candidates(path_name))
-    seen = []
-    for c in cands:
-        if c and c not in seen:
-            seen.append(c)
     best = ""
     best_hits = 0
-    for c in seen:
+    for c in _brand_candidates(store_url, path_name):
         hits = _search_brand_hits(c)
         logger.info("brand candidate %r -> %s products", c, hits)
         if hits > best_hits:
@@ -1002,9 +1060,11 @@ def extract_products(store_url: str) -> dict:
     # 200-product store therefore returned only ~25 links. The full catalogue is
     # exposed by the brand-filtered search (?rh=p_4:<BRAND>), which paginates.
     # The path slug does not work as a filter — Amazon needs the display name.
+    _store_slug = ""
     if path_parts[:1] == ["stores"] and not _qs.get("rh"):
         _uf = _urlparse.quote_plus
-        _brand = _resolve_brand_filter(store_url, path_parts[1] if len(path_parts) > 1 else "")
+        _store_slug = path_parts[1] if len(path_parts) > 1 else ""
+        _brand = _resolve_brand_filter(store_url, _store_slug)
         if _brand:
             store_name = _brand[:40]
             store_url = (
@@ -1013,7 +1073,15 @@ def extract_products(store_url: str) -> dict:
             )
             parsed = urlparse(store_url)
             path_parts = ["s"]
+            _store_slug = ""
             logger.info("Brand store -> brand search: %s (%s)", store_url, _brand)
+        else:
+            # The bare-HTTP probe is unreliable (Amazon 503s it / serves a JS
+            # shell), so "no brand found" does NOT mean "no brand exists".
+            # Confirm the candidates in the browser before falling back to the
+            # un-paginated storefront.
+            logger.info("HTTP brand probe inconclusive for %r — will verify in browser",
+                        _store_slug)
 
     products: list[dict] = []
     seen_asins: set[str] = set()
@@ -1123,6 +1191,19 @@ def extract_products(store_url: str) -> dict:
                     if len(seen_asins) == before:
                         break
                 return len(seen_asins) - prev
+
+            if _store_slug:
+                _brand, _brand_url = _resolve_brand_filter_browser(
+                    page, store_url, _store_slug)
+                if _brand:
+                    store_name = _brand[:40]
+                    store_url = _brand_url
+                    logger.info("Brand store -> brand search (verified in browser): %s",
+                                store_url)
+                else:
+                    logger.warning(
+                        "No brand filter matched %r in the browser either — "
+                        "falling back to the storefront", _store_slug)
 
             logger.info("Navigating to store URL: %s", store_url)
             page.goto(store_url, wait_until="domcontentloaded", timeout=45000)
