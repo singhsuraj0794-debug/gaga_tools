@@ -65,7 +65,12 @@
       "Home & Kitchen > Indoor Lighting > Specialty Lighting > LED Strips": "Home & Kitchen > Home Decor > Lights & Lamps",
       "Electronics > Mobiles & Accessories > Mobile Accessories > Automobile Accessories": "Electronics > Mobile, Tablets and Accessories",
       "Home & Kitchen > Home & Décor > Decorative Accessories": "Home & Kitchen > Home Decor > Table Decor & Handicrafts",
-      "Home & Kitchen > Home & Décor > Clocks": "Home & Kitchen > Home Decor > Clocks & Wall Decor"
+      "Home & Kitchen > Home & Décor > Clocks": "Home & Kitchen > Home Decor > Clocks & Wall Decor",
+      "Outdoor Living > Pest Control": "Home & Kitchen > Household Care & Supplies > Home Care > Insect Repellents",
+      "Health & Personal Care > Household Supplies > Household Cleaners > Furniture & Wood Polishes": "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry",
+      "Health & Personal Care > Household Supplies > Pooja Supplies": "Home & Kitchen > Home Decor > Spiritual & Festive Decor",
+      "Car & Motorbike > Car & Motorbike Care > Interior Care": "Automobile Accessories",
+      "Pet Supplies > Fish & Aquatics": "General Merchandise"
     },
     "flipkart": {
       "Mobiles & Accessories > Mobile Accessories > Cases & Covers > Plain Cases & Covers": "Electronics > Mobile, Tablets and Accessories",

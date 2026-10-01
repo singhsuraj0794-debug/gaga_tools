@@ -105,6 +105,42 @@ def _key_variants(key: str) -> list[str]:
     return out
 
 
+
+# Words too generic to justify a cross-category match on their own. 'Water
+# Treatments' (aquarium) used to land on Grocery > Beverages > Water purely
+# because both contain "water".
+_GENERIC_TOKENS = {
+    "and", "or", "the", "of", "for", "in", "on", "with", "to", "a", "an",
+    "care", "supplies", "supply", "accessories", "accessory", "items",
+    "products", "product", "general", "multi", "pack", "packs", "sets",
+    "new", "best", "quality", "water", "home", "kit", "kits", "style",
+    "type", "uses", "all", "other", "others", "misc", "professional",
+    "premium", "combo", "value", "size", "colors", "colour", "colors_",
+}
+
+
+def _stem(token: str) -> str:
+    """Crude singular stem so 'repellents' and 'repellent' compare equal."""
+    t = token.lower()
+    if len(t) > 4 and t.endswith("ies"):
+        return t[:-3] + "y"
+    if len(t) > 3 and t.endswith("es") and not t.endswith("ss"):
+        return t[:-2]
+    if len(t) > 3 and t.endswith("s") and not t.endswith("ss"):
+        return t[:-1]
+    return t
+
+
+def _significant(text: str) -> set:
+    """Distinctive, stemmed tokens of a crumb/path — used for overlap scoring."""
+    out = set()
+    for raw in _norm_key(text).split():
+        t = _stem(raw)
+        if len(t) >= 3 and t not in _GENERIC_TOKENS:
+            out.add(t)
+    return out
+
+
 def _lookup(bucket: dict, source_path: str) -> str | None:
     """Exact key, singular/plural variants, then progressively shorter prefixes."""
     if not bucket:
@@ -203,7 +239,7 @@ _L1_ALIASES: dict[str, str] = {
     "grocery": "Grocery",
     "watches": "Fashion Accessories",
     "sports & fitness": "Sports & Fitness",
-    "books": "Books & General Merchandise",
+    "books": "General Merchandise",
     "music": "Toys & General Merchandise",
     # Amazon
     "beauty": "Beauty & Health Care",
@@ -219,7 +255,10 @@ _L1_ALIASES: dict[str, str] = {
     "baby": "Kids & Baby",
     "musical instruments": "Toys & General Merchandise",
     "grocery & gourmet foods": "Grocery",
-    "industrial & scientific": "Industrial & Scientific",
+    "industrial & scientific": "General Merchandise",
+    "car & motorbike": "Automobile Accessories",
+    "automobiles": "Automobile Accessories",
+    "pet supplies": "General Merchandise",
     # Flipkart
     "home": "Home & Kitchen",
     "mobiles & accessories": "Electronics",
@@ -387,15 +426,72 @@ class CategoryMapper:
                 return v
         return None
 
-    def resolve_coarse(self, platform: str, source_path: str | None) -> dict | None:
-        """Coarse but valid placement, in two passes.
+    def _best_by_overlap(self, candidates, crumbs, title: str = "") -> str | None:
+        """Deepest candidate sharing distinctive tokens with the breadcrumb.
 
-        1. LEAF match across the WHOLE taxonomy: the marketplace's last crumb is
-           the product noun ('Wall Clocks', 'Artificial Flowers', 'First Aid
-           kits'). If a Gajab leaf matches it, that is the right home — and this
-           works across L1s, which the old L1-descend could never do (Meesho puts
-           'First Aid kits' under Grocery; Gajab keeps it under Health Care).
-        2. Otherwise descend inside the L1 the marketplace top level maps to.
+        Ties are broken by (a) whether the LAST crumb — the product noun — is
+        matched, then (b) overlap with the product title, then (c) depth. The
+        title matters: "Pest Control > Insect Control" alone ties between
+        Insect Repellents / Electric Insect Killer / Insect Net, and a product
+        named "Termite Repellent Spray" settles it.
+        """
+        if not crumbs:
+            return None
+        want = set()
+        for c in crumbs:
+            want |= _significant(c)
+        if not want:
+            return None
+        last = _significant(crumbs[-1])
+        title_toks = _significant(title) if title else set()
+
+        best, best_key, best_overlap = None, None, set()
+        for cand in candidates:
+            ptoks = _significant(cand)
+            score = len(want & ptoks)
+            if not score:
+                continue
+            key = (
+                1 if (last & ptoks) else 0,   # the product noun matched
+                len(title_toks & ptoks),       # the title agrees
+                score,                         # total breadcrumb overlap
+                cand.count(" > "),             # deeper is more specific
+            )
+            if best_key is None or key > best_key:
+                best, best_key = cand, key
+                best_overlap = want & ptoks
+
+        if best is None:
+            return None
+
+        # A single shared token is only evidence when it is specific. 'polish'
+        # matches six unrelated paths (Nail Polish, Shoe Polish Cream,
+        # Polishers, …) — picking any of them is a coin flip, so treat a lone
+        # token that many candidates share as no signal at all and let the
+        # caller fall back to the L1 instead of filing a wrong leaf.
+        if best_key[2] == 1:
+            token = next(iter(best_overlap))
+            shared = sum(1 for c in candidates if token in _significant(c))
+            if shared > 3:
+                return None
+        return best
+
+    def resolve_coarse(self, platform: str, source_path: str | None,
+                       title: str = "") -> dict | None:
+        """Coarse but valid placement, in three passes.
+
+        1. LEAF match across the WHOLE taxonomy: the last crumb is the product
+           noun ('Wall Clocks', 'First Aid kits'). Containment only counts when
+           the Gajab leaf is itself a phrase — a one-word leaf like 'water' or
+           'furniture' must not swallow 'Water Treatments' or 'Furniture & Wood
+           Polishes' and file them in a different branch entirely.
+        2. Descend inside the L1 the marketplace top level maps to, scoring
+           every candidate path by distinctive-token overlap (the old version
+           needed a whole crumb to appear verbatim, so 'Pest Control' never
+           matched 'Insect Repellents' and the row stalled at the bare L1).
+        3. No L1 alias (Car & Motorbike, Pet Supplies, …): search the whole
+           taxonomy the same way. Generic tokens are ignored, so this cannot
+           recreate the 'Water Treatments' -> 'Beverages > Water' mistake.
         """
         if not source_path:
             return None
@@ -408,7 +504,6 @@ class CategoryMapper:
         if len(leaf_crumb.split()) >= 2:
             variants = _key_variants(leaf_crumb)
             found = None
-            # exact leaf equality first (deepest path wins), then containment
             for want_exact in (True, False):
                 for cand in self._coarse:          # deepest first
                     cand_leaf = _norm_key(cand.split(" > ")[-1])
@@ -416,7 +511,9 @@ class CategoryMapper:
                         if cand_leaf in variants:
                             found = cand
                             break
-                    elif any(v in cand_leaf or cand_leaf in v for v in variants if len(v) >= 6):
+                    elif len(cand_leaf.split()) >= 2 and any(
+                        v in cand_leaf or cand_leaf in v for v in variants if len(v) >= 6
+                    ):
                         found = cand
                         break
                 if found:
@@ -426,18 +523,19 @@ class CategoryMapper:
 
         # ── pass 2: descend inside the mapped L1 ───────────────────────────
         gajab_l1 = self._l1_alias(parts[0])
-        if not gajab_l1:
-            return None
-        from_here_norm = {_norm_key(p) for p in parts[1:]}
-        phrases = [c for c in from_here_norm if len(c.split()) >= 2]
-        chosen = gajab_l1
-        if phrases:
-            for cand in self._coarse_candidates(gajab_l1):
-                norm_cand = _norm_key(cand)
-                if any(ph in norm_cand for ph in phrases):
-                    chosen = cand
-                    break
-        return self._result_for(chosen, "coarse", 0.4)
+        if gajab_l1:
+            inside = self._coarse_candidates(gajab_l1)
+            best = self._best_by_overlap(inside, parts[1:], title)
+            if best:
+                return self._result_for(best, "coarse", 0.55)
+            # nothing inside the L1 matched — stay at the L1 rather than guess
+            return self._result_for(gajab_l1, "coarse", 0.4)
+
+        # ── pass 3: no L1 alias — whole-taxonomy descent ───────────────────
+        best = self._best_by_overlap(self._coarse, parts, title)
+        if best:
+            return self._result_for(best, "coarse-cross", 0.5)
+        return None
 
     def _result_for(self, full: str, method: str, confidence: float) -> dict:
         lv = full.split(" > ")
@@ -484,7 +582,8 @@ class CategoryMapper:
                 named = self.resolve_by_name(src)
                 if named:
                     return named
-            coarse = self.resolve_coarse(plat, src) if allow_coarse else None
+            coarse = (self.resolve_coarse(plat, src, title=title)
+                      if allow_coarse else None)
             if coarse is None:
                 # Nothing in the breadcrumb mapped: a precise title keyword
                 # beats leaving the row unmapped.
