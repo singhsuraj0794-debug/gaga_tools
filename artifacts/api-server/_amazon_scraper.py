@@ -170,15 +170,57 @@ EXTRACT_JS = r"""() => {
   });
 
   // Category breadcrumb — the marketplace taxonomy we later map onto Gajab's.
+  // Amazon rotates this widget between templates: the canonical wayfinding div,
+  // a container-only variant, .a-breadcrumb, the JS-filled
+  // desktop-breadcrumbs placeholder, ARIA-labelled navs, and on some pages only
+  // a breadcrumb-ish id/class. Take whichever candidate carries the most crumb
+  // links rather than the first selector that happens to exist.
   let sourceCategoryPath = null;
-  const bcRoot = q('#wayfinding-breadcrumbs_feature_div')
-    || q('#wayfinding-breadcrumbs_container')
-    || q('.a-breadcrumb');
-  if (bcRoot) {
-    const parts = Array.from(bcRoot.querySelectorAll('a'))
-      .map(a => (a.textContent || '').replace(/\s+/g, ' ').trim())
-      .filter(Boolean);
-    if (parts.length) sourceCategoryPath = parts.join(' > ');
+  const BC_SELECTORS = [
+    '#wayfinding-breadcrumbs_feature_div',
+    '#wayfinding-breadcrumbs_container',
+    '#desktop-breadcrumbs_feature_div',
+    '.a-breadcrumb',
+    'nav[aria-label*="readcrumb" i]',
+    '[role="navigation"][aria-label*="readcrumb" i]',
+    '[data-feature-name*="breadcrumb" i]',
+    '#breadcrumbs',
+    '[class*="breadcrumb" i]',
+    '[id*="breadcrumb" i]',
+  ];
+  const crumbTexts = (el) => Array.from(el.querySelectorAll('a'))
+    .map(a => (a.textContent || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  let bestCrumbs = null;
+  for (const sel of BC_SELECTORS) {
+    let nodes = [];
+    try { nodes = qa(sel); } catch (e) { nodes = []; }
+    for (const el of nodes) {
+      const parts = crumbTexts(el);
+      if (parts.length >= 2 && (!bestCrumbs || parts.length > bestCrumbs.length)) {
+        bestCrumbs = parts;
+      }
+    }
+    if (bestCrumbs && bestCrumbs.length >= 4) break;
+  }
+  if (bestCrumbs) sourceCategoryPath = bestCrumbs.join(' > ');
+
+  // Some templates ship JSON-LD instead of the markup widget.
+  if (!sourceCategoryPath) {
+    for (const s of qa('script[type="application/ld+json"]')) {
+      let d; try { d = JSON.parse(s.textContent || ''); } catch (e) { continue; }
+      const items = Array.isArray(d) ? d
+        : (d && Array.isArray(d['@graph']) ? d['@graph'] : [d]);
+      for (const it of items) {
+        if (!it || it['@type'] !== 'BreadcrumbList') continue;
+        const names = (it.itemListElement || [])
+          .map(e => (e && (e.name || (e.item && e.item.name))) || '')
+          .map(x => String(x).replace(/\s+/g, ' ').trim())
+          .filter(Boolean);
+        if (names.length >= 2) { sourceCategoryPath = names.join(' > '); break; }
+      }
+      if (sourceCategoryPath) break;
+    }
   }
 
   return { title, price, images, bullets, description, meta_description, specs, sourceCategoryPath };
@@ -663,6 +705,103 @@ def _fill_derived(result: dict, specs: dict) -> None:
             result["hsn"] = value
 
 
+# (?<![-\w]) keeps `data-csa-c-content-id="desktop-breadcrumbs"` from matching —
+# that is a telemetry attribute whose value is only a widget slug.
+# The second branch covers `<nav aria-label="Breadcrumb">`-style containers that
+# carry the crumb as bare anchors with no id/class of their own.
+_BREADCRUMB_SEL_RE = re.compile(
+    r'(?<![-\w])(?:id|class)="([^"]*breadcrumb[^"]*)"'
+    r'|aria-label="([^"]*(?:breadcrumb|category trail)[^"]*)"',
+    re.IGNORECASE,
+)
+# Containers Amazon has actually used for the product crumb. Matched first, so a
+# generic `class="breadcrumb"` elsewhere in the page cannot outrank the real one.
+_BREADCRUMB_PRIMARY = ("wayfinding-breadcrumbs", "desktop-breadcrumbs",
+                       "a-breadcrumb", "breadcrumbs")
+
+
+def _breadcrumb_from_html(html: str) -> str | None:
+    """Category breadcrumb from raw HTML.
+
+    Amazon serves the crumb in several containers — the canonical
+    ``#wayfinding-breadcrumbs_feature_div``, ``#wayfinding-breadcrumbs_container``,
+    ``.a-breadcrumb``, the ``#desktop-breadcrumbs_*`` placeholder and, on some
+    templates, only an element whose id/class merely mentions "breadcrumb".
+    Scan every such container and keep whichever holds the most crumb links
+    (a single anchor is not a chain), then fall back to JSON-LD
+    ``BreadcrumbList`` when the markup widget is absent entirely.
+
+    The old version hard-coded one id plus a brittle ``</div></div>`` tail, so
+    any other template silently produced ``source_category_path = None``.
+    """
+    if not html:
+        return None
+
+    cands: dict[bool, list[list[str]]] = {True: [], False: []}  # True = primary
+    for m in _BREADCRUMB_SEL_RE.finditer(html):
+        name = ((m.group(1) or m.group(2)) or "").lower()
+        if "flyout" in name or name.startswith("nav-") or "csa" in name:
+            continue  # global navigation / telemetry, not a product crumb
+        primary = any(tok in name for tok in _BREADCRUMB_PRIMARY)
+        if m.group(2):
+            primary = True  # aria-label="Breadcrumb" is unambiguous
+        tail = html[m.end(): m.end() + 6000]
+        first_ul = tail.find("<ul")
+        first_close = tail.find("</div>")
+        # An empty widget (`<div id="wayfinding…"></div>`) is followed by the
+        # NEXT unrelated list in the document; slicing to it would file e.g.
+        # "Mobiles > Electronics" from the header nav as the product crumb.
+        if first_ul != -1 and first_close != -1 and first_close < first_ul:
+            continue
+        bounds = [b for b in (
+            tail.find("</ul>"), tail.find("</nav>"),
+            tail.find("</ol>"), tail.find("</div>"),
+        ) if b != -1]
+        chunk = tail[:min(bounds)] if bounds else tail[:2000]
+        parts = [
+            _clean(re.sub(r"<[^>]+>", "", a))
+            for a in re.findall(r"<a[^>]*>(.*?)</a>", chunk, re.DOTALL | re.IGNORECASE)
+        ]
+        parts = [p for p in parts if p]
+        if len(parts) >= 2:
+            cands[primary].append(parts)
+
+    for tier in (True, False):
+        # prefer the DEEPEST chain; ties go to the first container in the page
+        chains = sorted(cands[tier], key=len, reverse=True)
+        if chains:
+            return " > ".join(chains[0])
+
+    for block in re.findall(
+        r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            data = json.loads(block.strip())
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else None
+        if items is None and isinstance(data, dict):
+            g = data.get("@graph")
+            items = g if isinstance(g, list) else [data]
+        for it in items or []:
+            if not isinstance(it, dict) or it.get("@type") != "BreadcrumbList":
+                continue
+            names: list[str] = []
+            for e in it.get("itemListElement") or []:
+                if not isinstance(e, dict):
+                    continue
+                item = e.get("item") if isinstance(e.get("item"), dict) else {}
+                raw = e.get("name") or item.get("name") or item.get("title")
+                if raw is not None:
+                    t = _clean(str(raw))
+                    if t:
+                        names.append(t)
+            if len(names) >= 2:
+                return " > ".join(names)
+    return None
+
+
 def _parse_html(html: str, url: str) -> dict:
     result = dict(EMPTY_RESULT)
 
@@ -682,19 +821,11 @@ def _parse_html(html: str, url: str) -> dict:
     if m:
         result["meta_description"] = _clean(m.group(1))[:2000]
 
-    # Category breadcrumb (marketplace taxonomy → mapped to Gajab at export)
-    m = re.search(
-        r'id="wayfinding-breadcrumbs_feature_div"(.*?)</div>\s*</div>',
-        html, re.DOTALL | re.IGNORECASE,
-    ) or re.search(r'id="wayfinding-breadcrumbs_feature_div"(.*?)</div>', html, re.DOTALL | re.IGNORECASE)
-    if m:
-        parts = [
-            _clean(re.sub(r"<[^>]+>", "", x))
-            for x in re.findall(r"<a[^>]*>(.*?)</a>", m.group(1), re.DOTALL)
-        ]
-        parts = [p for p in parts if p]
-        if parts:
-            result["source_category_path"] = " > ".join(parts)
+    # Category breadcrumb (marketplace taxonomy → mapped to Gajab at export).
+    # The wayfinding div is only one of several templates; see _breadcrumb_from_html.
+    bc = _breadcrumb_from_html(html)
+    if bc:
+        result["source_category_path"] = bc
 
     # Price
     for pat in (
