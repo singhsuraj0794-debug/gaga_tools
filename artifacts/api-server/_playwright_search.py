@@ -7,7 +7,11 @@ import time
 import traceback
 from urllib.parse import quote
 
+from _chrome_path import chrome_executable
+
 BROWSER = None
+_CHROME = chrome_executable()
+
 
 def _get_browser():
     global BROWSER
@@ -16,7 +20,7 @@ def _get_browser():
         p = sync_playwright().start()
         BROWSER = p.chromium.launch(
             headless=True,
-            executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            executable_path=_CHROME,
             args=[
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",

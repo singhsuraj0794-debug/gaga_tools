@@ -19,6 +19,10 @@ import requests
 from PIL import Image
 from imagehash import phash
 
+from _chrome_path import chrome_executable
+
+_CHROME = chrome_executable()
+
 RELIABLE_THRESHOLD = 35
 
 # Lazy-loaded AI models
@@ -504,7 +508,7 @@ def _visit_platform_page(url: str, platform: str):
     from playwright.sync_api import sync_playwright
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox"], executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"], executable_path=_CHROME)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                 viewport={"width": 1440, "height": 900},
@@ -600,7 +604,7 @@ def _search_amazon(title: str, image_url: str = "", gajab_price: str = "", gajab
         if asin_map:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"], executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"], executable_path=_CHROME)
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                     viewport={"width": 1440, "height": 900}, locale="en-IN",
@@ -813,7 +817,7 @@ def _search_flipkart(title: str, image_url: str = "", gajab_price: str = "", gaj
         if fk_urls:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"], executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+                browser = pw.chromium.launch(headless=True, args=["--no-sandbox"], executable_path=_CHROME)
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                     viewport={"width": 1440, "height": 900}, locale="en-IN",
