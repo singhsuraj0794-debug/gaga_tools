@@ -2031,6 +2031,105 @@ export async function runHsnSuggestion(
   return resp.json();
 }
 
+// ── Category Validation (Marqo image → L1..L4 taxonomy) ────────────────────
+
+export interface CategoryValidateProduct {
+  sku: string;
+  title?: string;
+  url?: string;
+  l1?: string;
+  l2?: string;
+  l3?: string;
+  l4?: string;
+  images?: string[];
+}
+
+export interface CategoryValidateResult {
+  sku: string;
+  title?: string;
+  url?: string;
+  assigned?: { l1: string; l2: string; l3: string; l4: string; full: string };
+  assignedInDb?: boolean;
+  imageCount?: number;
+  predicted?: { l1: string; l2: string; l3: string; l4: string } | null;
+  predictedFull?: string;
+  /** Full DB path recommended by the model when the assignment is wrong/uncertain. */
+  recommended?: string;
+  levelConfidence?: Record<string, number>;
+  confidence?: number;
+  status?: "correct" | "incorrect" | "review" | "no-images" | "unclassified" | "error";
+  differingLevel?: string | null;
+  /** Curated keyword→taxonomy anchor matched from the product title, if any. */
+  keywordAnchor?: string[] | null;
+  /** True when Qwen-VL confirmed/corrected this row from the shortlist. */
+  qwenVerified?: boolean;
+  error?: string;
+}
+
+export interface CategoryValidateResponse {
+  algorithmVersion?: string;
+  taxonomyVersion?: string;
+  results: CategoryValidateResult[];
+}
+
+export async function runCategoryValidation(
+  products: CategoryValidateProduct[],
+  apiBase: string = "",
+): Promise<CategoryValidateResponse> {
+  const baseUrl = apiBase || getPrelistingApiBase();
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/category-validate`, withApiHeaders({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ products }),
+    signal: AbortSignal.timeout(1800000),
+  }));
+
+  if (!resp.ok) {
+    throw new Error(`Category validation failed: ${resp.status} ${resp.statusText}`);
+  }
+
+  return resp.json();
+}
+
+// ── Category Validation background job (large sheets) ──────────────────────
+
+export interface CategoryJobProgress {
+  jobId: string;
+  status: "running" | "completed" | "failed";
+  phase: string;
+  done: number;
+  total: number;
+  message?: string;
+}
+
+export async function startCategoryJob(
+  products: CategoryValidateProduct[],
+  apiBase: string = "",
+): Promise<{ jobId: string }> {
+  const baseUrl = apiBase || getPrelistingApiBase();
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/category-validate/job`, withApiHeaders({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ products }),
+    signal: AbortSignal.timeout(60000),
+  }));
+  if (!resp.ok) throw new Error(`Category job start failed: ${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
+export async function getCategoryJob(
+  jobId: string,
+  what: "progress" | "results",
+  apiBase: string = "",
+): Promise<CategoryJobProgress | CategoryValidateResponse> {
+  const baseUrl = apiBase || getPrelistingApiBase();
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/category-validate/job/${jobId}/${what}`, withApiHeaders({
+    signal: AbortSignal.timeout(60000),
+  }));
+  if (!resp.ok) throw new Error(`Category job fetch failed: ${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
 /**
  * Refine a product's "Unit count/variation" check using the image-detected
  * product type from the HSN service. When CLIP identifies a single-SKU article

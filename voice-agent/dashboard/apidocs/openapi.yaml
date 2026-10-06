@@ -1,0 +1,72 @@
+openapi: 3.0.3
+info:
+  title: Voice Agent Negotiation Dashboard API
+  version: 1.0.0
+  description: >-
+    Pricing decisions are made by a deterministic backend algorithm. The AI model
+    is a negotiation conversational layer only: it receives a bounded range and
+    never has access to, or the ability to query, the actual floor or target price.
+servers:
+  - url: http://localhost:8080
+paths:
+  /products:
+    get:
+      summary: Public product list
+      responses:
+        '200':
+          description: List prices only
+    post:
+      summary: Create product (admin)
+      security: [{ bearerAuth: [] }]
+      responses: {'201': { description: Product created }}
+  /products/{id}/price-config:
+    get:
+      summary: Admin price configuration
+      security: [{ bearerAuth: [] }]
+      description: Elevated admin sees protected values; regular admins see a mask.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: {'200': { description: Protected admin response }}
+    put:
+      summary: Update protected price configuration (elevated admin)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: {'200': { description: Updated product anchor }}
+  /products/{id}/negotiation-range:
+    post:
+      summary: AI-facing bounded range grant
+      security: [{ bearerAuth: [] }]
+      description: >-
+        The only pricing endpoint available to the AI. The response deliberately
+        contains no floor_price or target_price fields.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: Opaque short-lived range
+          content:
+            application/json:
+              example: { session_token: opaque-token, min_offer: 560, max_offer: 610, expires_at: 1730000000 }
+  /negotiation-range/validate:
+    post:
+      summary: Internal enforcement point
+      security: [{ internalSecret: [] }]
+      responses: {'200': { description: Accepted or rejected offer }}
+  /model-config:
+    get:
+      summary: Model settings
+      security: [{ bearerAuth: [] }]
+      responses: {'200': { description: STT, TTS, and negotiation settings }}
+  /model-config/{model_id}:
+    put:
+      summary: Update model configuration (admin)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: model_id, in: path, required: true, schema: { type: string } }]
+      responses: {'200': { description: Updated model configuration }}
+  /sessions:
+    get:
+      summary: Human audit log
+      security: [{ bearerAuth: [] }]
+      responses: {'200': { description: Negotiation audit events }}
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+    internalSecret: { type: apiKey, in: header, name: X-Internal-Secret }

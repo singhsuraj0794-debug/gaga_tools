@@ -35,10 +35,11 @@ from PIL import Image
 
 # ─── Model loading ────────────────────────────────────────────────────────────
 
-from _qwen_model import get_model as _shared_get_model
+from _qwen_model import generate as _generate, prepare_vlm_image
 
 def _get_model():
-    """Lazy-load Qwen2.5-VL-3B-Instruct via mlx_lm, shared across modules."""
+    """Lazy-load Qwen2.5-VL-3B-Instruct via transformers, shared across modules."""
+    from _qwen_model import get_model as _shared_get_model
     return _shared_get_model()
 
 
@@ -71,9 +72,7 @@ def extract_specs_qwen(
     Ask Qwen to extract accurate specs from the product image + text.
     Returns dict of {spec_name: value}.
     """
-    from mlx_lm import stream_generate
-
-    model, tokenizer, processor = _get_model()
+    model, processor = _get_model()
 
     # Truncate description to avoid token limits
     desc_short = (description[:500] if description else "")[:500]
@@ -100,8 +99,7 @@ Respond in EXACTLY this JSON object format (no other text):
 
 Only include specs you are confident about. Omit any you are unsure about."""
 
-    # Save temp image for processor (patch-aligned to avoid MLX/MPS crash)
-    from _qwen_model import prepare_vlm_image
+    # Save temp image for the processor (patch-aligned for a smaller encoder)
     image = prepare_vlm_image(image)
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
@@ -109,23 +107,9 @@ Only include specs you are confident about. Omit any you are unsure about."""
         temp_path = f.name
 
     try:
-        messages = [
-            {"role": "user", "content": [
-                {"type": "image", "image": temp_path},
-                {"type": "text", "text": prompt_text}
-            ]}
-        ]
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
         t0 = time.time()
-        responses = []
-        for r in stream_generate(model, tokenizer, prompt=text, max_tokens=256):
-            responses.append(r)
-            if len(responses) > 1024:
-                break
-        elapsed = time.time() - t0
-        response_text = "".join([r.text for r in responses])
-        print(f"[QWEN-SPECS] VLM query took {elapsed:.1f}s", file=sys.stderr)
+        response_text = _generate(prompt_text, temp_path, max_tokens=256)
+        print(f"[QWEN-SPECS] VLM query took {time.time()-t0:.1f}s", file=sys.stderr)
 
         return _parse_specs(response_text)
 

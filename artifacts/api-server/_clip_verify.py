@@ -120,9 +120,10 @@ _IMAGE_PIL_CACHE_MAX = 24       # decoded PIL images (~120MB)
 
 
 _http_session = None
+_http_session_fast = None
 
 
-def _get_http_session():
+def _get_http_session(fast: bool = False):
     """Shared requests session with a pooled adapter + retries.
 
     fetch_all_products downloads thousands of CDN images; plain requests.get()
@@ -130,8 +131,30 @@ def _get_http_session():
     'HTTPSConnectionPool ... Max retries exceeded'. A pooled session with
     automatic retry on transient errors fixes those false 'Failed to load'
     results for images that are actually live.
+
+    fast=True (category validation): ONE quick retry with no backoff. The
+    robust session above uses backoff_factor=1.0 x 6 retries, which sleeps
+    ~62s (0+2+4+8+16+32) before failing on a persistently-502ing image —
+    that single stall froze an entire validation batch for over a minute.
+    A dead image should fail in seconds, not a minute.
     """
-    global _http_session
+    global _http_session, _http_session_fast
+    if fast:
+        if _http_session_fast is None:
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+            retry = Retry(
+                total=1, connect=1, read=1, status=1, other=1,
+                backoff_factor=0.2,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["GET", "HEAD"],
+            )
+            adapter = HTTPAdapter(max_retries=retry, pool_connections=32, pool_maxsize=32)
+            s = requests.Session()
+            s.mount("https://", adapter)
+            s.mount("http://", adapter)
+            _http_session_fast = s
+        return _http_session_fast
     if _http_session is None:
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
@@ -172,9 +195,14 @@ def _alternate_image_urls(source: str):
         return
 
 
-def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
+def load_image(source: str, timeout: int = 15, fast: bool = False) -> Optional[Image.Image]:
     """Load image from URL or local path. PIL images are cached so the same
-    URL is never downloaded or decoded twice across all callers."""
+    URL is never downloaded or decoded twice across all callers.
+
+    fast=True uses the quick-retry session (see _get_http_session) — for
+    latency-sensitive paths like category validation where a dead image must
+    fail in seconds instead of ~60s of backoff.
+    """
     try:
         if source.startswith(("http://", "https://")):
             cached = _image_pil_cache.get(source)
@@ -187,7 +215,7 @@ def load_image(source: str, timeout: int = 15) -> Optional[Image.Image]:
                 }
                 if "flixcart" in source or "flipkart" in source:
                     headers["Referer"] = "https://www.flipkart.com/"
-                session = _get_http_session()
+                session = _get_http_session(fast=fast)
                 resp = session.get(source, headers=headers, timeout=timeout)
                 # Auto-recover legacy underscore URL variants that 404.
                 if resp.status_code == 404:
@@ -246,28 +274,11 @@ def get_clip():
 # (content moderation). Qwen2.5-VL actually sees the image and can confirm or
 # clear a CLIP flag. Used as a second-pass to reduce false positives.
 
-_qwen_model = None
-_qwen_tokenizer = None
-_qwen_processor = None
-
-QWEN_MODEL_PATH = os.path.expanduser("~/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct")
-
-
 def _get_qwen():
-    global _qwen_model, _qwen_tokenizer, _qwen_processor
-    if _qwen_model is not None:
-        return _qwen_model, _qwen_tokenizer, _qwen_processor
-
-    from mlx_lm import load
-    from transformers import AutoProcessor
-
-    model_path = QWEN_MODEL_PATH if os.path.exists(os.path.join(QWEN_MODEL_PATH, "config.json")) else "Qwen/Qwen2.5-VL-3B-Instruct"
-    print(f"[QWEN-VERIFY] Loading model from {model_path}...", file=sys.stderr)
-    t0 = time.time()
-    _qwen_model, _qwen_tokenizer = load(model_path)
-    _qwen_processor = AutoProcessor.from_pretrained(model_path)
-    print(f"[QWEN-VERIFY] Model loaded in {time.time()-t0:.1f}s", file=sys.stderr)
-    return _qwen_model, _qwen_tokenizer, _qwen_processor
+    """Shared Qwen2.5-VL model (transformers backend, GPU when available)."""
+    from _qwen_model import get_model as _shared_get_model
+    model, processor = _shared_get_model()
+    return model, None, processor
 
 
 def verify_rule_with_qwen(img: Image.Image, rule_type: str) -> Optional[bool]:
@@ -279,8 +290,6 @@ def verify_rule_with_qwen(img: Image.Image, rule_type: str) -> Optional[bool]:
         False — Qwen clears the flag (false positive)
         None  — Qwen unsure / failed
     """
-    from mlx_lm import stream_generate
-
     if rule_type == "markings":
         question = (
             "Does this image have a watermark, logo stamp, or promotional text "
@@ -297,7 +306,7 @@ def verify_rule_with_qwen(img: Image.Image, rule_type: str) -> Optional[bool]:
         return None
 
     try:
-        model, tokenizer, processor = _get_qwen()
+        from _qwen_model import generate as _qwen_generate
 
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
@@ -305,23 +314,9 @@ def verify_rule_with_qwen(img: Image.Image, rule_type: str) -> Optional[bool]:
             temp_path = f.name
 
         try:
-            messages = [
-                {"role": "user", "content": [
-                    {"type": "image", "image": temp_path},
-                    {"type": "text", "text": question}
-                ]}
-            ]
-            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
             t0 = time.time()
-            responses = []
-            for r in stream_generate(model, tokenizer, prompt=text, max_tokens=16):
-                responses.append(r)
-                if len(responses) > 64:
-                    break
-            response_text = "".join([r.text for r in responses]).strip().upper()
-            elapsed = time.time() - t0
-            print(f"[QWEN-VERIFY] {rule_type} query took {elapsed:.1f}s → '{response_text}'", file=sys.stderr)
+            response_text = _qwen_generate(question, temp_path, max_tokens=16).strip().upper()
+            print(f"[QWEN-VERIFY] {rule_type} query took {time.time()-t0:.1f}s → '{response_text}'", file=sys.stderr)
 
             if "YES" in response_text:
                 return True
@@ -896,11 +891,26 @@ def check_rule3(image_urls: List[str]) -> dict:
 
 
 def _available_memory_gb() -> Optional[float]:
-    """Approximate free physical memory.
+    """Approximate free physical memory, cross-platform.
 
-    macOS does not support SC_AVPHYS_PAGES, so parse `vm_stat` (free +
-    inactive pages, which is what the OS can hand out without paging).
+    psutil (macOS/Windows/Linux) -> /proc/meminfo (Linux) -> vm_stat (macOS) ->
+    sysconf. Windows has neither SC_AVPHYS_PAGES nor vm_stat, so without psutil
+    it returns None and the caller simply skips the memory-pressure check.
     """
+    try:
+        import psutil
+        return psutil.virtual_memory().available / 1e9
+    except Exception:
+        pass
+    # Linux
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / 1e6
+    except Exception:
+        pass
+    # macOS
     try:
         import re as _re
         import subprocess

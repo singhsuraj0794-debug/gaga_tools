@@ -1,0 +1,19 @@
+[
+  {
+    "name": "Electronic Devices",
+    "level": 3,
+    "parent_path": "Beauty & Health Care > Health Care",
+    "description": "Electronic Devices - L3",
+    "sort_order": 1,
+    "sales_commission": 30,
+    "bargain_percentage": 25,
+    "status": "Enabled",
+    "shipping_policy": "Shipping Policy",
+    "return_policy": "No Return",
+    "brand_documents": [
+      "Trademark Certificate",
+      "Brand Approval Letter"
+    ],
+    "image": "data/category_image.jpg"
+  }
+]

@@ -1,0 +1,7 @@
+# One Windows PC hostname or IP per line. Lines starting with # are ignored.
+# Example rollout: 10 PCs x "-Sessions 10" = 100 concurrent users.
+GAJAB_PC01
+GAJAB_PC02
+GAJAB_PC03
+GAJAB_PC04
+GAJAB_PC05

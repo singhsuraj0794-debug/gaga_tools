@@ -29,35 +29,40 @@ jobs:
   runner-check:
     runs-on: ubuntu-latest
     outputs:
-      mac_online: ${{ steps.check.outputs.mac_online }}
+      windows_online: ${{ steps.check.outputs.windows_online }}
     steps:
-      - name: Check if Mac runner is online
+      - name: Check if Windows runner is online
         id: check
         run: |
           online=$(curl -s -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/runners?per_page=100" \
-            | python3 -c "import sys,json; rs=json.load(sys.stdin).get('runners',[]); print('true' if any(r.get('name')=='gajab-mac' and r.get('status')=='online' for r in rs) else 'false')")
-          echo "mac_online=$online" >> "$GITHUB_OUTPUT"
-          echo "Mac runner online: $online"
+            | python3 -c "import sys,json; rs=json.load(sys.stdin).get('runners',[]); print('true' if any(r.get('name')=='gajab-windows' and r.get('status')=='online' for r in rs) else 'false')")
+          echo "windows_online=$online" >> "$GITHUB_OUTPUT"
+          echo "Windows runner online: $online"
 
   lighthouse-india:
     needs: runner-check
-    if: needs.runner-check.outputs.mac_online == 'true'
-    runs-on: [self-hosted, mac-india]
+    if: needs.runner-check.outputs.windows_online == 'true'
+    runs-on: [self-hosted, windows-india]
     steps:
       - uses: actions/checkout@v5
 
       - name: Setup Python venv
+        shell: pwsh
         run: |
-          python3.11 -m venv .venv 2>/dev/null || python3 -m venv .venv
-          .venv/bin/pip install -q -r monitoring/requirements.txt
+          py -3.11 -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -q -r monitoring/requirements.txt
 
       - name: Install Lighthouse
-        run: cd monitoring && npm install lighthouse
+        shell: pwsh
+        run: |
+          Set-Location monitoring
+          npm install lighthouse
 
-      - name: Run Lighthouse from India (Mac)
-        run: .venv/bin/python monitoring/run_monitor.py
+      - name: Run Lighthouse from India (Windows)
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe monitoring/run_monitor.py
         env:
           MONITOR_MODE: lighthouse
           MONITOR_RUN_ID: ${{ github.run_id }}
@@ -71,7 +76,7 @@ jobs:
 
   lighthouse-us:
     needs: runner-check
-    if: needs.runner-check.outputs.mac_online != 'true'
+    if: needs.runner-check.outputs.windows_online != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

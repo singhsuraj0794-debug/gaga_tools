@@ -1,0 +1,27 @@
+def _try_playwright(url: str) -> str:
+    """Fetch via real Chrome profile — fresh sync_playwright context per call."""
+    try:
+        import time, json, urllib.request
+        from playwright.sync_api import sync_playwright
+
+        resp = urllib.request.urlopen("http://localhost:9222/json/version", timeout=5)
+        ws_endpoint = json.loads(resp.read())["webSocketDebuggerUrl"]
+
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(ws_endpoint)
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = context.new_page()
+
+            page.evaluate('window.location.href = "' + url + '"')
+
+            for _ in range(15):
+                time.sleep(2)
+                html = page.content()
+                if "__NEXT_DATA__" in html and len(html) > 5000:
+                    page.close()
+                    return html
+
+            page.close()
+    except Exception:
+        pass
+    return ""

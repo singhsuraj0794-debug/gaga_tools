@@ -53,10 +53,11 @@ from PIL import Image
 
 # ─── Model loading ────────────────────────────────────────────────────────────
 
-from _qwen_model import get_model as _shared_get_model
+from _qwen_model import generate as _generate, prepare_vlm_image
 
 def _get_model():
-    """Lazy-load Qwen2.5-VL-3B-Instruct via mlx_lm, shared across modules."""
+    """Lazy-load Qwen2.5-VL-3B-Instruct via transformers, shared across modules."""
+    from _qwen_model import get_model as _shared_get_model
     return _shared_get_model()
 
 
@@ -87,9 +88,7 @@ def query_vlm(
     Returns list of corrections:
     [{"attribute": "color", "original": "red", "observed": "purple", "confidence": "high"}]
     """
-    from mlx_lm import stream_generate
-
-    model, tokenizer, processor = _get_model()
+    model, processor = _get_model()
 
     # Build focused prompt for flagged attributes
     # Group by type for cleaner prompt
@@ -126,8 +125,7 @@ Respond in EXACTLY this JSON array format (no other text):
 Example — if listing says "cotton" but image shows leather:
 [{{"attribute": "material", "original": "cotton", "observed": "leather", "confidence": "high"}}]"""
 
-    # Save temp image for processor (patch-aligned to avoid MLX/MPS crash)
-    from _qwen_model import prepare_vlm_image
+    # Save temp image for the processor (patch-aligned for a smaller encoder)
     image = prepare_vlm_image(image)
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
@@ -135,24 +133,9 @@ Example — if listing says "cotton" but image shows leather:
         temp_path = f.name
 
     try:
-        # Build chat messages with image
-        messages = [
-            {"role": "user", "content": [
-                {"type": "image", "image": temp_path},
-                {"type": "text", "text": prompt_text}
-            ]}
-        ]
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
         t0 = time.time()
-        responses = []
-        for r in stream_generate(model, tokenizer, prompt=text, max_tokens=256):
-            responses.append(r)
-            if len(responses) > 1024:
-                break
-        elapsed = time.time() - t0
-        response_text = "".join([r.text for r in responses])
-        print(f"[QWEN] VLM query took {elapsed:.1f}s", file=sys.stderr)
+        response_text = _generate(prompt_text, temp_path, max_tokens=256)
+        print(f"[QWEN] VLM query took {time.time()-t0:.1f}s", file=sys.stderr)
 
         # Parse JSON from response
         return _parse_corrections(response_text, flagged_attrs)

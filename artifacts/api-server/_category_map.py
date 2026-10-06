@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 _DEFAULT_MAP = Path(__file__).with_name("marketplace_category_map.json")
@@ -59,6 +60,15 @@ def _norm_key(raw: str) -> str:
     """Case/punctuation-insensitive key for map lookup."""
     s = normalise_path(raw).lower()
     s = s.replace("&", "and")
+    # Fold accents BEFORE the non-[a-z] strip below. Without this 'Décor' is
+    # mangled into the two junk tokens 'd' + 'cor' (the 'é' is replaced by a
+    # space), which can never match the taxonomy's 'decor' — so every Amazon
+    # 'Home & Décor' breadcrumb failed every overlap test and stalled at the
+    # bare L1 with no attributes.
+    s = "".join(
+        c for c in unicodedata.normalize("NFKD", s)
+        if not unicodedata.combining(c)
+    )
     s = re.sub(r"[^a-z0-9> ]+", " ", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
@@ -167,18 +177,51 @@ def load_taxonomy(path: str | Path | None = None) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def _leafful_sets(tax: dict) -> tuple[set, set, set]:
+    """(L4 leaves, leaves + their ancestors, L1s owning at least one L4 leaf).
+
+    The master workbook keeps every branch node in `ids`, including ACTIVE
+    branches that hold no products at all — `Toys & Games`, `Luggage & Bags`,
+    `Sporting Goods`, `Arts & Crafts`, plus the Inactive `General Merchandise`
+    and `Sports & Fitness`. Those are legal ids but they own no L4 leaf, so a
+    row landing on one exports a sheet with ZERO attribute columns and cannot
+    be listed. Everything that validates a target (the curated map, the L1
+    alias table, the coarse descent) uses this set instead of raw `ids`.
+    """
+    leaves: set[str] = set()
+    for p in tax.get("paths", []):
+        v = p.get("full") or p.get("path")
+        if v:
+            leaves.add(v)
+    if not leaves:  # very old taxonomy without paths
+        ids = set(tax.get("ids") or {})
+        prefixes = set()
+        for p in ids:
+            parts = p.split(" > ")
+            for i in range(1, len(parts)):
+                prefixes.add(" > ".join(parts[:i]))
+        leaves = {p for p in ids if p not in prefixes}
+    leafful = set(leaves)
+    for p in leaves:
+        parts = p.split(" > ")
+        for i in range(1, len(parts)):
+            leafful.add(" > ".join(parts[:i]))
+    return leaves, leafful, {p.split(" > ")[0] for p in leaves}
+
+
 def validate_map(map_data: dict, taxonomy: dict | None = None) -> tuple[dict, list[str]]:
     """Drop entries whose target is not a real Gajab category.
 
-    Accepts ANY level present in the master (L1/L2/L3/L4) — the master keeps
-    every level in `ids`, while `paths` holds only L4 leaves. A shallower target
-    is a legitimate fallback: it is better to place a product at L3 than to
-    leave the category blank when no L4 fits.
+    Accepts ANY level that owns an L4 leaf (L1/L2/L3 ancestors and the L4
+    itself): a shallower target is a legitimate fallback — better to place a
+    product at L3 than to leave the category blank when no L4 fits. Branches
+    with no L4 underneath are rejected, because they carry no attributes and
+    the product could not be listed from that sheet.
 
     Returns (clean_map, errors).
     """
     tax = taxonomy or load_taxonomy()
-    valid = set(tax.get("ids") or {})
+    _, valid, _ = _leafful_sets(tax)
     if not valid:  # very old taxonomy without ids
         valid = {p["full"] for p in tax.get("paths", [])}
     clean: dict[str, dict] = {"version": map_data.get("version", "1.0"), "map": {}}
@@ -192,7 +235,10 @@ def validate_map(map_data: dict, taxonomy: dict | None = None) -> tuple[dict, li
             if not dest:
                 continue
             if dest not in valid:
-                errors.append(f"{platform}: '{src}' -> '{dest}' is not a Gajab category path")
+                errors.append(
+                    f"{platform}: '{src}' -> '{dest}' is not a Gajab category path "
+                    f"(or owns no L4 leaf)"
+                )
                 continue
             bucket[_norm_key(src)] = dest
         clean["map"][platform] = bucket
@@ -228,43 +274,43 @@ _L1_ALIASES: dict[str, str] = {
     "lingerie": "Fashion",
     "ethnic": "Fashion",
     "footwear": "Fashion",
-    "jewellery & accessories": "Fashion Accessories",
-    "bags": "Luggage & Bags",
+    "jewellery & accessories": "Fashion",
+    "bags": "Fashion",
     "kids clothing": "Kids & Baby",
-    "kids & toys": "Toys & Games",
+    "kids & toys": "Toys & General Merchandise",
     "electronic accessories": "Electronics",
     "electronics": "Electronics",
     "car & bike accessories": "Automobile Accessories",
     "furniture": "Furniture",
     "grocery": "Grocery",
-    "watches": "Fashion Accessories",
-    "sports & fitness": "Sports & Fitness",
-    "books": "General Merchandise",
+    "watches": "Fashion",
+    "sports & fitness": "Toys & General Merchandise",
+    "books": "Toys & General Merchandise",
     "music": "Toys & General Merchandise",
     # Amazon
     "beauty": "Beauty & Health Care",
     "health & personal care": "Beauty & Health Care",
     "computers & accessories": "Electronics",
     "office products": "Stationery",
-    "sports, fitness & outdoors": "Sports & Fitness",
-    "bags, wallets and luggage": "Luggage & Bags",
+    "sports, fitness & outdoors": "Toys & General Merchandise",
+    "bags, wallets and luggage": "Fashion",
     "home improvement": "Home & Kitchen",
     "tools & home improvement": "Home & Kitchen",
     "outdoor living": "Home & Kitchen",
-    "toys & games": "Toys & Games",
+    "toys & games": "Toys & General Merchandise",
     "baby": "Kids & Baby",
     "musical instruments": "Toys & General Merchandise",
     "grocery & gourmet foods": "Grocery",
-    "industrial & scientific": "General Merchandise",
+    "industrial & scientific": "Toys & General Merchandise",
     "car & motorbike": "Automobile Accessories",
     "automobiles": "Automobile Accessories",
-    "pet supplies": "General Merchandise",
+    "pet supplies": "Toys & General Merchandise",
     # Flipkart
     "home": "Home & Kitchen",
     "mobiles & accessories": "Electronics",
     "tvs & appliances": "Electronics",
     "baby & kids": "Kids & Baby",
-    "sports, books & more": "Sports & Fitness",
+    "sports, books & more": "Toys & General Merchandise",
     "beauty & personal care": "Beauty & Health Care",
 }
 
@@ -330,17 +376,27 @@ class CategoryMapper:
         raw = json.loads(Path(map_path).read_text(encoding="utf-8")) if map_path else _default_map()
         self.map, self.errors = validate_map(raw, self.taxonomy)
         # Candidate targets for the coarse descent: EVERY valid path, deepest
-        # first. Restricting this to L1/L2/L3 meant a breadcrumb ending in a
-        # product noun that Gajab HAS as an L4 ('Artificial Flowers',
-        # 'First Aid Kit') could never reach it and stopped at the L1.
-        self._coarse: list[str] = sorted(
-            (self.taxonomy.get("ids") or {}),
-            key=lambda p: -p.count(" > "),
-        )
+        # first — including Active branches that own no L4 yet (an L3 such as
+        # 'Toys & General Merchandise > Toys > Action Figures' is a real
+        # assignment target). A node without attribute rows is no longer a
+        # problem: SpecAttributeMapper.attrs_for() falls back to the catalog
+        # core set, so no sheet is ever attribute-less.
+        ids = self.taxonomy.get("ids") or {}
+        self._coarse: list[str] = sorted(ids, key=lambda p: -p.count(" > "))
+        # Deepest path for each name — used for the title-leaf pass.
+        prefixes: set[str] = set()
+        for p in ids:
+            parts = p.split(" > ")
+            for i in range(1, len(parts)):
+                prefixes.add(" > ".join(parts[:i]))
+        self._leaf_paths: list[str] = sorted(p for p in ids if p not in prefixes)
+        # L1s that own at least one L4 leaf: the only safe L1 FALLBACK, since
+        # these are the branches the attribute master actually populates.
+        _, _, self._valid_l1 = _leafful_sets(self.taxonomy)
         # name -> full path, for single-level category names (Meesho supplies
         # `catalog.sub_sub_category_name` when its breadcrumb comes back empty).
         self._by_name: dict[str, str] = {}
-        for path in (self.taxonomy.get("ids") or {}):
+        for path in self._leaf_paths:
             leaf = path.split(" > ")[-1]
             n = _norm_key(leaf)
             if not n:
@@ -416,14 +472,19 @@ class CategoryMapper:
 
     def _l1_alias(self, raw_l1: str) -> str | None:
         """Marketplace top-level -> Gajab L1. Keys are normalised once at import
-        so '&' vs 'and' and punctuation can never cause a silent miss."""
+        so '&' vs 'and' and punctuation can never cause a silent miss.
+
+        Only returns an L1 that actually owns L4 leaves — the alias table is
+        checked against the taxonomy so a stale entry pointing at a branch with
+        no products (and hence no attributes) can never reach the export."""
         norm = _norm_key(raw_l1)
         hit = _L1_ALIASES_NORM.get(norm)
-        if hit:
+        if hit in self._valid_l1:
             return hit
         for k, v in _L1_ALIASES_NORM.items():
             if k and (k in norm or norm in k):
-                return v
+                if v in self._valid_l1:
+                    return v
         return None
 
     def _best_by_overlap(self, candidates, crumbs, title: str = "") -> str | None:
@@ -451,11 +512,21 @@ class CategoryMapper:
             score = len(want & ptoks)
             if not score:
                 continue
+            leaf_toks = _significant(cand.split(" > ")[-1])
+            # How precisely the candidate's OWN leaf names the product noun.
+            # 'Candles' and 'Candle Mould' both contain 'candl', but only the
+            # first is nothing else — so between two equally-evidenced
+            # siblings this picks 'Candles' over 'Candle Mould'. Ranked BELOW
+            # the breadcrumb score: 'Toy Figures' must not prefer the shallow
+            # 'Toys & Games > Toys' (precision 1.0) over the deeper
+            # '… > Action Figures' (precision 0.5, but one more cue).
+            precision = len(last & leaf_toks) / max(1, len(leaf_toks))
             key = (
                 1 if (last & ptoks) else 0,   # the product noun matched
-                len(title_toks & ptoks),       # the title agrees
-                score,                         # total breadcrumb overlap
-                cand.count(" > "),             # deeper is more specific
+                len(title_toks & ptoks),      # the title agrees
+                score,                        # total breadcrumb overlap
+                round(precision, 3),          # the leaf names that noun alone
+                cand.count(" > "),            # deeper is more specific
             )
             if best_key is None or key > best_key:
                 best, best_key = cand, key
@@ -469,16 +540,23 @@ class CategoryMapper:
         # Polishers, …) — picking any of them is a coin flip, so treat a lone
         # token that many candidates share as no signal at all and let the
         # caller fall back to the L1 instead of filing a wrong leaf.
-        if best_key[2] == 1:
+        if best_key[2] == 1:   # only a single token carried the match
             token = next(iter(best_overlap))
-            shared = sum(1 for c in candidates if token in _significant(c))
-            if shared > 3:
-                return None
+            sharers = [c for c in candidates if token in _significant(c)]
+            if len(sharers) > 3:
+                # Ambiguous only when the token is spread over DIFFERENT
+                # branches. 'candl' sits on seven siblings under a single
+                # 'Candles & Fragrances' L3 — an unambiguous branch, not a
+                # coin flip — so the tie-break above picks among them; 'polish'
+                # spans unrelated L3s and still falls back.
+                branches = {" > ".join(c.split(" > ")[:3]) for c in sharers}
+                if len(branches) > 1:
+                    return None
         return best
 
     def resolve_coarse(self, platform: str, source_path: str | None,
                        title: str = "") -> dict | None:
-        """Coarse but valid placement, in three passes.
+        """Coarse but valid placement, in four passes.
 
         1. LEAF match across the WHOLE taxonomy: the last crumb is the product
            noun ('Wall Clocks', 'First Aid kits'). Containment only counts when
@@ -489,9 +567,12 @@ class CategoryMapper:
            every candidate path by distinctive-token overlap (the old version
            needed a whole crumb to appear verbatim, so 'Pest Control' never
            matched 'Insect Repellents' and the row stalled at the bare L1).
-        3. No L1 alias (Car & Motorbike, Pet Supplies, …): search the whole
-           taxonomy the same way. Generic tokens are ignored, so this cannot
-           recreate the 'Water Treatments' -> 'Beverages > Water' mistake.
+        3. The title names a Gajab leaf verbatim.
+        4. Whole-taxonomy descent the same way — reached even when an L1 alias
+           exists, so a breadcrumb whose only Gajab equivalent sits elsewhere
+           (drawing supplies -> Stationery) is still found; it must clear a
+           higher bar than pass 2, since it is crossing taxonomies.
+        Only if all four fail does the row fall back to the aliased L1.
         """
         if not source_path:
             return None
@@ -528,14 +609,71 @@ class CategoryMapper:
             best = self._best_by_overlap(inside, parts[1:], title)
             if best:
                 return self._result_for(best, "coarse", 0.55)
-            # nothing inside the L1 matched — stay at the L1 rather than guess
-            return self._result_for(gajab_l1, "coarse", 0.4)
+            # NOT a dead end: 'Toys & Games > … > Pencil Erasers' has no match
+            # inside the aliased L1 yet does in the whole taxonomy
+            # (Stationery > … > Erasers). Returning the bare L1 here — as this
+            # used to — stranded every such row at L1 with no attributes.
 
-        # ── pass 3: no L1 alias — whole-taxonomy descent ───────────────────
+        # ── pass 3: the TITLE names a Gajab leaf verbatim ──────────────────
+        # 'Latte Art Coffee Stencil Set' contains the leaf 'Coffee Stencil'.
+        # Checked BEFORE the cross-taxonomy descent: a verbatim two-word leaf
+        # inside the product's own name is far stronger evidence than any
+        # shared-token overlap between two unrelated taxonomies.
+        hit = self._title_leaf(title)
+        if hit:
+            return self._result_for(hit, "coarse-title", 0.5)
+
+        # ── pass 4: whole-taxonomy descent ─────────────────────────────────
+        # Deliberately STRICTER than pass 2: inside the aliased L1 the
+        # breadcrumb already carries context, but a cross-taxonomy match on one
+        # or two shared words is a coin flip — '… > Aquarium Décor > Ornaments'
+        # would otherwise file an aquarium ornament under 'Spiritual & Festive
+        # Decor > Deity Ornaments', and '… > Water Treatments' an aquarium
+        # conditioner under 'Hair Treatment'. Cues must compound (breadcrumb +
+        # product noun + title) before a cross-branch answer is accepted.
         best = self._best_by_overlap(self._coarse, parts, title)
         if best:
-            return self._result_for(best, "coarse-cross", 0.5)
+            want: set = set()
+            for c in parts:
+                want |= _significant(c)
+            best_toks = _significant(best)
+            score = len(want & best_toks)
+            last_toks = _significant(parts[-1])
+            title_toks = _significant(title) if title else set()
+            title_ovl = len(title_toks & best_toks)
+            # Leaving the L1 the marketplace top level maps to is the risky
+            # move: inside it the breadcrumb already constrains the branch, so
+            # two agreeing cues suffice; crossing taxonomies demands a third
+            # (three breadcrumb tokens, or the product name twice over).
+            cross = best.split(" > ")[0] != (gajab_l1 or "")
+            if cross:
+                strong = score >= 3 or title_ovl >= 2
+            else:
+                strong = score >= 2 or (
+                    score >= 1 and bool(last_toks & best_toks) and title_ovl >= 1
+                )
+            if strong:
+                return self._result_for(best, "coarse-cross", 0.5)
+
+        # ── nothing matched anywhere: the aliased L1 is the honest placement ─
+        if gajab_l1:
+            return self._result_for(gajab_l1, "coarse", 0.4)
         return None
+
+    def _title_leaf(self, title: str) -> str | None:
+        """A leaf name that appears verbatim in the product title."""
+        t = f" {_norm_key(title)} "
+        if len(t.split()) < 3:                 # title too short to be evidence
+            return None
+        best = None
+        for cand in self._leaf_paths:
+            n = _norm_key(cand.split(" > ")[-1])
+            if len(n.split()) < 2:             # single-word leaves are too loose
+                continue
+            if f" {n} " in t:
+                if best is None or len(n) > len(_norm_key(best.split(" > ")[-1])):
+                    best = cand
+        return best
 
     def _result_for(self, full: str, method: str, confidence: float) -> dict:
         lv = full.split(" > ")
@@ -550,7 +688,8 @@ class CategoryMapper:
             "method": method,
         }
 
-    def resolve(self, platform: str, source_path: str | None, allow_coarse: bool = True,
+    def resolve(self, platform: str, source_path: str | list | tuple | None,
+                 allow_coarse: bool = True,
                  title: str | None = None) -> dict | None:
         """Return {'full','l1'..'l4','level','confidence','method'} or None.
 
@@ -558,6 +697,10 @@ class CategoryMapper:
         coarse (marketplace L1 -> Gajab L1, descended as far as the breadcrumb
         names). A product should almost always leave with SOME valid category.
         """
+        # A few payloads carry the crumb as a list of segments rather than
+        # "A > B > C" — coerce rather than crash.
+        if isinstance(source_path, (list, tuple)):
+            source_path = " > ".join(str(p) for p in source_path if p)
         src = (source_path or "").strip()
         title = title or ""
         plat = (platform or "").lower()

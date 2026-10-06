@@ -31,9 +31,9 @@ def save_state():
         
         print("\n1. Opening gajab.com login page...")
         page.goto("https://gajab.com/auth/signin", wait_until="domcontentloaded")
-        page.wait_for_load_state("load", timeout=15000)
+        page.wait_for_selector('input[type="tel"]', timeout=30000)
         time.sleep(1)
-        
+
         print("2. Entering phone number...")
         phone_input = page.locator('input[type="tel"]')
         phone_input.fill(phone)

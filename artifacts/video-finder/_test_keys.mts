@@ -1,0 +1,10 @@
+import { parseXlsxFile } from './src/lib/listingValidator.ts';
+import fs from 'fs';
+const buf = fs.readFileSync("/Users/gajabmarketing/Downloads/Maruti.xlsx");
+const r = parseXlsxFile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength), "Maruti.xlsx");
+console.log("rowCount:", r.rowCount);
+console.log("headers sample:", r.headers.slice(0, 12));
+const first = r.rows[0];
+const keys = Object.keys(first).filter(k => /sku|product name|description|brand/i.test(k));
+console.log("relevant keys:", keys);
+console.log("sku value via keys:", keys.map(k => `${k}=${JSON.stringify(String(first[k]).slice(0,12))}`).join(" | "));

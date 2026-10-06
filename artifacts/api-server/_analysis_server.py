@@ -55,6 +55,7 @@ PORT = int(os.environ.get("ANALYSIS_PORT", "8003"))
 MAX_WORKERS = int(os.environ.get("ANALYSIS_WORKERS", "1"))
 
 _models_ready = False
+_marqo_ready = False
 
 
 def _ensure_models(use_qwen: bool = False):
@@ -114,6 +115,111 @@ def _run_hsn_suggest(products, imgb_key=""):
     return process_products(products)
 
 
+def _run_category_validate(products):
+    from _category_validate import process_products as validate_products
+    return validate_products(products)
+
+
+# ── Category Validation background job ─────────────────────────────────────
+# Large sheets (thousands of rows) take hours with Marqo and would blow the
+# tunnel's request limit. Jobs run in a background thread, write progress +
+# results to disk, and the API polls them. A single global lock serialises
+# jobs so the GPU/CPU is never oversubscribed.
+
+import threading
+
+_CAT_JOB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "category_jobs")
+_CAT_JOBS = {}
+_CAT_LOCK = threading.Lock()
+
+
+def _cat_job_path(job_id):
+    return os.path.join(_CAT_JOB_DIR, job_id)
+
+
+def _cat_write(job_id, name, obj):
+    d = _cat_job_path(job_id)
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(d, name))
+
+
+def _cat_read(job_id, name):
+    p = os.path.join(_cat_job_path(job_id), name)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _run_category_job(job_id, products):
+    from _category_validate import process_products as validate_products
+
+    total = len(products)
+    state = {"jobId": job_id, "status": "running", "phase": "marqo",
+             "done": 0, "total": total, "message": "Marqo classification"}
+    _cat_write(job_id, "progress", state)
+
+    try:
+        # Products run in a thread pool (CATEGORY_WORKERS, default 4) so one
+        # stalled image download can't freeze the batch. on_progress streams
+        # partial results to disk without serialising the work.
+        def on_progress(done, snapshot):
+            state["done"] = done
+            if done % 5 == 0 or done == total:
+                _cat_write(job_id, "progress", state)
+                _cat_write(job_id, "results", {"results": snapshot})
+
+        out = validate_products(products, on_progress=on_progress)
+        results = out.get("results", [])
+        _cat_write(job_id, "results", {"results": results})
+
+        # Marqo is the source of truth — Qwen no longer overrides
+        # `recommended`/`predicted`/`status`; it produced generic catch-all
+        # picks (e.g. "Precious Jewellery > gemstone") that overrode correct
+        # Marqo results.
+        state["phase"] = "qwen"
+        state["message"] = "Done (Marqo authoritative)"
+        state["done"] = 0
+        state["total"] = 0
+        _cat_write(job_id, "progress", state)
+
+        state["status"] = "completed"
+        state["phase"] = "done"
+        state["message"] = "Complete"
+        _cat_write(job_id, "progress", state)
+    except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        state["status"] = "failed"
+        state["message"] = str(e)
+        _cat_write(job_id, "progress", state)
+
+
+def product_images_for(result, product):
+    """Return the image URLs used for a product (sheet images, else gateway)."""
+    imgs = product.get("images")
+    if imgs:
+        return imgs
+    try:
+        from _category_validate import product_images
+        return product_images(product.get("url", ""))
+    except Exception:
+        return []
+
+
+def _cat_start_job(products):
+    import uuid
+    job_id = uuid.uuid4().hex[:12]
+    _CAT_JOBS[job_id] = {"status": "running"}
+    t = threading.Thread(target=_run_category_job, args=(job_id, products), daemon=True)
+    t.start()
+    return job_id
+
+
 class Handler(BaseHTTPRequestHandler):
     def _json(self, code, obj):
         body = json.dumps(obj).encode("utf-8")
@@ -128,12 +234,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._json(200, {"status": "ok" if _models_ready else "warming"})
+            # Marqo (category validation) and Qwen (lazy, only for text
+            # correction) warm independently — report ok once Marqo is up,
+            # otherwise /health stays "warming" forever on a box that never
+            # asks for Qwen.
+            self._json(200, {"status": "ok" if (_marqo_ready or _models_ready) else "warming"})
+        elif self.path.startswith("/category-validate/job/"):
+            # GET /category-validate/job/<jobId>[/progress|/results]
+            parts = self.path.strip("/").split("/")
+            job_id = parts[2] if len(parts) > 2 else ""
+            what = parts[3] if len(parts) > 3 else "progress"
+            if not job_id:
+                self._json(400, {"error": "jobId required"})
+                return
+            data = _cat_read(job_id, "progress" if what != "results" else "results")
+            if data is None:
+                self._json(404, {"error": "job not found"})
+                return
+            self._json(200, data)
         else:
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path not in ("/correct-text", "/hsn-suggest"):
+        if self.path not in ("/correct-text", "/hsn-suggest", "/category-validate", "/category-validate/job"):
             self._json(404, {"error": "not found"})
             return
         try:
@@ -145,6 +268,15 @@ class Handler(BaseHTTPRequestHandler):
                 use_qwen = data.get("useQwen", False)
                 _ensure_models(use_qwen=bool(use_qwen))
                 result = _run_correct_text(products, use_qwen)
+            elif self.path == "/category-validate/job":
+                products = data.get("products", [])
+                job_id = _cat_start_job(products)
+                print(f"[ANALYSIS] category job {job_id} started ({len(products)} products)", file=sys.stderr)
+                self._json(200, {"jobId": job_id})
+                return
+            elif self.path == "/category-validate":
+                products = data.get("products", [])
+                result = _run_category_validate(products)
             else:
                 products = data.get("products", [])
                 result = _run_hsn_suggest(products, data.get("imgbKey", ""))
@@ -159,6 +291,27 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def _warm_marqo():
+    """Load the taxonomy + Marqo model + label cache at startup.
+
+    First request used to pay the ~8-15s cold model load (and 90s+ if the
+    label cache was missing). Doing it once in a daemon thread keeps that cost
+    off every job; the load/cache locks make it safe to race a real request.
+    """
+    global _marqo_ready
+    try:
+        t0 = time.time()
+        import _category_validate as cv
+        cv._load_taxonomy()
+        from _marqo_classifier import _ensure_model, _encode_labels
+        if _ensure_model():
+            _encode_labels([p["full"] for p in cv._index.get("paths", [])])
+        _marqo_ready = True
+        print(f"[ANALYSIS] Marqo warmed in {time.time() - t0:.1f}s", file=sys.stderr)
+    except Exception as e:
+        print(f"[ANALYSIS] warm-up failed: {e}", file=sys.stderr)
+
+
 def main():
     try:
         server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
@@ -166,6 +319,8 @@ def main():
         print(f"[ANALYSIS] Failed to bind 127.0.0.1:{PORT}: {e}", file=sys.stderr)
         print("[ANALYSIS] Another analysis server is probably already running. Free the port or set ANALYSIS_PORT.", file=sys.stderr)
         sys.exit(1)
+    if os.environ.get("ANALYSIS_NO_WARM") != "1":
+        threading.Thread(target=_warm_marqo, daemon=True).start()
     print(f"[ANALYSIS] analysis server listening on 127.0.0.1:{PORT}", file=sys.stderr)
     try:
         server.serve_forever()

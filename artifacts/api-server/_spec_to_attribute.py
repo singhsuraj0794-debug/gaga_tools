@@ -274,6 +274,16 @@ class SpecAttributeMapper:
         for name in (catalog.get("attribute_names") or {}):
             self.attr_index[normalise_key(name)] = name
         self._derived = self._build_derived()
+        # Universal fallback used by _attrs_for — see the comment there.
+        from collections import Counter as _Cnt
+        cnt: _Cnt = _Cnt()
+        first: dict[str, dict] = {}
+        for rows in self.by_path.values():
+            for a in rows:
+                cnt[a["attribute"]] += 1
+                first.setdefault(a["attribute"], a)
+        need = max(4, int(0.30 * max(1, len(self.by_path))))
+        self._core = [first[n] for n, c in cnt.most_common() if c >= need]
 
     def _build_derived(self) -> dict[str, list[dict]]:
         """Attribute sets for nodes that have none, taken from their DESCENDANTS.
@@ -346,7 +356,8 @@ class SpecAttributeMapper:
           1. the node's own attribute rows;
           2. the agreed attribute set of its L4 children (for L1/L2/L3 nodes,
              which the attributes file generally leaves empty);
-          3. the nearest ancestor that has attributes (walking up).
+          3. the nearest ancestor that has attributes (walking up);
+          4. the catalog-wide core set, so a sheet is never attribute-less.
         """
         if not node_path:
             return []
@@ -365,7 +376,16 @@ class SpecAttributeMapper:
             hit = self.by_path.get(p) or self._derived.get(p)
             if hit:
                 return hit
-        return []
+        # Nothing anywhere on this branch: the master genuinely has empty
+        # branches (Books & Media, Musical Instruments, Toys & Games …) and a
+        # sheet with NO "Specifications" columns cannot be listed at all. Fall
+        # back to the attributes most of the catalog shares (colour, material,
+        # country of origin …) — always applicable, never a wrong category.
+        leaf = node_path.split(" > ")[-1] if node_path else ""
+        return [
+            {**a, "leaf": leaf, "specification": f"{leaf} | {a['attribute']}"}
+            for a in self._core
+        ]
 
     def attrs_for(self, node_path: str, with_source: bool = False):
         return self._attrs_for(node_path)

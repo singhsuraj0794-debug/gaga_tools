@@ -7,12 +7,13 @@ on:
 
 jobs:
   native-android:
-    runs-on: [self-hosted, mac-india]
+    runs-on: [self-hosted, windows-india]
     steps:
       - uses: actions/checkout@v5
 
       - name: Start emulator + Appium and run native happy flow
-        run: bash start-native-monitor.sh
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ./start-native-monitor.ps1
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

@@ -15,6 +15,7 @@ import {
   Zap,
   Lightbulb,
   Wand2,
+  Layers,
 } from "lucide-react";
 import ProductSync from "@/components/ProductSync";
 
@@ -28,8 +29,8 @@ export default function Home() {
       color: "bg-blue-50 hover:bg-blue-100 border-blue-200",
     },
     {
-      title: "Trend Finder",
-      description: "Discover trending products in the market",
+      title: "Hook Analyzer",
+      description: "Score video ad hooks (Hook / Bridge / Offer) with Meta TRIBE v2 brain responses",
       icon: <TrendingUp className="h-10 w-10 text-purple-600" />,
       path: "/trend-finder",
       color: "bg-purple-50 hover:bg-purple-100 border-purple-200",
@@ -79,6 +80,13 @@ export default function Home() {
   ];
 
   const rdSections = [
+    {
+      title: "Category Validation",
+      description: "Validate assigned L1–L4 categories with Marqo image embeddings",
+      icon: <Layers className="h-8 w-8 text-fuchsia-600" />,
+      path: "/rd/category-validation",
+      status: "Prototype",
+    },
     {
       title: "AI Product Descriptions",
       description: "Generate compelling product descriptions using AI",

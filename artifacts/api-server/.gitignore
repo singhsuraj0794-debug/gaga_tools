@@ -1,2 +1,8 @@
 downloads/
 dist/
+
+# Marqo label-embedding cache (large, rebuildable)
+.marqo_label_emb.pt
+
+# Category validation background job artifacts (rebuildable)
+category_jobs/

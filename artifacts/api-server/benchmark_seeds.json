@@ -1,0 +1,8 @@
+{
+  "note": "Public Instagram reels used to seed the Meta Mind Map benchmark corpus. Add URLs here or via the UI. Discovery is manual (Instagram has no public search API); each URL is fetched with yt-dlp using Chrome cookies and ranked by likes/comments.",
+  "reels": [
+    "https://www.instagram.com/reel/DISz1RfNd3K/",
+    "https://www.instagram.com/reel/DBghEi-ylfg/",
+    "https://www.instagram.com/reel/DFcm9bQyybp/"
+  ]
+}

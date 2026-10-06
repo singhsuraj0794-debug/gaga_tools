@@ -28,6 +28,9 @@ node_modules
 !.vscode/extensions.json
 
 # misc
+scripts/admin/.env
+scripts/admin/screenshots/
+scripts/admin/data/
 /.sass-cache
 /connect.lock
 /coverage
@@ -55,3 +58,30 @@ Thumbs.db
 **/.env.local
 monitoring/screenshots/
 monitoring/.gajab_session.json
+
+# Local runtime captures / caches / artifacts (never commit)
+downloads/
+**/*.log
+artifacts/bargain_recordings/
+artifacts/**/bargain_recordings/
+artifacts/video-finder/dist.old/
+monitoring/native/recordings/
+monitoring/native/screenshots/
+monitoring/flow_screenshots/
+monitoring/concurrency_screenshots/
+monitoring/load_test_results/
+artifacts/api-server/.product_cache.json
+artifacts/api-server/.search_cache.json
+artifacts/api-server/.duplicates_cache.json
+
+# Meta Mind Map (Trend Finder) runtime artifacts
+**/trend_finder/
+artifacts/api-server/*.npy
+
+# Amazon <-> Gajab cross-reference runtime cache
+scripts/.crossref_cache/
+scripts/.crossref_jobs/
+
+# admin session
+scripts/admin/.admin_session.json
+**/.admin_session.json

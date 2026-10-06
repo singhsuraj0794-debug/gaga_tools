@@ -6,6 +6,7 @@ import scraperRouter from "./scraper";
 import meeshoScraperRouter from "./scraper/meesho";
 import amazonScraperRouter from "./scraper/amazon";
 import priceMapperRouter from "./priceMapper";
+import trendRouter from "./trend";
 
 const router: IRouter = Router();
 
@@ -16,5 +17,6 @@ router.use("/scraper", scraperRouter);
 router.use("/scraper/meesho", meeshoScraperRouter);
 router.use("/scraper/amazon", amazonScraperRouter);
 router.use("/price-mapper", priceMapperRouter);
+router.use(trendRouter);
 
 export default router;

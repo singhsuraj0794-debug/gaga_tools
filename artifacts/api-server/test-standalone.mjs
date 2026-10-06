@@ -9,6 +9,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
 const SCRAPER_SCRIPT = path.resolve(__dirname, "dist/_meesho_scraper.py");
 
+try {
+  const fs = await import("node:fs");
+  const envFile = fs.readFileSync(path.resolve(__dirname, ".env"), "utf8");
+  for (const line of envFile.split("\n")) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
+  }
+} catch {}
+
 const jobs = new Map();
 
 function readBody(req) {
