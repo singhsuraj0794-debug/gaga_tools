@@ -119,15 +119,25 @@ def build(xlsx_path: str, sheet: str = DEFAULT_SHEET) -> dict:
         mandatory_raw = get(row, "mandatory")
         valid_raw = get(row, "valid")
 
-        # Node_Path in the v3 workbook repeats only L1; prefer the real join.
-        if node_path.count(">") < 3:
-            node_path = " > ".join(p for p in (l1, l2, l3, l4) if p)
+        # Build the path from the L1..L4 columns — the authoritative current
+        # names. The workbook's Node_Path column can carry a stale L1 (e.g.
+        # 'Kids & Baby' for what is now 'Toys & General Merchandise'), which
+        # would never match the taxonomy.
+        joined = " > ".join(p for p in (l1, l2, l3, l4) if p)
+        node_path = joined if joined.count(">") >= 1 else node_path
 
         if not node_path or not attribute:
             skipped += 1
             continue
 
-        leaf = (specification.split("|")[-1] if "|" in specification else l4) or l4
+        # Attribute Specification is the FAMILY name: the L4 name, or the L3
+        # name when L4 is blank (the L3-leaf families, e.g.
+        # 'Toys & General Merchandise > Toys > Action Figures'). A few cells are
+        # a broken '#N/A' — drop those rows.
+        if specification.startswith("#"):
+            skipped += 1
+            continue
+        leaf = specification or l4 or l3
         entry = {
             "attribute": attribute,
             "type": attr_type,
