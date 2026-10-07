@@ -224,7 +224,10 @@ export default function FlipkartScraper() {
     setSelectedUrls(new Set(urls.slice(min - 1, max)));
   };
 
-  const BATCH_SIZE = 5;
+  // Bigger batches keep the server-side pool (SCRAPE_CONCURRENCY) busy: with
+// BATCH_SIZE 5 only 5 of 6 workers ran, and batches were awaited one after
+// another. 12 = 2 waves of 6.
+  const BATCH_SIZE = 12;
 
   const handleScrape = async () => {
     const urlsToScrape = Array.from(selectedUrls);
