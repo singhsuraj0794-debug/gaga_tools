@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 
 _DEFAULT_MAP = Path(__file__).with_name("marketplace_category_map.json")
@@ -56,6 +57,7 @@ def normalise_path(raw: str) -> str:
     return " > ".join(out)
 
 
+@lru_cache(maxsize=None)
 def _norm_key(raw: str) -> str:
     """Case/punctuation-insensitive key for map lookup."""
     s = normalise_path(raw).lower()
@@ -129,6 +131,7 @@ _GENERIC_TOKENS = {
 }
 
 
+@lru_cache(maxsize=None)
 def _stem(token: str) -> str:
     """Crude singular stem so 'repellents' and 'repellent' compare equal."""
     t = token.lower()
@@ -141,6 +144,7 @@ def _stem(token: str) -> str:
     return t
 
 
+@lru_cache(maxsize=None)
 def _significant(text: str) -> set:
     """Distinctive, stemmed tokens of a crumb/path — used for overlap scoring."""
     out = set()

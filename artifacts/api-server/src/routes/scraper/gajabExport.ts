@@ -71,7 +71,7 @@ async function runEnricher(products: unknown[], extraArgs: string[] = []): Promi
     const { stdout } = await execFileAsync(
       pythonBin(),
       [PREPARE_SCRIPT, tmp, ...extraArgs],
-      { timeout: 300000, maxBuffer: 64 * 1024 * 1024 },
+      { timeout: 900000, maxBuffer: 64 * 1024 * 1024 },
     );
     return JSON.parse(stdout);
   } finally {
