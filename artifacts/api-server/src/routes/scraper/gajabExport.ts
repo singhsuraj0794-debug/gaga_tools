@@ -126,7 +126,11 @@ function renderSheet(
   // ── row 2: column headers ─────────────────────────────────────────────
   const headerRow = ws.getRow(2);
   fixed.forEach((h, i) => (headerRow.getCell(i + 1).value = h));
-  specs.forEach((s, i) => (headerRow.getCell(specStart + i).value = s.attribute ?? s.specification));
+  specs.forEach(
+    (s, i) =>
+      (headerRow.getCell(specStart + i).value =
+        (s.attribute ?? s.specification) + (s.mandatory ? " *" : "")),
+  );
   audit.forEach((h, i) => (headerRow.getCell(auditStart + i).value = h));
 
   // ── data rows ─────────────────────────────────────────────────────────
@@ -225,6 +229,17 @@ export async function buildGajabWorkbook(
   const workbook = new ExcelJS.Workbook();
 
   addSummarySheet(workbook, data.summary, data.stats);
+
+  // Combined sheet: every scraped product with its category + mapping audit.
+  // No per-category attribute columns (each category declares its own), so the
+  // spec list is empty and only the 38 fixed + 4 audit columns are rendered.
+  const allWs = workbook.addWorksheet("All Products");
+  renderSheet(allWs, {
+    fixed_columns: data.fixed_columns,
+    spec_columns: [],
+    audit_columns: data.audit_columns,
+    rows: data.rows,
+  });
 
   for (const sheet of data.sheets) {
     const ws = workbook.addWorksheet(sheet.sheet_name);
