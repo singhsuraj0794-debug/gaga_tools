@@ -312,6 +312,23 @@ _L1_ALIASES: dict[str, str] = {
     "baby & kids": "Kids & Baby",
     "sports, books & more": "Toys & General Merchandise",
     "beauty & personal care": "Beauty & Health Care",
+    # Flipkart prefixes every breadcrumb with "Home"; the real top level is the
+    # department after it, so these are the department aliases (added when the
+    # leading-"Home" strip exposed them).
+    "kitchen & dining": "Home & Kitchen",
+    "kitchen, cookware & serveware": "Home & Kitchen",
+    "home & furniture": "Home & Kitchen",
+    "furnishing": "Home & Kitchen",
+    "appliances": "Home & Kitchen",
+    "home appliances": "Home & Kitchen",
+    "kitchen appliances": "Home & Kitchen",
+    "computers": "Electronics",
+    "computer peripherals": "Electronics",
+    "audio & video": "Electronics",
+    "camera & accessories": "Electronics",
+    "automotive": "Automobile Accessories",
+    "auto & accessories": "Automobile Accessories",
+    "books & media": "Toys & General Merchandise",
 }
 
 
@@ -576,7 +593,12 @@ class CategoryMapper:
         """
         if not source_path:
             return None
-        parts = [p.strip() for p in re.split(r"\s*>\s*", source_path) if p.strip()]
+        # normalise_path() drops a leading "Home"/"Home Page" crumb. Flipkart
+        # prefixes EVERY breadcrumb with "Home" (its homepage), so parsing the
+        # raw path here made parts[0] == "Home" and _l1_alias("Home") resolved
+        # the whole catalogue to Home & Kitchen — the source of Flipkart's
+        # ~90% wrong/unmapped categories.
+        parts = [p.strip() for p in re.split(r"\s*>\s*", normalise_path(source_path)) if p.strip()]
         if not parts:
             return None
 
