@@ -142,7 +142,10 @@ def build(xlsx_path: str, sheet: str = DEFAULT_SHEET) -> dict:
             "attribute": attribute,
             "type": attr_type,
             "mandatory": mandatory_raw.lower().startswith("y"),
-            "specification": specification or f"{leaf} | {attribute}",
+            # The sheet's attribute group-row reads "Specifications - <family> |
+            # <attribute>"; Attribute Specification holds only the family, so
+            # build the composite here (the builder used to pass it through).
+            "specification": f"{leaf} | {attribute}",
             "leaf": leaf,
             "group": group_name,
             "description": description,
