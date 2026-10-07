@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
+import { runBatched } from "../../lib/scrapeBatch";
 
 const execFileAsync = promisify(execFile);
 
@@ -307,18 +308,9 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
     const products: AmazonDetailedProduct[] = [];
     const errors: string[] = [];
 
-    // Scrape with concurrency limit of 2 (be gentle on Amazon)
-    const concurrency = 2;
-    const BATCH_DELAY_MS = 2000; // 2s delay between batches to avoid Amazon blocking
-    for (let i = 0; i < urls.length; i += concurrency) {
-      const batch = urls.slice(i, i + concurrency);
-      const batchPromises = batch.map(url => scrapeAmazonProduct(url));
-      const batchResults = await Promise.all(batchPromises);
-      products.push(...batchResults);
-      if (i + concurrency < urls.length) {
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
-      }
-    }
+    // Bounded concurrency (SCRAPE_CONCURRENCY, default 4) — was hardcoded 2
+    // with a 2s pause, which made big stores take ~10 minutes.
+    products.push(...(await runBatched(urls, (url) => scrapeAmazonProduct(url))));
 
     res.json({
       products,

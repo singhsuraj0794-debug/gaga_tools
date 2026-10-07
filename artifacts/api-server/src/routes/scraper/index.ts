@@ -16,6 +16,7 @@ import {
 import type { EcommerceProduct } from "@workspace/api-zod";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
+import { runBatched } from "../../lib/scrapeBatch";
 
 const execFileAsync = promisify(execFile);
 
@@ -338,18 +339,9 @@ router.post("/flipkart/scrape", async (req: Request, res: Response): Promise<voi
     const products: FlipkartDetailedProduct[] = [];
     const errors: string[] = [];
 
-    // Scrape with concurrency limit of 2 (be gentle on Flipkart)
-    const concurrency = 2;
-    const BATCH_DELAY_MS = 2000; // 2s delay between batches to avoid Flipkart blocking
-    for (let i = 0; i < urls.length; i += concurrency) {
-      const batch = urls.slice(i, i + concurrency);
-      const batchPromises = batch.map(url => scrapeFlipkartProduct(url));
-      const batchResults = await Promise.all(batchPromises);
-      products.push(...batchResults);
-      if (i + concurrency < urls.length) {
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
-      }
-    }
+    // Bounded concurrency (SCRAPE_CONCURRENCY, default 4) — was hardcoded 2
+    // with a 2s pause.
+    products.push(...(await runBatched(urls, (url) => scrapeFlipkartProduct(url))));
 
     res.json({
       products,

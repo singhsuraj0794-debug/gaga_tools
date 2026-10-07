@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { runLocalScraper, runLocalExtract, runLocalExtractPage, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
+import { runBatched } from "../../lib/scrapeBatch";
 
 const execFileAsync = promisify(execFile);
 
@@ -304,16 +305,13 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
 
     (async () => {
       job.status = "running";
-      // Process 2 at a time (ScraperAPI can handle this with shorter timeouts)
-      const concurrency = 2;
-      for (let i = 0; i < urls.length; i += concurrency) {
-        const batch = urls.slice(i, i + concurrency);
-        const results = await Promise.all(batch.map(url => scrapeProduct(url)));
-        for (const product of results) {
-          job.products.push(product);
-          job.completed++;
-        }
-      }
+      // Bounded concurrency (SCRAPE_CONCURRENCY, default 4) — was hardcoded 2.
+      await runBatched(urls, async (url) => {
+        const product = await scrapeProduct(url);
+        job.products.push(product);
+        job.completed++;
+        return product;
+      });
       job.status = "completed";
       logger.info({ jobId, completed: job.completed, total: job.total }, "Scrape job completed");
     })().catch((err: any) => {

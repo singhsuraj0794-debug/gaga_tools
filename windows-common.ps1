@@ -114,3 +114,8 @@ Write-Host "[common] repo=$RepoDir python=$(Get-Python)"
 # the Microsoft Store shim, which has none of our packages (it silently
 # returned empty results), so point it at the venv interpreter explicitly.
 $env:PYTHON_BIN = Get-Python
+
+# Scraper parallelism. The local server is threaded and the browsers accept
+# several concurrent CDP sessions; 6 mixed-platform workers ran cleanly here.
+if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "6" }
+if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
