@@ -2131,6 +2131,68 @@ export async function getCategoryJob(
 }
 
 /**
+ * Sheet duplicate detection as a background job.
+ *
+ * A large sheet (1,971 products / ~17k images) takes minutes; a single
+ * synchronous request blows past the ngrok tunnel's ~300s timeout and returned
+ * a 503. Start a job and poll — every request stays short.
+ */
+export interface SheetDupProduct {
+  sku: string;
+  title: string;
+  seller?: string;
+  images: string[];
+  relationship?: string;
+  parentSku?: string;
+}
+
+export interface SheetDupGroup {
+  keep: { sku: string; title: string; reason?: string };
+  remove: { sku: string; title: string; reason?: string }[];
+  similarity?: number;
+}
+
+export interface SheetDupResult {
+  groups: SheetDupGroup[];
+  total_duplicates: number;
+  remove_skus: string[];
+}
+
+export async function startSheetDuplicatesJob(
+  products: SheetDupProduct[],
+  apiBase: string = "",
+): Promise<{ jobId: string; total: number }> {
+  const baseUrl = apiBase || getPrelistingApiBase();
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/sheet-duplicates/job`, withApiHeaders({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ products }),
+    signal: AbortSignal.timeout(60000),
+  }));
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({} as any));
+    throw new Error(body.error || `Duplicate job start failed: ${resp.status} ${resp.statusText}`);
+  }
+  return resp.json();
+}
+
+export async function getSheetDuplicatesJob(
+  jobId: string,
+  apiBase: string = "",
+): Promise<
+  | { status: "running"; progress: string; total: number; elapsedMs: number }
+  | ({ status: "completed" } & SheetDupResult)
+  | { status: "failed"; error: string; total?: number }
+> {
+  const baseUrl = apiBase || getPrelistingApiBase();
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/sheet-duplicates/job/${jobId}`, withApiHeaders({
+    signal: AbortSignal.timeout(60000),
+  }));
+  if (!resp.ok) throw new Error(`Duplicate job fetch failed: ${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
+/**
  * Refine a product's "Unit count/variation" check using the image-detected
  * product type from the HSN service. When CLIP identifies a single-SKU article
  * (e.g. cable, appliance, dispenser), the unit/variation requirement is not

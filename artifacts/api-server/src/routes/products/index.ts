@@ -1613,6 +1613,104 @@ router.post("/products/sheet-duplicates", async (req, res): Promise<void> => {
   }
 });
 
+// ── Sheet duplicate detection as a BACKGROUND JOB ──────────────────────────
+// A large sheet (e.g. 1,971 products / ~17k images) takes minutes, which
+// exceeds the ngrok tunnel's request timeout (~300s) and came back as a 503.
+// Run it in the background so every HTTP request stays short and the client
+// polls for progress/results, exactly like category-validate/job.
+type SheetDupJob = {
+  status: "running" | "completed" | "failed";
+  startedAt: number;
+  products: number;
+  inputPath: string;
+  resultPath: string;
+  logPath: string;
+  error?: string;
+};
+const sheetDupJobs = new Map<string, SheetDupJob>();
+
+router.post("/products/sheet-duplicates/job", async (req, res): Promise<void> => {
+  try {
+    const { products, threshold } = req.body as {
+      products: { sku: string; title: string; images: string[] }[];
+      threshold?: number;
+    };
+    if (!Array.isArray(products) || products.length < 2) {
+      res.status(400).json({ error: "At least 2 products required" });
+      return;
+    }
+    const { writeFile } = await import("node:fs/promises");
+    const { createWriteStream } = await import("node:fs");
+    const { randomUUID } = await import("node:crypto");
+
+    const jobId = randomUUID();
+    const scriptPath = resolveScript("_sheet_duplicates.py");
+    const inputPath = tmpPath(`sheet_dup_in_${jobId}.json`);
+    const resultPath = tmpPath(`sheet_dup_out_${jobId}.json`);
+    const logPath = tmpPath(`sheet_dup_log_${jobId}.txt`);
+    await writeFile(inputPath, JSON.stringify(products));
+
+    const args = [scriptPath, inputPath];
+    if (threshold !== undefined) args.push(String(threshold));
+
+    const child = spawn(pythonBin(), args, { stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.pipe(createWriteStream(resultPath));
+    child.stderr.pipe(createWriteStream(logPath));
+
+    const job: SheetDupJob = {
+      status: "running", startedAt: Date.now(), products: products.length,
+      inputPath, resultPath, logPath,
+    };
+    sheetDupJobs.set(jobId, job);
+    child.on("exit", (code) => {
+      job.status = code === 0 ? "completed" : "failed";
+      if (code !== 0) job.error = `detector exited with code ${code}`;
+      void import("node:fs/promises").then((m) => m.unlink(inputPath).catch(() => {}));
+    });
+
+    req.log.info({ jobId, count: products.length }, "Sheet duplicate job started");
+    res.json({ jobId, total: products.length });
+  } catch (err: any) {
+    req.log.error({ err }, "Sheet duplicate job start failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/products/sheet-duplicates/job/:jobId", async (req, res): Promise<void> => {
+  const job = sheetDupJobs.get(req.params.jobId);
+  if (!job) {
+    res.status(404).json({ error: "job not found" });
+    return;
+  }
+  if (job.status === "running") {
+    let progress = "";
+    try {
+      const { readFile } = await import("node:fs/promises");
+      const log = await readFile(job.logPath, "utf-8");
+      const lines = log.split("\n").filter((l) => l.includes("[DUP]"));
+      progress = (lines[lines.length - 1] || "").trim();
+    } catch {
+      /* no progress yet */
+    }
+    res.json({
+      status: "running", progress, total: job.products,
+      elapsedMs: Date.now() - job.startedAt,
+    });
+    return;
+  }
+  if (job.status === "failed") {
+    res.json({ status: "failed", error: job.error || "duplicate detection failed", total: job.products });
+    return;
+  }
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const raw = await readFile(job.resultPath, "utf-8");
+    res.json({ status: "completed", ...JSON.parse(raw) });
+  } catch (err: any) {
+    res.json({ status: "failed", error: `could not read result: ${err.message}` });
+  }
+});
+
 // ── POST /api/products/validate-correction ────────────────────────────────
 // Submit feedback on a correction to measure accuracy
 const VALIDATION_FILE = path.resolve(__parentDirname, "validation_results.json");

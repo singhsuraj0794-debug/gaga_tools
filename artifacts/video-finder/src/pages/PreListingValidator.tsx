@@ -44,6 +44,8 @@ import {
   getPrelistingApiBase,
   withApiHeaders,
   setPrelistingApiBase,
+  startSheetDuplicatesJob,
+  getSheetDuplicatesJob,
   type ValidationResult,
   type ListingRow,
   type CheckResult,
@@ -1912,21 +1914,27 @@ export default function PreListingValidator() {
       const allGroups: any[] = [];
       const allRemoveSkus: string[] = [];
 
+      // Duplicate detection runs as a BACKGROUND JOB (the sheet can take
+      // minutes; a synchronous request over the tunnel 503s past ~300s).
+      const runDupJob = async (prods: any[]): Promise<any> => {
+        const { jobId, total } = await startSheetDuplicatesJob(prods);
+        const t0 = Date.now();
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const s: any = await getSheetDuplicatesJob(jobId);
+          if (s.status === "completed") return s;
+          if (s.status === "failed") throw new Error(s.error || "duplicate detection failed");
+          setDuplicateStatus(
+            s.progress || `Checking ${total} products... (${Math.round((Date.now() - t0) / 1000)}s)`,
+          );
+          if (Date.now() - t0 > 3600000) throw new Error("duplicate check timed out");
+        }
+      };
+
       if (crossSellerDuplicates) {
         // Cross-seller mode: send all products in a single batch
         setDuplicateStatus(`Checking ALL ${products.length} products (cross-seller mode)...`);
-        const startedAt = Date.now();
-        const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, withApiHeaders({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ products }),
-          signal: AbortSignal.timeout(2700000),
-        }));
-        if (!resp.ok) {
-          const errBody = await resp.json().catch(() => ({}));
-          throw new Error(errBody.error || `HTTP ${resp.status}`);
-        }
-        const result = await resp.json();
+        const result = await runDupJob(products);
         allGroups.push(...(result.groups || []));
         allRemoveSkus.push(...(result.remove_skus || []));
       } else {
@@ -1963,19 +1971,7 @@ export default function PreListingValidator() {
           const label = sellerKey === "__no_seller__" ? `Batch ${batchIdx}` : sellerKey;
           setDuplicateStatus(`[${batchIdx}/${filteredMap.size}] Checking ${label} (${sellerProducts.length} products)...`);
 
-          const startedAt = Date.now();
-          const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, withApiHeaders({
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ products: sellerProducts }),
-            signal: AbortSignal.timeout(2700000),
-          }));
-
-          if (!resp.ok) {
-            const errBody = await resp.json().catch(() => ({}));
-            throw new Error(`${label}: ${errBody.error || `HTTP ${resp.status}`}`);
-          }
-          const result = await resp.json();
+          const result = await runDupJob(sellerProducts);
 
           for (const g of (result.groups || [])) {
             g.seller = sellerKey !== "__no_seller__" ? sellerKey : undefined;
