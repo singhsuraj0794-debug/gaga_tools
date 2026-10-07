@@ -89,13 +89,25 @@ def _is_bot_page(html: str) -> bool:
 def _try_playwright(url: str, ua: str = "") -> str:
     """Fetch page HTML via the proxy-enabled Chrome CDP (real browser, passes bot detection)."""
     try:
-        import urllib.request
         from playwright.sync_api import sync_playwright
 
-        urllib.request.urlopen(f"{SCRAPE_CDP_URL}/json/version", timeout=5)
-
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(SCRAPE_CDP_URL)
+            # Launch a fresh headless Chrome rather than attach to the shared
+            # CDP Chrome. connect_over_cdp() crashes Playwright's driver
+            # ("_onAttachedToTarget" assert) when that profile holds a
+            # service-worker target for the site (e.g. flipkart.com/sw.js),
+            # which silently broke the breadcrumb backfill -> empty
+            # source_category_path -> the export had nothing to map.
+            launch_kwargs = dict(
+                headless=True,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled",
+                      "--disable-dev-shm-usage"],
+            )
+            from _chrome_path import chrome_executable
+            _exe = chrome_executable()
+            if _exe:
+                launch_kwargs["executable_path"] = _exe
+            browser = p.chromium.launch(**launch_kwargs)
             ctx = browser.new_context(
                 user_agent=ua or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                 viewport={"width": 1440, "height": 900},
@@ -160,6 +172,7 @@ def _try_playwright(url: str, ua: str = "") -> str:
                 html += ('<script id="__gajab_src_category__" type="application/json">'
                          + json.dumps(bc) + '</script>')
             ctx.close()
+            browser.close()
             if not _is_bot_page(html):
                 return html
     except Exception:
