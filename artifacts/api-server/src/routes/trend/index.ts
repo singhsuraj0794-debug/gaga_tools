@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from "uuid";
 import axios from "axios";
 import { logger } from "../../lib/logger";
 import { isAllowedDownloadUrl } from "../../lib/downloadManager";
+import { tmpPath } from "../../lib/tmp";
 
 const __filename = fileURLToPath(import.meta.url);
 const __parentDirname = path.dirname(__filename);
@@ -16,7 +17,7 @@ const __parentDirname = path.dirname(__filename);
 function resolveScript(name: string): string {
   const localPath = path.resolve(__parentDirname, name);
   if (fs.existsSync(localPath)) return localPath;
-  return `/tmp/${name}`;
+  return tmpPath(name);
 }
 
 // Dedicated Python 3.11 venv that has tribev2 + torch installed. Kept outside

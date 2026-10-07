@@ -8,6 +8,7 @@ import path from "node:path";
 import { logger } from "../../lib/logger";
 import { existsSync } from "node:fs";
 import { getSupabase } from "../../lib/supabase";
+import { tmpPath } from "../../lib/tmp";
 
 const __filename = fileURLToPath(import.meta.url);
 const __parentDirname = path.dirname(__filename);
@@ -15,8 +16,9 @@ const __parentDirname = path.dirname(__filename);
 function resolveScript(name: string): string {
   const localPath = path.resolve(__parentDirname, name);
   if (existsSync(localPath)) return localPath;
-  const tmpPath = `/tmp/${name}`;
-  return tmpPath;
+  // dist/ is populated at build time; fall back to the OS temp dir, never a
+  // hardcoded "/tmp" (that is C:\tmp on Windows and does not exist).
+  return tmpPath(name);
 }
 
 const execFileAsync = promisify(execFile);
@@ -885,7 +887,7 @@ router.post("/products/image-duplicates", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_image_duplicates.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/image_dup_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`image_dup_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify(productsWithImages));
     const args = [scriptPath, inputPath];
     if (threshold !== undefined) args.push(String(threshold));
@@ -935,7 +937,7 @@ router.post("/products/verify-duplicates", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("verify_duplicate.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/verify_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`verify_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify(pairs));
     const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
       maxBuffer: 10 * 1024 * 1024,
@@ -1102,7 +1104,7 @@ router.post("/products/hsn-suggest", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_hsn_suggest.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/hsn_suggest_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`hsn_suggest_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify({ products, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
 
     req.log.info({ count: products.length }, "Running HSN suggestion (one-shot)");
@@ -1154,7 +1156,7 @@ router.post("/products/category-validate", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_category_validate.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/category_validate_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`category_validate_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify({ products }));
 
     req.log.info({ count: products.length }, "Running category validation (one-shot)");
@@ -1267,7 +1269,7 @@ router.post("/products/clip-verify", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_clip_verify.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/clip_verify_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`clip_verify_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify({ products, useQwenVerify: useQwen, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
 
     req.log.info({ count: products.length, mode: "one-shot", useQwenVerify: useQwen }, "Running CLIP verification");
@@ -1356,7 +1358,7 @@ router.post("/products/correct-text", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_correct_text.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/correct_text_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`correct_text_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify({ products, useQwen: useQwen || false, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
 
     req.log.info({ count: products.length, useQwen: useQwen || false }, "Running text correction (one-shot)");
@@ -1398,7 +1400,7 @@ router.post("/products/image-gen", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_image_gen.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/image_gen_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`image_gen_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify({ products, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
 
     req.log.info({ count: products.length }, "Running image generation");
@@ -1437,7 +1439,7 @@ router.post("/products/extract-specs", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_spec_extractor.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/spec_extract_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`spec_extract_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify({ products }));
 
     req.log.info({ count: products.length }, "Running spec extraction");
@@ -1480,7 +1482,7 @@ router.post("/products/visual-verify", async (req, res): Promise<void> => {
 
     // Stage 1: CLIP flagging
     const clipScript = resolveScript("_clip_flag.py");
-    const clipInput = `/tmp/clip_flag_input_${Date.now()}.json`;
+    const clipInput = tmpPath(`clip_flag_input_${Date.now()}.json`);
     await writeFile(clipInput, JSON.stringify({ products }));
 
     req.log.info({ count: products.length }, "Running CLIP flagging (Stage 1)");
@@ -1505,7 +1507,7 @@ router.post("/products/visual-verify", async (req, res): Promise<void> => {
         return { ...p, flagged: clipResult?.flagged || [] };
       });
 
-      const qwenInputPath = `/tmp/qwen_correct_input_${Date.now()}.json`;
+      const qwenInputPath = tmpPath(`qwen_correct_input_${Date.now()}.json`);
       await writeFile(qwenInputPath, JSON.stringify({ products: qwenInput }));
 
       req.log.info({ count: flaggedProducts.length }, "Running Qwen correction (Stage 2)");
@@ -1588,7 +1590,7 @@ router.post("/products/sheet-duplicates", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_sheet_duplicates.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/sheet_dup_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`sheet_dup_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify(products));
 
     const args = [scriptPath, inputPath];
@@ -1738,7 +1740,7 @@ router.post("/products/qwen-specs", async (req, res): Promise<void> => {
 
     const scriptPath = resolveScript("_qwen_specs.py");
     const { writeFile, unlink } = await import("node:fs/promises");
-    const inputPath = `/tmp/qwen_specs_input_${Date.now()}.json`;
+    const inputPath = tmpPath(`qwen_specs_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify({ products }));
 
     req.log.info({ count: products.length }, "Running Qwen VLM spec extraction");

@@ -1916,12 +1916,12 @@ export default function PreListingValidator() {
         // Cross-seller mode: send all products in a single batch
         setDuplicateStatus(`Checking ALL ${products.length} products (cross-seller mode)...`);
         const startedAt = Date.now();
-        const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, {
+        const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, withApiHeaders({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ products }),
           signal: AbortSignal.timeout(2700000),
-        });
+        }));
         if (!resp.ok) {
           const errBody = await resp.json().catch(() => ({}));
           throw new Error(errBody.error || `HTTP ${resp.status}`);
@@ -1964,12 +1964,12 @@ export default function PreListingValidator() {
           setDuplicateStatus(`[${batchIdx}/${filteredMap.size}] Checking ${label} (${sellerProducts.length} products)...`);
 
           const startedAt = Date.now();
-          const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, {
+          const resp = await fetchWithRetry(`${getPrelistingApiBase()}/api/products/sheet-duplicates`, withApiHeaders({
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ products: sellerProducts }),
             signal: AbortSignal.timeout(2700000),
-          });
+          }));
 
           if (!resp.ok) {
             const errBody = await resp.json().catch(() => ({}));
