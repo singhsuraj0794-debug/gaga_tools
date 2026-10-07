@@ -673,7 +673,17 @@ class CategoryMapper:
             # (three breadcrumb tokens, or the product name twice over).
             cross = best.split(" > ")[0] != (gajab_l1 or "")
             if cross:
-                strong = score >= 3 or title_ovl >= 2
+                # A cross-taxonomy answer must be well supported: three
+                # breadcrumb cues, OR the candidate leaf must be described
+                # entirely by the product noun (precision 1.0) with the title
+                # agreeing. Without the precision test a "Men's Sports Shoes"
+                # crumb latched onto "Sports & Fitness > Cycling > Brake Shoes"
+                # — the leaf 'brake shoes' only half-matches 'shoes'.
+                leaf_toks = _significant(best.split(" > ")[-1])
+                prec = len(last_toks & leaf_toks) / max(1, len(leaf_toks))
+                strong = score >= 3 or (
+                    bool(last_toks & best_toks) and title_ovl >= 2 and prec >= 1.0
+                )
             else:
                 strong = score >= 2 or (
                     score >= 1 and bool(last_toks & best_toks) and title_ovl >= 1
