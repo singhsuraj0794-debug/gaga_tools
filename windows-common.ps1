@@ -109,3 +109,8 @@ function Start-Bg {
 }
 
 Write-Host "[common] repo=$RepoDir python=$(Get-Python)"
+
+# The API spawns python-backed scripts. On Windows a bare "python3" resolves to
+# the Microsoft Store shim, which has none of our packages (it silently
+# returned empty results), so point it at the venv interpreter explicitly.
+$env:PYTHON_BIN = Get-Python

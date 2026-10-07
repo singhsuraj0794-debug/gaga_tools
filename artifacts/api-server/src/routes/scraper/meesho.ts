@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import crypto from "node:crypto";
 import { runLocalScraper, runLocalExtract, runLocalExtractPage, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
+import { pythonBin } from "../../lib/py";
 
 const execFileAsync = promisify(execFile);
 
@@ -65,7 +66,7 @@ async function callPython(action: string, url: string): Promise<any> {
   const timeout = 900000;
   const maxBuffer = action === "extract" ? 200 * 1024 * 1024 : 50 * 1024 * 1024;
 
-  const { stdout } = await execFileAsync("python3", [SCRAPER_SCRIPT, action, url], {
+  const { stdout } = await execFileAsync(pythonBin(), [SCRAPER_SCRIPT, action, url], {
     env,
     timeout,
     maxBuffer,

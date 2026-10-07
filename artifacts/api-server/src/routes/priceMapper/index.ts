@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runLocalSearch, hasLocalScraper } from "../../lib/localScraper.js";
+import { pythonBin } from "../../lib/py";
 
 const execFileAsync = promisify(execFile);
 
@@ -50,7 +51,7 @@ async function callScraper(productUrl: string): Promise<any> {
   const env: Record<string, string> = { ...process.env as Record<string, string> };
   if (process.env.SCRAPE_DO_TOKEN) env.SCRAPE_DO_TOKEN = process.env.SCRAPE_DO_TOKEN;
 
-  const { stdout } = await execFileAsync("python3", [SCRAPER_SCRIPT, "scrape", productUrl], {
+  const { stdout } = await execFileAsync(pythonBin(), [SCRAPER_SCRIPT, "scrape", productUrl], {
     env,
     timeout: 30000,
     maxBuffer: 10 * 1024 * 1024,
@@ -70,7 +71,7 @@ async function callSearch(title: string, imageUrl: string, gajabPrice: string = 
   try {
     const maxTitle = title.length > 400 ? title.slice(0, 400) : title;
     const input = `${maxTitle}|${imageUrl}|${gajabPrice}|${gajabUrl}`;
-    const { stdout } = await execFileAsync("python3", [SEARCHER_SCRIPT, "search", input], {
+    const { stdout } = await execFileAsync(pythonBin(), [SEARCHER_SCRIPT, "search", input], {
       env,
       timeout: 180000,
       maxBuffer: 10 * 1024 * 1024,

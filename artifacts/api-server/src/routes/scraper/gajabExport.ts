@@ -5,6 +5,7 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import { logger } from "../../lib/logger";
+import { pythonBin } from "../../lib/py";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,7 +69,7 @@ async function runEnricher(products: unknown[], extraArgs: string[] = []): Promi
   fs.writeFileSync(tmp, JSON.stringify({ products }), "utf-8");
   try {
     const { stdout } = await execFileAsync(
-      "python3",
+      pythonBin(),
       [PREPARE_SCRIPT, tmp, ...extraArgs],
       { timeout: 300000, maxBuffer: 64 * 1024 * 1024 },
     );

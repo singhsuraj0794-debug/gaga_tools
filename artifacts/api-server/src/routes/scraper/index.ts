@@ -15,6 +15,7 @@ import {
 } from "@workspace/api-zod";
 import type { EcommerceProduct } from "@workspace/api-zod";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
+import { pythonBin } from "../../lib/py";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,7 +101,7 @@ async function scrapeFlipkartProduct(url: string): Promise<FlipkartDetailedProdu
     if (process.env.SCRAPER_PROXY) env.SCRAPER_PROXY = process.env.SCRAPER_PROXY;
     if (process.env.SCRAPING_SERVICE_URL) env.SCRAPING_SERVICE_URL = process.env.SCRAPING_SERVICE_URL;
 
-    const { stdout } = await execFileAsync("python3", [SCRAPER_SCRIPT, url], {
+    const { stdout } = await execFileAsync(pythonBin(), [SCRAPER_SCRIPT, url], {
       env,
       timeout: 180000,
       maxBuffer: 10 * 1024 * 1024,

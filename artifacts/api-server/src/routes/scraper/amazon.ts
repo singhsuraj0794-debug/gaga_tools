@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
+import { pythonBin } from "../../lib/py";
 
 const execFileAsync = promisify(execFile);
 
@@ -109,7 +110,7 @@ async function scrapeAmazonProduct(url: string): Promise<AmazonDetailedProduct> 
     if (process.env.SCRAPER_PROXY) env.SCRAPER_PROXY = process.env.SCRAPER_PROXY;
     if (process.env.SCRAPING_SERVICE_URL) env.SCRAPING_SERVICE_URL = process.env.SCRAPING_SERVICE_URL;
 
-    const { stdout } = await execFileAsync("python3", [SCRAPER_SCRIPT, "scrape", url], {
+    const { stdout } = await execFileAsync(pythonBin(), [SCRAPER_SCRIPT, "scrape", url], {
       env,
       timeout: 180000,
       maxBuffer: 10 * 1024 * 1024,
@@ -212,7 +213,7 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
     if (process.env.SCRAPER_PROXY) env.SCRAPER_PROXY = process.env.SCRAPER_PROXY;
     if (process.env.SCRAPING_SERVICE_URL) env.SCRAPING_SERVICE_URL = process.env.SCRAPING_SERVICE_URL;
 
-    const { stdout } = await execFileAsync("python3", [SCRAPER_SCRIPT, "extract", targetUrl], {
+    const { stdout } = await execFileAsync(pythonBin(), [SCRAPER_SCRIPT, "extract", targetUrl], {
       env,
       timeout: 300000,
       maxBuffer: 10 * 1024 * 1024,

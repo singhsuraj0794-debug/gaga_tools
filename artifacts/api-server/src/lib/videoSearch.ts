@@ -3,6 +3,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { logger } from "./logger";
+import { pythonBin } from "./py";
 
 const execFileAsync = promisify(execFile);
 const QUERY_GENERATOR_SCRIPT = path.join(process.cwd(), "artifacts", "api-server", "dist", "_video_query_generator.py");
@@ -23,7 +24,7 @@ export async function generateVideoQueries(
 ): Promise<VideoQuery[]> {
   try {
     const input = imageUrl || "";
-    const { stdout } = await execFileAsync("python3", [
+    const { stdout } = await execFileAsync(pythonBin(), [
       QUERY_GENERATOR_SCRIPT,
       input,
       productName,

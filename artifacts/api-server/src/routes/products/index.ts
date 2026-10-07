@@ -9,6 +9,7 @@ import { logger } from "../../lib/logger";
 import { existsSync } from "node:fs";
 import { getSupabase } from "../../lib/supabase";
 import { tmpPath } from "../../lib/tmp";
+import { pythonBin } from "../../lib/py";
 
 const __filename = fileURLToPath(import.meta.url);
 const __parentDirname = path.dirname(__filename);
@@ -891,7 +892,7 @@ router.post("/products/image-duplicates", async (req, res): Promise<void> => {
     await writeFile(inputPath, JSON.stringify(productsWithImages));
     const args = [scriptPath, inputPath];
     if (threshold !== undefined) args.push(String(threshold));
-    const { stdout } = await execFileAsync("python3", args, {
+    const { stdout } = await execFileAsync(pythonBin(), args, {
       maxBuffer: 100 * 1024 * 1024,
       timeout: 600000,
     });
@@ -939,7 +940,7 @@ router.post("/products/verify-duplicates", async (req, res): Promise<void> => {
     const { writeFile, unlink } = await import("node:fs/promises");
     const inputPath = tmpPath(`verify_input_${Date.now()}.json`);
     await writeFile(inputPath, JSON.stringify(pairs));
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 900000,
     });
@@ -1109,7 +1110,7 @@ router.post("/products/hsn-suggest", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length }, "Running HSN suggestion (one-shot)");
 
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 600000,
     });
@@ -1161,7 +1162,7 @@ router.post("/products/category-validate", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length }, "Running category validation (one-shot)");
 
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 1800000,
     });
@@ -1274,7 +1275,7 @@ router.post("/products/clip-verify", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length, mode: "one-shot", useQwenVerify: useQwen }, "Running CLIP verification");
 
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 1800000,
     });
@@ -1363,7 +1364,7 @@ router.post("/products/correct-text", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length, useQwen: useQwen || false }, "Running text correction (one-shot)");
 
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 10 * 1024 * 1024,
       timeout: 600000,
     });
@@ -1405,7 +1406,7 @@ router.post("/products/image-gen", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length }, "Running image generation");
 
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 50 * 1024 * 1024,
       timeout: 300000,
     });
@@ -1444,7 +1445,7 @@ router.post("/products/extract-specs", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length }, "Running spec extraction");
 
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 50 * 1024 * 1024,
       timeout: 300000,
     });
@@ -1486,7 +1487,7 @@ router.post("/products/visual-verify", async (req, res): Promise<void> => {
     await writeFile(clipInput, JSON.stringify({ products }));
 
     req.log.info({ count: products.length }, "Running CLIP flagging (Stage 1)");
-    const { stdout: clipStdout } = await execFileAsync("python3", [clipScript, clipInput], {
+    const { stdout: clipStdout } = await execFileAsync(pythonBin(), [clipScript, clipInput], {
       maxBuffer: 50 * 1024 * 1024,
       timeout: 300000,
     });
@@ -1511,7 +1512,7 @@ router.post("/products/visual-verify", async (req, res): Promise<void> => {
       await writeFile(qwenInputPath, JSON.stringify({ products: qwenInput }));
 
       req.log.info({ count: flaggedProducts.length }, "Running Qwen correction (Stage 2)");
-      const { stdout: qwenStdout } = await execFileAsync("python3", [qwenScript, qwenInputPath], {
+      const { stdout: qwenStdout } = await execFileAsync(pythonBin(), [qwenScript, qwenInputPath], {
         maxBuffer: 50 * 1024 * 1024,
         timeout: 600000, // Qwen is slower
       });
@@ -1598,7 +1599,7 @@ router.post("/products/sheet-duplicates", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length }, "Running sheet duplicate detection");
 
-    const { stdout } = await execFileAsync("python3", args, {
+    const { stdout } = await execFileAsync(pythonBin(), args, {
       maxBuffer: 50 * 1024 * 1024,
       timeout: 3600000,
     });
@@ -1745,7 +1746,7 @@ router.post("/products/qwen-specs", async (req, res): Promise<void> => {
 
     req.log.info({ count: products.length }, "Running Qwen VLM spec extraction");
 
-    const { stdout } = await execFileAsync("python3", [scriptPath, inputPath], {
+    const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 50 * 1024 * 1024,
       timeout: 600000,
     });
