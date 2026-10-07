@@ -329,6 +329,10 @@ _L1_ALIASES: dict[str, str] = {
     "automotive": "Automobile Accessories",
     "auto & accessories": "Automobile Accessories",
     "books & media": "Toys & General Merchandise",
+    "kids accessories": "Kids & Baby",
+    "home furnishing": "Home & Kitchen",
+    "home decor": "Home & Kitchen",
+    "toys": "Toys & General Merchandise",
 }
 
 
