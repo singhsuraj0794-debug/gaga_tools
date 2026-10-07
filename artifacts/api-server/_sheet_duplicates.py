@@ -280,10 +280,25 @@ def _variant_family_key(p: dict):
     return None
 
 
+def _same_variant_family(a: dict, b: dict) -> bool:
+    """True when two rows are variants of the same parent (or a parent and its
+    own child). Same-family rows reuse the same photos by design, so they must
+    never be reported as duplicates of each other."""
+    fa, fb = _variant_family_key(a), _variant_family_key(b)
+    return fa is not None and fa == fb
+
+
 def _build_groups(products, find_fn, n, overlap_info):
     groups_map: Dict[int, List[int]] = defaultdict(list)
     for i in range(n):
         groups_map[find_fn(i)].append(i)
+    # Families that own more than one row are genuine variant sets — such rows
+    # must never be removed as duplicates.
+    fam_counts: Dict[str, int] = defaultdict(int)
+    for p in products:
+        k = _variant_family_key(p)
+        if k:
+            fam_counts[k] += 1
     out_groups = []
     all_remove_skus = []
     for root, members in groups_map.items():
@@ -302,6 +317,23 @@ def _build_groups(products, find_fn, n, overlap_info):
         keep_idx = members_sorted[0]
         remove_idxs = members_sorted[1:]
         keep_product = products[keep_idx]
+        # Never remove a same-parent variant of the kept row (they share images
+        # by design). The pair filter above prevents this in most cases; this
+        # also covers groups that got unioned through a third, unrelated row.
+        keep_fam = _variant_family_key(keep_product)
+        if keep_fam is not None:
+            remove_idxs = [
+                ri for ri in remove_idxs
+                if _variant_family_key(products[ri]) != keep_fam
+            ]
+        # Also protect any member that belongs to a variant set (its family owns
+        # >1 row) — removing it would delete the variant, not a duplicate.
+        remove_idxs = [
+            ri for ri in remove_idxs
+            if not (lambda k: k and fam_counts.get(k, 0) > 1)(_variant_family_key(products[ri]))
+        ]
+        if not remove_idxs:
+            continue
         best_overlap = {"matched": 0, "total_a": 0, "total_b": 0}
         for ri in remove_idxs:
             key = (min(keep_idx, ri), max(keep_idx, ri))
@@ -590,6 +622,17 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
                             break
                     if found:
                         candidate_pairs.add((min(idx_a, idx_b), max(idx_a, idx_b)))
+
+    # Same-parent variants legitimately share images — drop those pairs up front
+    # so they can never end up in the same duplicate group.
+    _before = len(candidate_pairs)
+    candidate_pairs = {
+        (a, b) for (a, b) in candidate_pairs
+        if not _same_variant_family(products[a], products[b])
+    }
+    if _before != len(candidate_pairs):
+        print(f"[DUP]   {_before - len(candidate_pairs)} same-parent-variant pairs skipped", file=sys.stderr)
+        sys.stderr.flush()
 
     # Cap candidates
     if len(candidate_pairs) > MAX_CANDIDATE_PAIRS:
