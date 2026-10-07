@@ -4,7 +4,11 @@
 . "$PSScriptRoot\windows-common.ps1"
 
 $patterns = @(
-    "dist\\index.mjs",
+    # 'index.mjs' is distinctive for the API bundle. A pattern like
+    # "dist\\index.mjs" would be a literal double-backslash in PowerShell and
+    # never match ".\dist\index.mjs", so the API process survived every
+    # restart and kept serving stale code.
+    "index.mjs",
     "local_scraper_server.py",
     "_clip_verify_server.py",
     "_analysis_server.py",
