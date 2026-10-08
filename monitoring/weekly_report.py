@@ -62,10 +62,12 @@ def _platform(metric: str) -> str:
     return "?"
 
 
-def _fetch(since: str) -> list[dict]:
+def _fetch(since: str, until: str | None = None) -> list[dict]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
     url = f"{SUPABASE_URL}/rest/v1/monitoring_runs?select=*&run_at=gte.{quote(since)}&page=eq.happy_flow&order=run_at.asc"
+    if until:
+        url += f"&run_at=lt.{quote(until)}"
     req = urllib.request.Request(url, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -130,21 +132,82 @@ def build_weekly(rows: list[dict]) -> dict:
     }
 
 
+def _compare(cur: dict, prev: dict) -> None:
+    """Add week-over-week deltas and the carried-over (unfixed) steps.
+
+    A step that was problematic in the PREVIOUS window and is still failing now
+    is "carried over" — it must be called out at the top of the new report so
+    last week's action items are visibly still open.
+    """
+    prev_by = {s["step"]: s for s in prev.get("steps", [])}
+    for s in cur.get("steps", []):
+        p = prev_by.get(s["step"])
+        s["prev_pass_rate"] = p["pass_rate"] if p else None
+        s["delta"] = (s["pass_rate"] - p["pass_rate"]) if p else None
+        s["prev_fail"] = p["fail"] if p else None
+
+    prev_red = {s["step"] for s in prev.get("problem_steps", [])}
+    cur_by = {s["step"]: s for s in cur.get("steps", [])}
+    cur_red = {s["step"] for s in cur.get("problem_steps", [])}
+
+    # Still failing (any fails) despite being flagged last week => NOT FIXED.
+    cur_failing = {s["step"] for s in cur.get("steps", []) if s["fail"] > 0}
+    carried = sorted(prev_red & cur_failing)
+    newly = sorted(cur_red - prev_red)
+    fixed = sorted(prev_red - cur_failing)
+
+    cur["carried_over"] = [cur_by[x] for x in carried if x in cur_by]
+    cur["new_problems"] = [cur_by[x] for x in newly if x in cur_by]
+    cur["fixed"] = [prev_by[x] for x in fixed if x in prev_by]
+    cur["had_prev_window"] = bool(prev.get("steps"))
+    cur["prev_window"] = prev
+
+
 def format_email(w: dict) -> str:
+    prev_total = w.get("prev_window", {}).get("total_fails")
+    total_txt = f"Total happy-flow failures: {w['total_fails']}"
+    if w.get("had_prev_window") and prev_total is not None:
+        total_txt += f"  (previous week: {prev_total})"
     lines = [
         "Gajab Synthetic Monitor — Weekly Happy-Flow Summary",
         "=" * 55,
         f"Generated: {w['generated_at']}",
         f"Window: last {w['days']} days",
-        f"Total happy-flow failures: {w['total_fails']}",
+        total_txt,
         "",
-        "PER-STEP PASS RATE",
-        "-" * 55,
     ]
+
+    # Headline: what was flagged last week and is STILL open.
+    if w.get("had_prev_window"):
+        lines.append("🚨 NOT FIXED SINCE LAST WEEK'S REPORT")
+        lines.append("-" * 55)
+        if w.get("carried_over"):
+            for s in w["carried_over"]:
+                prev = f"{s['prev_pass_rate']}%" if s.get("prev_pass_rate") is not None else "?"
+                lines.append(
+                    f"🔴 {s['label']}: still {s['pass_rate']}% pass (was {prev} last week), "
+                    f"{s['fail']} fail this week"
+                )
+                if s.get("last_error"):
+                    lines.append(f"   Last error: {s['last_error']}")
+            lines.append("   -> these were reported last week and are STILL failing.")
+        else:
+            lines.append("None — every step flagged last week is now passing. 🎉")
+        if w.get("fixed"):
+            lines.append("")
+            lines.append("✅ FIXED SINCE LAST WEEK: " + ", ".join(s["label"] for s in w["fixed"]))
+        if w.get("new_problems"):
+            lines.append("🆕 NEW THIS WEEK: " + ", ".join(s["label"] for s in w["new_problems"]))
+        lines.append("")
+
+    lines.append("PER-STEP PASS RATE  (delta vs last week)")
+    lines.append("-" * 55)
     for s in w["steps"]:
         icon = {"green": "✅", "yellow": "🟡", "red": "🔴"}.get(s["health"], "⚪")
         plats = "/".join(s["platforms"])
-        lines.append(f"{icon} {s['label']} [{plats}]: {s['pass_rate']}% pass "
+        d = s.get("delta")
+        dtxt = "" if d is None else (f"  Δ{d:+d}pt" if d else "  Δ0pt")
+        lines.append(f"{icon} {s['label']} [{plats}]: {s['pass_rate']}% pass{dtxt} "
                      f"({s['pass']} pass / {s['fail']} fail / {s['degraded']} degraded)")
 
     lines.append("")
@@ -194,11 +257,29 @@ def _groq_prompt(w: dict) -> str:
     lines.append("Most problematic steps:")
     for s in w["problem_steps"]:
         lines.append(f"- {s['label']}: {s['pass_rate']}% pass — {s['last_error'][:120]}")
+    if w.get("had_prev_window"):
+        lines.append("")
+        lines.append("Steps that were flagged LAST week and are STILL failing (call these out explicitly as unfixed):")
+        if w.get("carried_over"):
+            for s in w["carried_over"]:
+                prev = f"{s['prev_pass_rate']}%" if s.get("prev_pass_rate") is not None else "?"
+                lines.append(f"- {s['label']}: {s['pass_rate']}% now vs {prev} last week ({s['fail']} fails) — NOT FIXED")
+        else:
+            lines.append("- none")
     return "\n".join(lines)
 
 
 def format_slack(w: dict) -> str:
     lines = [f"📊 *Weekly Happy-Flow Summary — {w['days']} days*", ""]
+    if w.get("had_prev_window") and w.get("carried_over"):
+        lines.append("🚨 *NOT FIXED since last week's report:*")
+        for s in w["carried_over"]:
+            prev = f"{s['prev_pass_rate']}%" if s.get("prev_pass_rate") is not None else "?"
+            lines.append(f"   • *{s['label']}* — {s['pass_rate']}% pass (was {prev}), {s['fail']} fail")
+        lines.append("")
+    elif w.get("had_prev_window"):
+        lines.append("✅ Nothing carried over — last week's issues are cleared.")
+        lines.append("")
     for s in w["steps"]:
         icon = {"green": "✅", "yellow": "🟡", "red": "🔴"}.get(s["health"], "⚪")
         lines.append(f"{icon} {s['label']}: {s['pass_rate']}% ({s['fail']}F)")
@@ -211,13 +292,19 @@ def format_slack(w: dict) -> str:
 
 
 def main():
-    since = (datetime.now(timezone.utc) - timedelta(days=DAYS)).isoformat()
-    rows = _fetch(since)
+    now = datetime.now(timezone.utc)
+    cur_since = (now - timedelta(days=DAYS)).isoformat()
+    prev_since = (now - timedelta(days=2 * DAYS)).isoformat()
+    rows = _fetch(cur_since)
     if not rows:
         print(f"[WEEKLY] No happy-flow data in last {DAYS} days")
         return 0
+    # Previous window (the 7 days before this one) for the week-over-week
+    # comparison + the carried-over "not fixed" highlighting.
+    prev_rows = _fetch(prev_since, cur_since)
 
     w = build_weekly(rows)
+    _compare(w, build_weekly(prev_rows))
     email_body = format_email(w)
 
     # Natural-language executive summary via Groq
@@ -230,6 +317,9 @@ def main():
     print("=" * 60)
 
     subject = f"[GAJAB] Weekly Happy-Flow Summary — {w['days']} days"
+    n_unfixed = len(w.get("carried_over", []))
+    if n_unfixed:
+        subject += f" — {n_unfixed} unfixed from last week"
     send_email(subject, email_body)
 
     if SLACK_WEBHOOK_URL:

@@ -7,13 +7,18 @@ on:
 
 jobs:
   native-android:
-    runs-on: [self-hosted, windows-india]
+    # Interim: run on the Mac runner (mac-india), which has the gajab_pixel7
+    # AVD + logged-in app. It was retargeted to [self-hosted, windows-india] as
+    # part of the Windows migration, but that runner is not registered yet and
+    # the Windows emulator still needs a Hyper-V reboot + the app APK, so the job
+    # sat queued forever and the Android check stopped running. Switch back to
+    # windows-india once the Windows emulator is verified.
+    runs-on: [self-hosted, mac-india]
     steps:
       - uses: actions/checkout@v5
 
       - name: Start emulator + Appium and run native happy flow
-        shell: pwsh
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ./start-native-monitor.ps1
+        run: bash start-native-monitor.sh
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
