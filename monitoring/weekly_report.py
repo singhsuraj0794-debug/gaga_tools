@@ -65,16 +65,32 @@ def _platform(metric: str) -> str:
 def _fetch(since: str, until: str | None = None) -> list[dict]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
-    url = f"{SUPABASE_URL}/rest/v1/monitoring_runs?select=*&run_at=gte.{quote(since)}&page=eq.happy_flow&order=run_at.asc"
+    base = (f"{SUPABASE_URL}/rest/v1/monitoring_runs?select=*&run_at=gte.{quote(since)}"
+            f"&page=eq.happy_flow&order=run_at.asc")
     if until:
-        url += f"&run_at=lt.{quote(until)}"
-    req = urllib.request.Request(url, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        print(f"[WEEKLY] Query error: {e}")
-        return []
+        base += f"&run_at=lt.{quote(until)}"
+    # PostgREST caps a response at 1000 rows by default — paginate so a busy
+    # week is not silently truncated (which made the previous-week window look
+    # empty / under-counted).
+    out: list[dict] = []
+    offset = 0
+    page = 1000
+    while True:
+        url = f"{base}&limit={page}&offset={offset}"
+        req = urllib.request.Request(url, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                chunk = json.loads(resp.read())
+        except Exception as e:
+            print(f"[WEEKLY] Query error: {e}")
+            break
+        out.extend(chunk)
+        if len(chunk) < page:
+            break
+        offset += page
+        if offset > 500000:  # safety
+            break
+    return out
 
 
 def build_weekly(rows: list[dict]) -> dict:
