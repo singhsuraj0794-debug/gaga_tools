@@ -953,8 +953,69 @@ def _pick_random_product(page) -> str | None:
             log(f"  category {cat_url} failed: {str(e)[:80]}")
     return None
 
+def _set_lowest_offer(page) -> dict:
+    """Drive the bargain slider to its ABSOLUTE minimum (red zone).
+
+    The app only issues a counter-offer when the offer is very low, so we must
+    reliably pick the lowest value. The current build may expose this as an
+    <input type="range"> OR as tappable preset price chips / price markers — the
+    old second-bargain flow only handled the range input (and via a React
+    onChange that did not always move the controlled value), so it frequently
+    submitted a non-low offer and never got a counter-offer.
+
+    Returns {found, via, target}.
+    """
+    for _ in range(5):
+        res = page.evaluate("""() => {
+            const ranges = document.querySelectorAll('input[type="range"]');
+            for (const r of ranges) {
+                const box = r.getBoundingClientRect();
+                if (box.width > 20 && parseFloat(r.max) > 1) {
+                    const min = parseFloat(r.min) || 0;
+                    // React controlled inputs ignore a plain .value assignment;
+                    // set through the native setter + input event AND the React
+                    // onChange prop so the app state actually updates.
+                    try {
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        setter.call(r, String(min));
+                        r.dispatchEvent(new Event('input', {bubbles: true}));
+                        r.dispatchEvent(new Event('change', {bubbles: true}));
+                    } catch (e) {}
+                    const key = Object.keys(r).find(k => k.startsWith('__reactProps$'));
+                    if (key && r[key] && r[key].onChange) {
+                        try { r[key].onChange({target: {value: min}}); } catch (e) {}
+                    }
+                    return {found: true, via: 'range', min: min, max: r.max, target: min};
+                }
+            }
+            // Preset chips / price markers — pick the LOWEST price.
+            const nodes = document.querySelectorAll(
+                '[data-testid*="preset"], [class*="preset"], [class*="chip"], [class*="price-marker"], [class*="PriceMarker"]');
+            let best = null, bestVal = Infinity;
+            for (const el of nodes) {
+                const b = el.getBoundingClientRect();
+                if (b.width < 10 || b.height < 10) continue;
+                const m = (el.textContent || '').replace(/[^0-9.]/g, '');
+                if (!m) continue;
+                const v = parseFloat(m);
+                if (v < bestVal) { bestVal = v; best = el; }
+            }
+            if (best) {
+                best.scrollIntoView({behavior: 'instant', block: 'center'});
+                best.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+                return {found: true, via: 'lowest preset chip', target: bestVal};
+            }
+            return {found: false};
+        }""")
+        if res.get("found"):
+            return res
+        time.sleep(1)
+    return {"found": False}
+
+
 def _do_second_bargain(page, results: list):
-    """Second bargain flow: pick random product, offer 70% lower price, accept counter-offer."""
+    """Second bargain flow: pick a random product, submit the LOWEST offer
+    (the app only counter-offers on a very low offer), then accept the counter-offer."""
     t0 = time.time()
     sub_steps = []
 
@@ -1006,36 +1067,30 @@ def _do_second_bargain(page, results: list):
     time.sleep(3)
     sub_steps.append({"check": "start_bargaining", "status": "pass", "detail": "Bargain started"})
 
-    log("Bargain 2 — Sliding to extreme lowest (red zone) to trigger counter-offer")
-    slider_set = {"found": False}
-    for _ in range(5):
-        slider_set = page.evaluate("""() => {
-            const ranges = document.querySelectorAll('input[type="range"]');
-            for (const r of ranges) {
-                if (r.getBoundingClientRect().width > 50 && parseFloat(r.max) > 1) {
-                    const min = parseFloat(r.min);
-                    const target = min + 0.01;
-                    const key = Object.keys(r).find(k => k.startsWith('__reactProps$'));
-                    if (key) { try { r[key].onChange({target: {value: target}}); } catch(e) {} }
-                    return {found: true, min: r.min, max: r.max, target: target};
-                }
-            }
-            return {found: false};
-        }""")
-        if slider_set.get("found"):
-            break
-        time.sleep(1)
-    sub_steps.append({"check": "low_offer_set", "status": "pass" if slider_set.get("found") else "degraded", "detail": f"Slider set to minimum {slider_set.get('target', 'N/A')} (red zone)" if slider_set.get("found") else "Slider not found"})
+    log("Bargain 2 — Setting the LOWEST offer (red zone) to trigger a counter-offer")
+    slider_set = _set_lowest_offer(page)
+    sub_steps.append({"check": "low_offer_set", "status": "pass" if slider_set.get("found") else "degraded",
+                      "detail": (f"Lowest offer set via {slider_set.get('via')} -> {slider_set.get('target', 'N/A')} (red zone)"
+                                 if slider_set.get("found") else "No slider or preset chip found")})
 
     time.sleep(0.5)
-    for sel in ["button:has-text('Offer Your Price')", "button:has-text('Submit Offer')"]:
+    offered = False
+    for sel in ["button:has-text('Offer Your Price')", "button:has-text('Submit Offer')", "button:has-text('Make Offer')"]:
         loc = page.locator(sel)
-        if loc.count() > 0 and loc.first.is_visible(timeout=2000):
-            loc.first.click(force=True)
-            log("Offer clicked")
-            break
-    else:
-        page.evaluate("""() => {
+        try:
+            if loc.count() > 0 and loc.first.is_visible(timeout=2000):
+                box = loc.first.bounding_box()
+                if box:
+                    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                else:
+                    loc.first.click(force=True)
+                offered = True
+                log(f"Offer clicked: {sel}")
+                break
+        except Exception:
+            continue
+    if not offered:
+        offered = bool(page.evaluate("""() => {
             const needles = ['offer your price', 'submit offer', 'make an offer', 'make offer', 'send offer'];
             for (const el of document.querySelectorAll('button, a, [role="button"], div, span')) {
                 const t = (el.textContent || '').trim().toLowerCase();
@@ -1043,15 +1098,17 @@ def _do_second_bargain(page, results: list):
                 if (!needles.some(n => t.includes(n))) continue;
                 el.removeAttribute('disabled');
                 el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                return;
+                return true;
             }
-        }""")
-    sub_steps.append({"check": "offer_submitted", "status": "pass", "detail": "Low offer submitted"})
+            return false;
+        }"""))
+    sub_steps.append({"check": "offer_submitted", "status": "pass" if offered else "degraded",
+                      "detail": "Low offer submitted" if offered else "Offer button not found"})
     time.sleep(4)
 
     log("Bargain 2 — Looking for counter-offer (Bargain More / Accept Offer)")
     accepted = False
-    for _ in range(15):  # Wait up to 30s
+    for _ in range(22):  # wait up to ~44s for the seller counter-offer
         # Check for counter-offer buttons
         accept_btn = page.locator("button:has-text('Accept Offer'), button:has-text('Accept the offer'), button:has-text('Accept')").first
         bargain_more = page.locator("button:has-text('Bargain More'), button:has-text('Bargain more')").first
@@ -1072,7 +1129,7 @@ def _do_second_bargain(page, results: list):
                 time.sleep(3)
                 break
         time.sleep(2)
-    sub_steps.append({"check": "counter_offer_accepted", "status": "pass" if accepted else "degraded", "detail": "Counter-offer accepted" if accepted else "No counter-offer appeared within 30s"})
+    sub_steps.append({"check": "counter_offer_accepted", "status": "pass" if accepted else "degraded", "detail": "Counter-offer accepted" if accepted else "No counter-offer appeared within ~44s"})
 
     ss = _capture_screenshot(page, f"{_STEP_PREFIX}bargain2_complete")
     duration = int((time.time() - t0) * 1000)
