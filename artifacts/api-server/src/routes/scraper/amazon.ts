@@ -156,6 +156,123 @@ async function scrapeAmazonProduct(url: string): Promise<AmazonDetailedProduct> 
   }
 }
 
+/** Walk an Amazon catalogue in bounded page chunks via the tunnel. Each chunk
+ *  is ~45s (15 pages), so it fits the tunnel's 300s limit; the whole catalogue
+ *  is aggregated across chunks. Shared by the sync route and the job. */
+async function walkAmazonCatalogue(
+  targetUrl: string,
+  onProgress: (total: number, pages: number) => void = () => {},
+): Promise<{ storeName: string; products: any[]; error: string }> {
+  const tunnel = (process.env.SCRAPER_TUNNEL_URL || "https://headphone-shudder-lavender.ngrok-free.dev").replace(/\/+$/, "");
+  const CHUNK_PAGES = 15;
+  const MAX_TOTAL_PAGES = 400;
+  const all: any[] = [];
+  const seen = new Set<string>();
+  let storeName = "";
+  let nextPage: number | null = 1;
+  let lastErr = "";
+  let guard = 0;
+  while (tunnel && nextPage && nextPage <= MAX_TOTAL_PAGES && guard++ < 60) {
+    try {
+      const r = await fetch(`${tunnel}/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
+        body: JSON.stringify({ url: targetUrl, page: nextPage, pages: CHUNK_PAGES }),
+        signal: AbortSignal.timeout(300000),
+      });
+      if (!r.ok) { lastErr = `tunnel HTTP ${r.status}`; break; }
+      const d: any = await r.json();
+      storeName = d.storeName || d.store_name || storeName;
+      const prods: any[] = d.products || [];
+      let added = 0;
+      for (const p of prods) {
+        if (p?.url && !seen.has(p.url)) { seen.add(p.url); all.push(p); added++; }
+      }
+      onProgress(all.length, guard);
+      if (prods.length === 0 && d.error) { lastErr = d.error; break; }
+      if (!d.has_more || !d.next_page) break;
+      if (added === 0) break;            // no progress — stop rather than loop
+      nextPage = Number(d.next_page);
+    } catch (e: any) {
+      lastErr = e.message;
+      break;
+    }
+  }
+  return { storeName, products: all, error: all.length ? "" : (lastErr || "No products found") };
+}
+
+// Amazon extract as a background job: the walk makes several ~45s tunnel calls,
+// and a single HTTP request past ~100s is cut off by the host (502). The client
+// starts a job and polls.
+type AmazonExtractJob = {
+  status: "running" | "completed" | "failed";
+  startedAt: number;
+  total: number;
+  pages: number;
+  storeName: string;
+  products: any[];
+  error?: string;
+};
+const amazonExtractJobs = new Map<string, AmazonExtractJob>();
+const AMAZON_EXTRACT_JOB_TTL_MS = 30 * 60 * 1000;
+
+function _normalizeAmazonStoreUrl(url: string): string {
+  let u = url.trim();
+  if (!u.startsWith("http")) u = `https://www.${u}`;
+  return u;
+}
+
+router.post("/extract/job", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { url } = req.body as { url?: string };
+    if (!url || typeof url !== "string") {
+      res.status(400).json({ error: "URL required" });
+      return;
+    }
+    const targetUrl = _normalizeAmazonStoreUrl(url);
+    const jobId = `ax-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const job: AmazonExtractJob = {
+      status: "running", startedAt: Date.now(), total: 0, pages: 0, storeName: "", products: [],
+    };
+    amazonExtractJobs.set(jobId, job);
+    for (const [k, v] of amazonExtractJobs) {
+      if (Date.now() - v.startedAt > AMAZON_EXTRACT_JOB_TTL_MS) amazonExtractJobs.delete(k);
+    }
+    logger.info({ jobId, url: targetUrl }, "Amazon extract job started");
+    void walkAmazonCatalogue(targetUrl, (total, pages) => { job.total = total; job.pages = pages; })
+      .then((r) => {
+        job.storeName = r.storeName;
+        job.products = r.products;
+        job.total = r.products.length;
+        job.status = r.products.length ? "completed" : "failed";
+        if (!r.products.length) job.error = r.error || "No products found";
+        logger.info({ jobId, count: r.products.length }, "Amazon extract job done");
+      })
+      .catch((e: any) => { job.status = "failed"; job.error = e.message; });
+    res.json({ jobId });
+  } catch (err: any) {
+    logger.error({ err }, "Amazon extract job start failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/extract/job/:jobId", (req: Request, res: Response): void => {
+  const job = amazonExtractJobs.get(String(req.params.jobId));
+  if (!job) {
+    res.status(404).json({ error: "job not found" });
+    return;
+  }
+  res.json({
+    status: job.status,
+    total: job.total,
+    pages: job.pages,
+    storeName: job.storeName,
+    products: job.status === "completed" ? job.products : [],
+    error: job.error || "",
+    elapsedMs: Date.now() - job.startedAt,
+  });
+});
+
 router.post("/extract", async (req: Request, res: Response): Promise<void> => {
   try {
     const { url } = req.body;
@@ -179,53 +296,13 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
     // catalogue in 30-60s). Extracting on this host is unreliable: headless
     // Chromium exceeds the proxy timeout (~100s) and the memory limit, which is
     // what produced short catalogues and 502/503s.
-    const tunnel = (process.env.SCRAPER_TUNNEL_URL || "https://headphone-shudder-lavender.ngrok-free.dev").replace(/\/+$/, "");
-    if (tunnel) {
-      // Walk the catalogue in bounded page chunks. A full merchant catalogue can
-      // run to hundreds of pages; one request exceeds the tunnel's ~300s limit
-      // (ngrok 503), which used to fall through to a Render scrape that cannot
-      // work (no residential IP / CDP Chrome) and surfaced as
-      // "Command failed: python3 .../_amazon_scraper.py extract ...".
-      const CHUNK_PAGES = 15;      // ~45s per chunk, well under 300s
-      const MAX_TOTAL_PAGES = 400;
-      const all: any[] = [];
-      const seen = new Set<string>();
-      let storeName = "";
-      let nextPage: number | null = 1;
-      let lastErr = "";
-      let guard = 0;
-      while (nextPage && nextPage <= MAX_TOTAL_PAGES && guard++ < 60) {
-        try {
-          const r = await fetch(`${tunnel}/extract`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
-            body: JSON.stringify({ url: targetUrl, page: nextPage, pages: CHUNK_PAGES }),
-            signal: AbortSignal.timeout(300000),
-          });
-          if (!r.ok) { lastErr = `tunnel HTTP ${r.status}`; break; }
-          const d: any = await r.json();
-          storeName = d.storeName || d.store_name || storeName;
-          const prods: any[] = d.products || [];
-          let added = 0;
-          for (const p of prods) {
-            if (p?.url && !seen.has(p.url)) { seen.add(p.url); all.push(p); added++; }
-          }
-          if (prods.length === 0 && d.error) { lastErr = d.error; break; }
-          if (!d.has_more || !d.next_page) break;
-          if (added === 0) break;            // no progress — stop rather than loop
-          nextPage = Number(d.next_page);
-        } catch (e: any) {
-          lastErr = e.message;
-          break;
-        }
-      }
-      if (all.length > 0) {
-        logger.info({ count: all.length, pages: guard, via: "tunnel" }, "Amazon extract via tunnel (chunked)");
-        res.json({ storeName, products: all, total: all.length, error: "" });
-        return;
-      }
-      logger.warn({ err: lastErr }, "Tunnel chunked extract yielded nothing — falling back");
+    const agg = await walkAmazonCatalogue(targetUrl);
+    if (agg.products.length > 0) {
+      logger.info({ count: agg.products.length, via: "tunnel" }, "Amazon extract via tunnel (chunked)");
+      res.json({ storeName: agg.storeName, products: agg.products, total: agg.products.length, error: "" });
+      return;
     }
+    logger.warn({ err: agg.error }, "Tunnel chunked extract yielded nothing — falling back");
 
     const env: Record<string, string> = { ...process.env as Record<string, string> };
     if (process.env.SCRAPER_PROXY) env.SCRAPER_PROXY = process.env.SCRAPER_PROXY;

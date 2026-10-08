@@ -79,6 +79,7 @@ export default function AmazonScraper() {
   const [storeUrl, setStoreUrl] = useState("");
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractError, setExtractError] = useState("");
+  const [extractProgress, setExtractProgress] = useState("");
   const [storeName, setStoreName] = useState("");
   const [extractedProducts, setExtractedProducts] = useState<AmazonDetailedProduct[]>([]);
   const [scrapedProducts, setScrapedProducts] = useState<AmazonDetailedProduct[]>([]);
@@ -210,18 +211,37 @@ export default function AmazonScraper() {
     setScrapedProducts([]);
     setSearchQuery("");
 
+    setExtractProgress("");
     try {
-      const response = await fetch(`${API_BASE}/api/scraper/amazon/extract`, {
+      // Extraction runs as a BACKGROUND JOB on the API: a full catalogue takes
+      // minutes and a single request past ~100s is cut off by the host. Start
+      // the job, then poll for progress and products.
+      const startRes = await fetch(`${API_BASE}/api/scraper/amazon/extract/job`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: storeUrl.trim() }),
       });
-      const data = await response.json();
-      if (!response.ok) {
-        setExtractError(data.error || "Failed to extract products");
+      const startData = await startRes.json();
+      if (!startRes.ok || !startData.jobId) {
+        setExtractError(startData.error || "Failed to start extraction");
         setIsExtracting(false);
         return;
       }
+      const jobId = startData.jobId;
+      let data: any = null;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const pr = await fetch(`${API_BASE}/api/scraper/amazon/extract/job/${jobId}`);
+        const j = await pr.json();
+        if (j.status === "completed") { data = j; break; }
+        if (j.status === "failed") {
+          setExtractError(j.error || "Extraction failed");
+          setIsExtracting(false);
+          return;
+        }
+        setExtractProgress(`${j.total || 0} products found… (${Math.round((j.elapsedMs || 0) / 1000)}s)`);
+      }
+      setExtractProgress("");
       const basicProducts: AmazonDetailedProduct[] = (data.products || []).map((p: any) => ({
         id: extractProductId(p.url),
         title: p.title || "",
@@ -467,6 +487,13 @@ export default function AmazonScraper() {
               <div className="flex items-center gap-2 p-4 bg-amber-100 text-amber-800 rounded-lg">
                 <Store className="w-5 h-5 shrink-0" />
                 <span>Store: <strong>{storeName}</strong> &mdash; {extractedProducts.length} products found</span>
+              </div>
+            )}
+
+            {isExtracting && extractProgress && (
+              <div className="flex items-center gap-2 p-4 bg-slate-100 text-slate-700 rounded-lg">
+                <div className="w-4 h-4 animate-spin rounded-full border-2 border-slate-500 border-t-transparent shrink-0" />
+                <span>Extracting… {extractProgress}</span>
               </div>
             )}
 
