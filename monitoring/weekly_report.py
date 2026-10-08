@@ -150,11 +150,15 @@ def _compare(cur: dict, prev: dict) -> None:
     cur_by = {s["step"]: s for s in cur.get("steps", [])}
     cur_red = {s["step"] for s in cur.get("problem_steps", [])}
 
-    # Still failing (any fails) despite being flagged last week => NOT FIXED.
-    cur_failing = {s["step"] for s in cur.get("steps", []) if s["fail"] > 0}
-    carried = sorted(prev_red & cur_failing)
+    # "Still open" = not green now — i.e. red OR yellow (fails **or**
+    # degradations). A step flagged last week that is now merely degraded is
+    # STILL not fixed; counting only `fail > 0` wrongly labelled the three
+    # consistently-degraded steps (Bargain 0%, 2nd Bargain 17%, Checkout 38%)
+    # as "FIXED".
+    cur_bad = {s["step"] for s in cur.get("steps", []) if s.get("health") != "green"}
+    carried = sorted(prev_red & cur_bad)
     newly = sorted(cur_red - prev_red)
-    fixed = sorted(prev_red - cur_failing)
+    fixed = sorted(prev_red - cur_bad)
 
     cur["carried_over"] = [cur_by[x] for x in carried if x in cur_by]
     cur["new_problems"] = [cur_by[x] for x in newly if x in cur_by]
