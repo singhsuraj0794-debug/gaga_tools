@@ -9,6 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
+import os from "node:os";
+import fs from "node:fs";
 import {
   SearchEcommerceProductsBody,
   ExportProductsToExcelBody,
@@ -32,8 +34,11 @@ function _findUrlColumn(rows: any[][]): number {
   let bestScore = 0;
   const nonEmpty = rows.filter(r => r.length > 0);
   if (nonEmpty.length === 0) return -1;
-  const minCols = Math.min(...nonEmpty.map(r => r.length));
-  if (minCols <= 0) return -1;
+  // NOT Math.min(...arr): spreading a 150k-element array blows the call stack
+  // ("Maximum call stack size exceeded") on large sheets.
+  let minCols = Infinity;
+  for (const r of nonEmpty) if (r.length < minCols) minCols = r.length;
+  if (!Number.isFinite(minCols) || minCols <= 0) return -1;
   for (let col = 0; col < minCols; col++) {
     let score = 0;
     for (const row of rows) {
@@ -50,8 +55,33 @@ function _findUrlColumn(rows: any[][]): number {
   return bestIdx;
 }
 
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+/** Read a worksheet into a row-major array WITHOUT sheet_to_json: that helper
+ *  spreads huge rows and overflows the stack on large sheets. */
+function _sheetToRows(worksheet: xlsx.WorkSheet): any[][] {
+  const ref = worksheet["!ref"];
+  if (!ref) return [];
+  const range = xlsx.utils.decode_range(ref);
+  const rows: any[][] = [];
+  for (let R = range.s.r; R <= range.e.r; R++) {
+    const row: any[] = [];
+    for (let C = range.s.c; C <= range.e.c; C++) {
+      const cell = worksheet[xlsx.utils.encode_cell({ r: R, c: C })];
+      row.push(cell ? cell.v : undefined);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+// Disk storage, not memory: a large xlsx buffered in RAM on a small Render
+// instance spiked memory and dropped the connection (the browser reported
+// "Failed to fetch"). Cap the size and clean up the temp file afterwards.
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+  filename: (_req, file, cb) =>
+    cb(null, `gajab-upload-${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.originalname) || ".xlsx"}`),
+});
+const upload = multer({ storage, limits: { fileSize: 200 * 1024 * 1024 } });
 
 interface FlipkartDetailedProduct {
   id: string;
@@ -266,20 +296,32 @@ router.post("/export", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-router.post("/flipkart/upload", upload.single("file"), async (req: Request, res: Response): Promise<void> => {
+router.post("/flipkart/upload", (req: Request, res: Response, next) => {
+  upload.single("file")(req, res, (err: any) => {
+    if (err) {
+      const msg = err?.code === "LIMIT_FILE_SIZE"
+        ? "file too large (max 200 MB)"
+        : (err?.message || "upload error");
+      logger.warn({ err: msg }, "Flipkart upload rejected");
+      res.status(413).json({ error: `Upload failed: ${msg}` });
+      return;
+    }
+    next();
+  });
+}, async (req: Request, res: Response): Promise<void> => {
+  const tmpPath = req.file?.path;
   try {
     if (!req.file) {
       res.status(400).json({ error: "No file uploaded" });
       return;
     }
 
-    // Read Excel file from buffer
-    const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+    // Read from disk (multer diskStorage) and scan cells manually — no
+    // sheet_to_json / big spreads, so large sheets no longer overflow.
+    const workbook = xlsx.readFile(req.file.path);
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
-
-    // Parse as array of arrays to handle any column structure
-    const rows: any[][] = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
+    const rows: any[][] = _sheetToRows(worksheet);
 
     // Collect all cell values that look like URLs
     const allCells: string[] = [];
@@ -325,6 +367,10 @@ router.post("/flipkart/upload", upload.single("file"), async (req: Request, res:
   } catch (err: any) {
     logger.error({ err }, "Failed to read Excel file");
     res.status(500).json({ error: "Failed to read Excel file: " + err.message });
+  } finally {
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    }
   }
 });
 

@@ -18,6 +18,28 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { Link } from "wouter";
+
+/**
+ * fetch() with a small retry for transient network failures. The browser throws
+ * "TypeError: Failed to fetch" when the connection to the API drops (Render
+ * cold start / restart / a dropped keep-alive) — retrying rides that out
+ * instead of failing the upload or a whole scrape batch.
+ */
+async function fetchRetry(input: RequestInfo, init: RequestInit = {}, retries = 2): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(input, init);
+    } catch (e: any) {
+      lastErr = e;
+      const transient =
+        e?.name === "TypeError" || /failed to fetch|networkerror|load failed/i.test(String(e?.message));
+      if (!transient || attempt === retries) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
 import { API_BASE } from "@/lib/api";
 import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
 import { exportGajabWorkbook } from "@/lib/gajabExport";
@@ -156,7 +178,7 @@ export default function FlipkartScraper() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch(`${API_BASE}/api/scraper/flipkart/upload`, {
+      const response = await fetchRetry(`${API_BASE}/api/scraper/flipkart/upload`, {
         method: "POST",
         body: formData,
       });
@@ -245,7 +267,7 @@ export default function FlipkartScraper() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 300000);
-        const response = await fetch(`${API_BASE}/api/scraper/flipkart/scrape`, {
+        const response = await fetchRetry(`${API_BASE}/api/scraper/flipkart/scrape`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ urls: batchUrls }),
