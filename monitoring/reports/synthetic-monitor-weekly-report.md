@@ -3,7 +3,7 @@
 **Period:** 2026-07-26 → 2026-10-08  
 **Source:** Supabase `monitoring_runs`  
 **Rows analysed:** 63,540 checks across 12 ISO weeks  
-**Generated:** 08 Oct 2026 17:23 UTC
+**Generated:** 08 Oct 2026 18:04 UTC
 
 ---
 
@@ -29,9 +29,9 @@
 | 2026-W35 | 4,216 | 3,132 | 264 | 820 | **74.3%** |
 | 2026-W36 | 4,352 | 3,100 | 309 | 943 | **71.2%** |
 | 2026-W37 | 3,719 | 2,682 | 238 | 799 | **72.1%** |
-| 2026-W38 | 3,796 | 2,728 | 217 | 851 | **71.9%** |
-| 2026-W39 | 5,066 | 3,774 | 747 | 545 | **74.5%** |
-| 2026-W40 | 3,009 | 2,336 | 412 | 261 | **77.6%** |
+| 2026-W38 | 3,796 | 2,800 | 182 | 814 | **73.8%** |
+| 2026-W39 | 5,066 | 4,002 | 538 | 526 | **79.0%** |
+| 2026-W40 | 3,009 | 2,426 | 322 | 261 | **80.6%** |
 | 2026-W41 | 1,608 | 1,314 | 173 | 121 | **81.7%** |
 
 ---
@@ -40,7 +40,7 @@
 
 | Family | W30 | W31 | W32 | W33 | W34 | W35 | W36 | W37 | W38 | W39 | W40 | W41 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| **happy_flow** | 68.3% | 74.7% | 79.4% | 83.3% | 87.4% | 84.0% | 81.5% | 84.5% | 83.6% | 82.6% | 87.6% | 97.8% |
+| **happy_flow** | 68.3% | 74.7% | 79.4% | 83.3% | 87.4% | 84.0% | 81.5% | 84.5% | 89.8% | 96.9% | 96.7% | 97.8% |
 | **feature** | 58.8% | 55.5% | 49.4% | 50.9% | 74.0% | 74.1% | 74.3% | 73.5% | 75.0% | 92.1% | 98.7% | 100.0% |
 | **lighthouse** | 6.1% | 44.6% | 48.2% | 54.1% | 71.1% | 51.7% | 36.6% | 36.3% | 48.2% | 38.6% | 46.6% | 44.0% |
 | **api** | 76.5% | 77.8% | 75.9% | 86.1% | 97.0% | 92.8% | 98.8% | 97.4% | 98.6% | 98.1% | 95.8% | 96.5% |
@@ -75,7 +75,7 @@
 | API response (ms) | 717.6 | 759.6 | +5.9% | ⚠️ worse |
 | Server response (ms) | 1055.4 | 977.5 | -7.4% | ✅ improved |
 | happy-flow step (ms) | 9695 | 12230.7 | +26.2% | ⚠️ worse |
-| **Overall pass rate** | 73.4% | 79.1% | +5.7 pts | ✅ improved |
+| **Overall pass rate** | 76.8% | 81.0% | +4.2 pts | ✅ improved |
 
 ---
 
@@ -99,14 +99,8 @@
 | `tbt_ms` | 184 | 43 | 43 |
 | `cls` | 180 | 38 | 38 |
 | `performance_score` | 171 | 30 | 30 |
-| `step_web_bargain_flow` | 50 | 0 | 16 |
-| `step_mweb_bargain2_flow` | 50 | 0 | 16 |
-| `step_mweb_checkout_flow` | 50 | 0 | 16 |
-| `step_mweb_bargain_flow` | 50 | 0 | 16 |
 | `step_web_search_products` | 50 | 0 | 14 |
 | `response_time_ms` | 450 | 3 | 11 |
-| `step_web_bargain2_flow` | 50 | 0 | 13 |
-| `step_web_checkout_flow` | 50 | 0 | 13 |
 | `step_web_category_all_load` | 50 | 0 | 10 |
 | `status_code` | 250 | 3 | 7 |
 | `step_mweb_category_all_load` | 50 | 0 | 9 |
@@ -118,6 +112,12 @@
 | `step_android_banners_check` | 20 | 5 | 0 |
 | `step_android_category_load` | 20 | 5 | 0 |
 | `step_android_product_detail_load` | 20 | 5 | 0 |
+| `step_android_bargain_flow` | 20 | 5 | 0 |
+| `step_android_my_bargains` | 20 | 5 | 0 |
+| `step_android_alerts_orders` | 20 | 5 | 0 |
+| `step_android_bargain2_flow` | 20 | 5 | 0 |
+| `step_mweb_category_toys-games_load` | 50 | 0 | 3 |
+| `step_mweb_category_fashion-accessories_load` | 50 | 1 | 1 |
 
 ---
 
@@ -146,8 +146,8 @@
 |---|---|---|---|
 | 1 | `home` is the weakest Lighthouse page (score 47.4) | High | Preload the above-the-fold hero image (`fetchpriority=high`); stop lazy-loading it |
 | 2 | `lighthouse` accounts for ~83% of recent failures | High | Prioritise that family in the next performance pass |
-| 3 | `step_web_bargain_flow` degraded 16× in the last 2 weeks | Medium | Check the step's time budget / selectors |
-| 4 | `step_mweb_bargain2_flow` degraded 16× in the last 2 weeks | Medium | Check the step's time budget / selectors |
+| 3 | `step_web_search_products` degraded 14× in the last 2 weeks | Medium | Check the step's time budget / selectors |
+| 4 | `step_web_category_all_load` degraded 10× in the last 2 weeks | Medium | Check the step's time budget / selectors |
 
 ---
 
