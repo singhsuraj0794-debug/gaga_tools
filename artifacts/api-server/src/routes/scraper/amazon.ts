@@ -181,33 +181,50 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
     // what produced short catalogues and 502/503s.
     const tunnel = (process.env.SCRAPER_TUNNEL_URL || "https://headphone-shudder-lavender.ngrok-free.dev").replace(/\/+$/, "");
     if (tunnel) {
-      try {
-        const r = await fetch(`${tunnel}/extract`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
-          body: JSON.stringify({ url: targetUrl }),
-          signal: AbortSignal.timeout(600000),
-        });
-        if (r.ok) {
+      // Walk the catalogue in bounded page chunks. A full merchant catalogue can
+      // run to hundreds of pages; one request exceeds the tunnel's ~300s limit
+      // (ngrok 503), which used to fall through to a Render scrape that cannot
+      // work (no residential IP / CDP Chrome) and surfaced as
+      // "Command failed: python3 .../_amazon_scraper.py extract ...".
+      const CHUNK_PAGES = 15;      // ~45s per chunk, well under 300s
+      const MAX_TOTAL_PAGES = 400;
+      const all: any[] = [];
+      const seen = new Set<string>();
+      let storeName = "";
+      let nextPage: number | null = 1;
+      let lastErr = "";
+      let guard = 0;
+      while (nextPage && nextPage <= MAX_TOTAL_PAGES && guard++ < 60) {
+        try {
+          const r = await fetch(`${tunnel}/extract`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
+            body: JSON.stringify({ url: targetUrl, page: nextPage, pages: CHUNK_PAGES }),
+            signal: AbortSignal.timeout(300000),
+          });
+          if (!r.ok) { lastErr = `tunnel HTTP ${r.status}`; break; }
           const d: any = await r.json();
-          const prods = d.products || [];
-          if (prods.length > 0) {
-            logger.info({ count: prods.length, via: "tunnel" }, "Amazon extract via tunnel");
-            res.json({
-              storeName: d.storeName || d.store_name || "",
-              products: prods,
-              total: prods.length,
-              error: d.error || "",
-            });
-            return;
+          storeName = d.storeName || d.store_name || storeName;
+          const prods: any[] = d.products || [];
+          let added = 0;
+          for (const p of prods) {
+            if (p?.url && !seen.has(p.url)) { seen.add(p.url); all.push(p); added++; }
           }
-          logger.warn({ body: JSON.stringify(d).slice(0, 200) }, "Tunnel returned no products — falling back");
-        } else {
-          logger.warn({ status: r.status }, "Tunnel extract failed — falling back");
+          if (prods.length === 0 && d.error) { lastErr = d.error; break; }
+          if (!d.has_more || !d.next_page) break;
+          if (added === 0) break;            // no progress — stop rather than loop
+          nextPage = Number(d.next_page);
+        } catch (e: any) {
+          lastErr = e.message;
+          break;
         }
-      } catch (e: any) {
-        logger.warn({ err: e.message }, "Tunnel extract error — falling back");
       }
+      if (all.length > 0) {
+        logger.info({ count: all.length, pages: guard, via: "tunnel" }, "Amazon extract via tunnel (chunked)");
+        res.json({ storeName, products: all, total: all.length, error: "" });
+        return;
+      }
+      logger.warn({ err: lastErr }, "Tunnel chunked extract yielded nothing — falling back");
     }
 
     const env: Record<string, string> = { ...process.env as Record<string, string> };

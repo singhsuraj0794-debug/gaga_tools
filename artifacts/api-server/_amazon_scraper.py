@@ -1138,12 +1138,18 @@ def _brand_from_store_url(store_url: str) -> str:
     return ""
 
 
-def extract_products(store_url: str) -> dict:
+def extract_products(store_url: str, start_page: int = 1, max_pages: int | None = None) -> dict:
     """Extract all product links from an Amazon search / category / store page.
 
     Returns dict with:
       store_name: str
       products: list[dict] — each with url, title, imageUrl, price
+      has_more: bool — True when the page cap stopped us early (more pages exist)
+      next_page: int | None — the page to request next
+
+    `start_page` / `max_pages` chunk the pagination: a full merchant catalogue can
+    run to hundreds of pages and take >300s, which the ngrok tunnel kills (503),
+    so the caller walks it in bounded chunks.
     """
     from urllib.parse import urlparse
 
@@ -1351,8 +1357,15 @@ def extract_products(store_url: str) -> dict:
                         "No brand filter matched %r in the browser either — "
                         "falling back to the storefront", _store_slug)
 
-            logger.info("Navigating to store URL: %s", store_url)
-            page.goto(store_url, wait_until="domcontentloaded", timeout=45000)
+            _start = max(1, int(start_page or 1))
+            _chunk = int(max_pages) if max_pages else EXTRACT_MAX_PAGES
+            _last = min(EXTRACT_MAX_PAGES, _start + _chunk - 1)
+            _first_url = (
+                store_url if _start <= 1
+                else f"{store_url}{'&' if '?' in store_url else '?'}page={_start}"
+            )
+            logger.info("Navigating to store URL: %s (pages %s-%s)", _first_url, _start, _last)
+            page.goto(_first_url, wait_until="domcontentloaded", timeout=45000)
             page.wait_for_timeout(1500)
 
             if _is_bot_page(page.content(), page.url):
@@ -1372,9 +1385,10 @@ def extract_products(store_url: str) -> dict:
             # ASINs (Amazon returns "no results" past the last page).
             base_url = store_url
             sep = "&" if "?" in base_url else "?"
-            page_no = 1
+            page_no = _start
             stall = 0
-            while page_no < EXTRACT_MAX_PAGES:
+            has_more = False
+            while page_no < _last:
                 page_no += 1
                 loaded = False
                 # A page that comes back empty is usually throttling/backoff, not
@@ -1415,6 +1429,9 @@ def extract_products(store_url: str) -> dict:
                     logger.info("Catalogue page %s: %s products so far",
                                 page_no, len(seen_asins))
                 time.sleep(0.8)   # gentle pacing to avoid mid-catalogue throttling
+            else:
+                # the loop ran to the chunk cap without stalling => more pages exist
+                has_more = _last < EXTRACT_MAX_PAGES
 
             if cdp_used is None:
                 context.close()
@@ -1427,7 +1444,13 @@ def extract_products(store_url: str) -> dict:
     except Exception as exc:
         return {"store_name": store_name, "products": products, "error": str(exc)}
 
-    return {"store_name": store_name, "products": products[:EXTRACT_MAX_PRODUCTS], "error": ""}
+    return {
+        "store_name": store_name,
+        "products": products[:EXTRACT_MAX_PRODUCTS],
+        "error": "",
+        "has_more": has_more,
+        "next_page": (_last + 1) if has_more else None,
+    }
 
 
 

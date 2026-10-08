@@ -103,14 +103,20 @@ class ScraperHandler(BaseHTTPRequestHandler):
             # memory), so the deployed route proxies here: this machine has a
             # residential IP and finishes a 220-product catalogue in ~30-60s.
             if "amazon." in url or "amzn." in url:
-                print(f"[EXTRACT] amazon catalogue: {url}", flush=True)
-                result = amazon_scraper.extract_products(url)
+                start_page = int(body.get("page", 1) or 1)
+                pages = int(body.get("pages", 0) or 0)
+                print(f"[EXTRACT] amazon catalogue: {url} (start_page={start_page} pages={pages or 'all'})", flush=True)
+                result = amazon_scraper.extract_products(
+                    url, start_page=start_page, max_pages=pages or None,
+                )
                 self._json(200, {
                     "status": "success" if not result.get("error") else "failed",
                     "store_name": result.get("store_name", ""),
                     "storeName": result.get("store_name", ""),
                     "products": result.get("products") or [],
                     "total": len(result.get("products") or []),
+                    "has_more": bool(result.get("has_more")),
+                    "next_page": result.get("next_page"),
                     "error": result.get("error") or "",
                 })
                 return
