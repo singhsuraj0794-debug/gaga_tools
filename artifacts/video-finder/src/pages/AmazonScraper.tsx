@@ -346,51 +346,79 @@ export default function AmazonScraper() {
 // BATCH_SIZE 5 only 5 of 6 workers ran, and batches were awaited one after
 // another. 12 = 2 waves of 6.
   const BATCH_SIZE = 12;
+  // Amazon datacenter scrapes intermittently come back blocked/failed (or the
+  // whole batch 5xx/times out). Previously there was NO retry, so those rows
+  // silently kept the single extract image and the sheet looked like "PDP has
+  // only 1-2 images". Retry the stragglers in smaller batches with a pause.
+  const RETRY_BATCH_SIZE = 6;
+  const MAX_SCRAPE_ROUNDS = 3;
+
+  const needsRescrape = (p: AmazonDetailedProduct) =>
+    p.status === "blocked" || p.status === "failed" || !p.images || p.images.length < 2;
 
   const handleScrape = async () => {
     const urlsToScrape = Array.from(selectedUrls);
     if (urlsToScrape.length === 0) return;
 
     setIsScraping(true);
-    setBatchProgress({ current: 0, total: urlsToScrape.length });
 
-    const totalBatches = Math.ceil(urlsToScrape.length / BATCH_SIZE);
+    let remaining = urlsToScrape;
+    let done = 0;
 
-    for (let batch = 0; batch < totalBatches; batch++) {
-      const batchUrls = urlsToScrape.slice(batch * BATCH_SIZE, (batch + 1) * BATCH_SIZE);
-      setBatchProgress({ current: Math.min(batch * BATCH_SIZE, urlsToScrape.length), total: urlsToScrape.length });
+    for (let round = 0; round < MAX_SCRAPE_ROUNDS && remaining.length; round++) {
+      const size = round === 0 ? BATCH_SIZE : RETRY_BATCH_SIZE;
+      const totalBatches = Math.ceil(remaining.length / size);
+      const next: string[] = [];
+      setBatchProgress({ current: 0, total: remaining.length });
 
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000);
-        const response = await fetch(`${API_BASE}/api/scraper/amazon/scrape`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ urls: batchUrls }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        const data = await response.json();
-        if (response.ok) {
-          setProducts(prev => {
-            const existing = new Map(prev.map(p => [p.url, p]));
-            for (const p of data.products) existing.set(p.url, p);
-            return Array.from(existing.values());
+      for (let batch = 0; batch < totalBatches; batch++) {
+        const batchUrls = remaining.slice(batch * size, (batch + 1) * size);
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 300000);
+          const response = await fetch(`${API_BASE}/api/scraper/amazon/scrape`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ urls: batchUrls }),
+            signal: controller.signal,
           });
-        } else {
-          const errMsg = data.error || "Unknown error";
-          alert(`Batch ${batch + 1}/${totalBatches} failed: ${errMsg}`);
+          clearTimeout(timeoutId);
+          const data = await response.json();
+          if (response.ok) {
+            const byUrl = new Map<string, AmazonDetailedProduct>();
+            for (const p of data.products) byUrl.set(p.url, p);
+            setProducts(prev => {
+              const existing = new Map(prev.map(p => [p.url, p]));
+              for (const p of data.products) existing.set(p.url, p);
+              return Array.from(existing.values());
+            });
+            for (const u of batchUrls) {
+              const p = byUrl.get(u);
+              if (!p || needsRescrape(p)) next.push(u);
+            }
+          } else {
+            console.warn(`Batch ${batch + 1}/${totalBatches} failed: ${data.error || "Unknown error"}`);
+            next.push(...batchUrls);
+          }
+        } catch (error: any) {
+          console.error("Scrape error:", error);
+          next.push(...batchUrls);
         }
-      } catch (error: any) {
-        console.error("Scrape error:", error);
-        if (error?.name === "AbortError") {
-          alert(`Batch ${batch + 1}/${totalBatches} timed out. Partial results are available for export.`);
-        } else {
-          alert(`Batch ${batch + 1}/${totalBatches} failed: ${error?.message || "Network error"}. Partial results are available for export.`);
-        }
+
+        done = Math.min(done + batchUrls.length, urlsToScrape.length);
+        setBatchProgress({ current: done, total: urlsToScrape.length });
       }
 
-      setBatchProgress({ current: Math.min((batch + 1) * BATCH_SIZE, urlsToScrape.length), total: urlsToScrape.length });
+      remaining = Array.from(new Set(next));
+      if (remaining.length && round < MAX_SCRAPE_ROUNDS - 1) {
+        console.log(`Retrying ${remaining.length} product(s) — round ${round + 2}/${MAX_SCRAPE_ROUNDS}`);
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+
+    if (remaining.length) {
+      console.warn(`${remaining.length} product(s) still failed after ${MAX_SCRAPE_ROUNDS} rounds`);
     }
 
     setIsScraping(false);
