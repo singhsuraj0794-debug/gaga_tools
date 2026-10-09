@@ -557,14 +557,28 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
 
                 html = page.content()
 
-                # Extract ALL product images from JS hiRes data in page source
-                # (gives full set, not just the currently-selected main image)
+                # The PDP gallery lives in JS data as a list of entries shaped
+                #   {"hiRes":"…"|null,"thumb":"…","large":"…"}
+                # Only the SELECTED image carries a non-null hiRes; every other
+                # entry exposes just "large" (~400-700px) + a 38x50 "thumb".
+                # The old code regexed only non-null "hiRes", so multi-image
+                # listings came back with 1-2 images. Collect EVERY entry,
+                # preferring hiRes, then large, then thumb.
                 try:
-                    hires_urls: set[str] = set()
-                    for m in re.finditer(r'"hiRes"\s*:\s*"(https?://[^"]+)"', html):
-                        hires_urls.add(m.group(1))
                     existing = set(data.get("images") or [])
-                    for u in sorted(hires_urls):
+                    entry_re = re.compile(
+                        r'"hiRes"\s*:\s*(?:"(https?://[^"]+)"|null)\s*,\s*'
+                        r'"thumb"\s*:\s*"(https?://[^"]+)"\s*,\s*'
+                        r'"large"\s*:\s*"(https?://[^"]+)"'
+                    )
+                    for m in entry_re.finditer(html):
+                        url = m.group(1) or m.group(3) or m.group(2)
+                        if url and url not in existing:
+                            existing.add(url)
+                            data.setdefault("images", []).append(url)
+                    # Any non-null hiRes not already captured by a full entry.
+                    for m in re.finditer(r'"hiRes"\s*:\s*"(https?://[^"]+)"', html):
+                        u = m.group(1)
                         if u not in existing:
                             existing.add(u)
                             data.setdefault("images", []).append(u)
