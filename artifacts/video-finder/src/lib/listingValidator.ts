@@ -2158,6 +2158,54 @@ export interface SheetDupResult {
   remove_skus: string[];
 }
 
+/**
+ * Text-match helpers for the "Check with Texts" pass. The image detector finds
+ * duplicate candidates; this re-checks each candidate by TITLE so only
+ * duplicates whose titles ALSO match are treated as true duplicates.
+ */
+const _TEXT_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "for", "with", "of", "to", "in", "on", "by",
+  "at", "pack", "packs", "set", "sets", "combo", "pcs", "pc", "piece", "pieces",
+  "nos", "no", "new", "free", "size", "sizes", "color", "colour", "colors",
+  "colours", "product", "item", "items",
+]);
+
+function _normTitleText(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function _titleTokens(s: string): string[] {
+  return _normTitleText(s).split(" ").filter((t) => t && !_TEXT_STOPWORDS.has(t));
+}
+
+/**
+ * Title similarity in [0,1]: token-set Jaccard blended with subset containment,
+ * so "X 500ml" vs "X 500ml (Pack of 2)" still scores high after stopword strip
+ * while genuinely different products score low.
+ */
+export function titleTextSimilarity(a: string, b: string): number {
+  const na = _normTitleText(a);
+  const nb = _normTitleText(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const ta = new Set(_titleTokens(a));
+  const tb = new Set(_titleTokens(b));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  const union = ta.size + tb.size - inter;
+  const jaccard = union > 0 ? inter / union : 0;
+  const containment = inter / Math.min(ta.size, tb.size);
+  return 0.6 * jaccard + 0.4 * containment;
+}
+
+/** A text similarity at/above this counts as a text-confirmed duplicate. */
+export const TEXT_DUPLICATE_THRESHOLD = 0.6;
+
 export async function startSheetDuplicatesJob(
   products: SheetDupProduct[],
   apiBase: string = "",

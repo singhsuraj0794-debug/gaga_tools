@@ -21,6 +21,7 @@ import {
   Eye,
   Copy,
   Server,
+  Type,
 } from "lucide-react";
 import {
   parseFile,
@@ -46,6 +47,8 @@ import {
   setPrelistingApiBase,
   startSheetDuplicatesJob,
   getSheetDuplicatesJob,
+  titleTextSimilarity,
+  TEXT_DUPLICATE_THRESHOLD,
   type ValidationResult,
   type ListingRow,
   type CheckResult,
@@ -111,6 +114,11 @@ export default function PreListingValidator() {
   const [selectedSellers, setSelectedSellers] = useState<Set<string>>(new Set());
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const _allRemovedSkus = useRef<Set<string>>(new Set());
+  // Baseline rows/results captured BEFORE the image duplicate pass removes
+  // anything, so "Check with Texts" can restore image-duplicates whose titles
+  // do NOT match (they are not true duplicates and must stay in the export).
+  const _rowsPreDup = useRef<ListingRow[] | null>(null);
+  const _resultsPreDup = useRef<ValidationResult[] | null>(null);
   const [useQwen, setUseQwen] = useState(true);
   const [skipHsn, setSkipHsn] = useState(true);
   const [skipTextCorrection, setSkipTextCorrection] = useState(false);
@@ -432,6 +440,10 @@ export default function PreListingValidator() {
     }
     setFile(selectedFile);
     setParseError(null);
+    // New sheet → drop the duplicate baseline + removal sets from the old file.
+    _rowsPreDup.current = null;
+    _resultsPreDup.current = null;
+    _allRemovedSkus.current = new Set();
     try {
       const result = await parseFile(selectedFile);
       if (result.rowCount === 0) {
@@ -1889,6 +1901,10 @@ export default function PreListingValidator() {
 
   const findSheetDuplicates = async () => {
     if (rows.length < 2) return;
+    // Capture the pre-duplicate baseline once (reused across re-runs) so the
+    // text pass can restore any image-duplicate that text does not confirm.
+    _rowsPreDup.current = _rowsPreDup.current ?? rows;
+    _resultsPreDup.current = _resultsPreDup.current ?? results;
     setDuplicateStatus("Scanning images for duplicates...");
     try {
       const products = rows.map((row) => {
@@ -2002,6 +2018,62 @@ export default function PreListingValidator() {
       }
     } catch (e) {
       setDuplicateStatus(`Duplicate check failed: ${e}. Compute API: ${getPrelistingApiBase()} — ensure the tunnel is running and this URL is correct (use the Test button).`);
+    }
+  };
+
+  // ── Check with Texts ─────────────────────────────────────────────────────
+  // Re-verifies the image-identified duplicate groups by TITLE similarity.
+  // Only duplicates whose titles ALSO match are kept as true duplicates; the
+  // rest are restored to the sheet and dropped from the removal set, so the
+  // export removes only the confirmed (image + text) duplicates.
+  const checkDuplicatesWithText = () => {
+    if (duplicateGroups.length === 0) {
+      setDuplicateStatus("Run Find Duplicates first — Check with Texts then re-verifies those groups by title.");
+      return;
+    }
+    const confirmedGroups: any[] = [];
+    const confirmedRemoveSkus = new Set<string>();
+    let dropped = 0;
+    let totalCandidates = 0;
+    for (const g of duplicateGroups) {
+      const keepTitle = g.keep?.title || "";
+      const keepRemoves: any[] = [];
+      for (const r of (g.remove || [])) {
+        totalCandidates++;
+        const score = titleTextSimilarity(keepTitle, r.title || "");
+        if (score >= TEXT_DUPLICATE_THRESHOLD) {
+          keepRemoves.push({ ...r, textScore: score });
+          confirmedRemoveSkus.add(r.sku);
+        } else {
+          dropped++;
+        }
+      }
+      if (keepRemoves.length > 0) {
+        const avg = keepRemoves.reduce((s: number, r: any) => s + (r.textScore || 0), 0) / keepRemoves.length;
+        confirmedGroups.push({ ...g, remove: keepRemoves, textScore: avg, text_checked: true });
+      }
+    }
+
+    setDuplicateGroups(confirmedGroups);
+    setDuplicateRemoveSkus(new Set(confirmedRemoveSkus));
+    // _allRemovedSkus drives the export exclusion — keep only confirmed dupes.
+    _allRemovedSkus.current = new Set(confirmedRemoveSkus);
+
+    // Restore image-duplicates that text did NOT confirm so they stay in the sheet.
+    if (_rowsPreDup.current) {
+      setRows(_rowsPreDup.current.filter((row) => !confirmedRemoveSkus.has(getSku(row))));
+    }
+    if (_resultsPreDup.current) {
+      const kept = _resultsPreDup.current.filter((r) => !confirmedRemoveSkus.has(r.sku));
+      setResults(kept);
+      _currentResults.current = kept;
+    }
+
+    const total = confirmedRemoveSkus.size;
+    if (total === 0) {
+      setDuplicateStatus(`Text check: none of the ${totalCandidates} image-duplicate(s) matched by title — nothing will be removed on export.`);
+    } else {
+      setDuplicateStatus(`Text check: ${total} of ${totalCandidates} image-duplicate(s) confirmed by title${dropped > 0 ? `; ${dropped} dropped (titles differ)` : ""}. Export removes the ${total} confirmed.`);
     }
   };
 
@@ -2544,6 +2616,10 @@ export default function PreListingValidator() {
                       <div className="flex items-center justify-between mb-1">
                         <h4 className="font-semibold text-sm text-slate-700">Duplicate Groups</h4>
                         <div className="flex items-center gap-2">
+                          <Button size="sm" variant="outline" className="h-7 text-xs border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                            onClick={checkDuplicatesWithText}>
+                            <Type className="w-3 h-3 mr-1" /> Check with Texts
+                          </Button>
                           {duplicateRemoveSkus.size > 0 && (
                             <Button size="sm" variant="outline" className="h-7 text-xs border-rose-300 text-rose-700 hover:bg-rose-50"
                               onClick={() => {
@@ -2571,11 +2647,16 @@ export default function PreListingValidator() {
                       <div className="space-y-1 max-h-40 overflow-y-auto text-xs">
                         {duplicateGroups.map((g, gi) => (
                           <div key={gi} className="p-2 bg-slate-50 border border-slate-200 rounded">
-                            <div className="font-medium text-slate-600">Group {gi + 1} — {g.match_type === "all_images_match" ? "ALL images match" : `${g.matched_images}/${g.total_images} images match`}</div>
+                            <div className="font-medium text-slate-600">
+                              Group {gi + 1} — {g.match_type === "all_images_match" ? "ALL images match" : `${g.matched_images}/${g.total_images} images match`}
+                              {typeof g.textScore === "number" && (
+                                <span className="ml-2 text-indigo-600">· text {Math.round(g.textScore * 100)}%</span>
+                              )}
+                            </div>
                             <div className="mt-1 space-y-0.5">
                               <div className="text-green-700">KEEP: {g.keep?.sku} — {g.keep?.title?.substring(0, 40)}</div>
                               {g.remove?.map((p: any) => (
-                                <div key={p.sku} className="text-rose-600">REMOVE: {p.sku} — {p.title?.substring(0, 40)}</div>
+                                <div key={p.sku} className="text-rose-600">REMOVE: {p.sku} — {p.title?.substring(0, 40)}{typeof p.textScore === "number" ? ` (text ${Math.round(p.textScore * 100)}%)` : ""}</div>
                               ))}
                             </div>
                           </div>
