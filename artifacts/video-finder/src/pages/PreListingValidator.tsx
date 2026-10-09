@@ -114,11 +114,6 @@ export default function PreListingValidator() {
   const [selectedSellers, setSelectedSellers] = useState<Set<string>>(new Set());
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const _allRemovedSkus = useRef<Set<string>>(new Set());
-  // Baseline rows/results captured BEFORE the image duplicate pass removes
-  // anything, so "Check with Texts" can restore image-duplicates whose titles
-  // do NOT match (they are not true duplicates and must stay in the export).
-  const _rowsPreDup = useRef<ListingRow[] | null>(null);
-  const _resultsPreDup = useRef<ValidationResult[] | null>(null);
   const [useQwen, setUseQwen] = useState(true);
   const [skipHsn, setSkipHsn] = useState(true);
   const [skipTextCorrection, setSkipTextCorrection] = useState(false);
@@ -440,9 +435,7 @@ export default function PreListingValidator() {
     }
     setFile(selectedFile);
     setParseError(null);
-    // New sheet → drop the duplicate baseline + removal sets from the old file.
-    _rowsPreDup.current = null;
-    _resultsPreDup.current = null;
+    // New sheet → drop the removal sets from the old file.
     _allRemovedSkus.current = new Set();
     try {
       const result = await parseFile(selectedFile);
@@ -1901,10 +1894,6 @@ export default function PreListingValidator() {
 
   const findSheetDuplicates = async () => {
     if (rows.length < 2) return;
-    // Capture the pre-duplicate baseline once (reused across re-runs) so the
-    // text pass can restore any image-duplicate that text does not confirm.
-    _rowsPreDup.current = _rowsPreDup.current ?? rows;
-    _resultsPreDup.current = _resultsPreDup.current ?? results;
     setDuplicateStatus("Scanning images for duplicates...");
     try {
       const products = rows.map((row) => {
@@ -2022,59 +2011,37 @@ export default function PreListingValidator() {
   };
 
   // ── Check with Texts ─────────────────────────────────────────────────────
-  // Re-verifies the image-identified duplicate groups by TITLE similarity.
-  // Only duplicates whose titles ALSO match are kept as true duplicates; the
-  // rest are restored to the sheet and dropped from the removal set, so the
-  // export removes only the confirmed (image + text) duplicates.
+  // Re-verifies the image-identified duplicate groups by TITLE similarity and
+  // annotates each with its text score. Rule: the export removes ALL image-match
+  // duplicates — the text check NEVER un-removes one; it only confirms which are
+  // also a 100% title match.
   const checkDuplicatesWithText = () => {
     if (duplicateGroups.length === 0) {
       setDuplicateStatus("Run Find Duplicates first — Check with Texts then re-verifies those groups by title.");
       return;
     }
-    const confirmedGroups: any[] = [];
-    const confirmedRemoveSkus = new Set<string>();
-    let dropped = 0;
     let totalCandidates = 0;
-    for (const g of duplicateGroups) {
+    let exact100 = 0;
+    let near60 = 0;
+    const annotated = duplicateGroups.map((g: any) => {
       const keepTitle = g.keep?.title || "";
-      const keepRemoves: any[] = [];
-      for (const r of (g.remove || [])) {
+      const removes = (g.remove || []).map((r: any) => {
         totalCandidates++;
         const score = titleTextSimilarity(keepTitle, r.title || "");
-        if (score >= TEXT_DUPLICATE_THRESHOLD) {
-          keepRemoves.push({ ...r, textScore: score });
-          confirmedRemoveSkus.add(r.sku);
-        } else {
-          dropped++;
-        }
-      }
-      if (keepRemoves.length > 0) {
-        const avg = keepRemoves.reduce((s: number, r: any) => s + (r.textScore || 0), 0) / keepRemoves.length;
-        confirmedGroups.push({ ...g, remove: keepRemoves, textScore: avg, text_checked: true });
-      }
-    }
-
-    setDuplicateGroups(confirmedGroups);
-    setDuplicateRemoveSkus(new Set(confirmedRemoveSkus));
-    // _allRemovedSkus drives the export exclusion — keep only confirmed dupes.
-    _allRemovedSkus.current = new Set(confirmedRemoveSkus);
-
-    // Restore image-duplicates that text did NOT confirm so they stay in the sheet.
-    if (_rowsPreDup.current) {
-      setRows(_rowsPreDup.current.filter((row) => !confirmedRemoveSkus.has(getSku(row))));
-    }
-    if (_resultsPreDup.current) {
-      const kept = _resultsPreDup.current.filter((r) => !confirmedRemoveSkus.has(r.sku));
-      setResults(kept);
-      _currentResults.current = kept;
-    }
-
-    const total = confirmedRemoveSkus.size;
-    if (total === 0) {
-      setDuplicateStatus(`Text check: none of the ${totalCandidates} image-duplicate(s) matched by title — nothing will be removed on export.`);
-    } else {
-      setDuplicateStatus(`Text check: ${total} of ${totalCandidates} image-duplicate(s) confirmed by title${dropped > 0 ? `; ${dropped} dropped (titles differ)` : ""}. Export removes the ${total} confirmed.`);
-    }
+        if (score >= 0.999) exact100++;
+        if (score >= TEXT_DUPLICATE_THRESHOLD) near60++;
+        return { ...r, textScore: score };
+      });
+      const avg = removes.length
+        ? removes.reduce((s: number, r: any) => s + (r.textScore || 0), 0) / removes.length
+        : 0;
+      return { ...g, remove: removes, textScore: avg, text_checked: true };
+    });
+    setDuplicateGroups(annotated);
+    // Every image-match duplicate stays removed; the text check never un-removes.
+    setDuplicateStatus(
+      `Text check: ${exact100} of ${totalCandidates} image-duplicate(s) have a 100% title match (${near60} are ≥${Math.round(TEXT_DUPLICATE_THRESHOLD * 100)}%). All ${totalCandidates} remain removed on export.`,
+    );
   };
 
   const visualVerifySheet = async () => {
