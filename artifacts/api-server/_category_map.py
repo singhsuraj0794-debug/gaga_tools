@@ -131,10 +131,25 @@ _GENERIC_TOKENS = {
 }
 
 
+# Irregular plurals the crude suffix stemmer cannot relate. Amazon's
+# "Keyboards, Mice & Input Devices > Mice" breadcrumb never matched Gajab's
+# "… > Computer Accessories > Mouse" leaf (mice -> mic vs mouse -> mouse), so
+# these products stalled at the bare L1.
+_IRREGULAR = {
+    "mice": "mouse", "geese": "goose", "feet": "foot", "teeth": "tooth",
+    "children": "child", "people": "person", "oxen": "ox",
+    "indices": "index", "matrices": "matrix", "vertices": "vertex",
+    "analyses": "analysis", "crises": "crisis", "theses": "thesis",
+    "cacti": "cactus", "fungi": "fungus", "alumni": "alumnus",
+}
+
+
 @lru_cache(maxsize=None)
 def _stem(token: str) -> str:
     """Crude singular stem so 'repellents' and 'repellent' compare equal."""
     t = token.lower()
+    if t in _IRREGULAR:
+        return _IRREGULAR[t]
     if len(t) > 4 and t.endswith("ies"):
         return t[:-3] + "y"
     if len(t) > 3 and t.endswith("es") and not t.endswith("ss"):

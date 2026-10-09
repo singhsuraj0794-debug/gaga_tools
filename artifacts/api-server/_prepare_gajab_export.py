@@ -299,13 +299,25 @@ def prepare(products: list[dict]) -> dict:
             # readable at all; map_specs ignores anything it cannot parse.
             if specs is None:
                 specs = {}
-            if not any(normalise_key(k) in _COMBINED_DIM_KEYS
-                       or normalise_key(k) in FIXED_COLUMN_KEYS
-                       or "dimension" in normalise_key(k) for k in specs):
+            # Inject the scraper's top-level size/weight under canonical keys
+            # unless a RECOGNISED dim/weight key is already present. Gating on a
+            # bare substring ("dimension"/"weight") was wrong: the scraper's own
+            # labels are "Item Dimensions L x W" and "Item Weight Unit of
+            # Measure" — they contain those words but are not recognised keys, so
+            # both were skipped and the mandatory Package columns stayed blank.
+            has_known_dims = any(
+                normalise_key(k) in _COMBINED_DIM_KEYS
+                or FIXED_COLUMN_KEYS.get(normalise_key(k)) in ("dim_length", "dim_width", "dim_height")
+                for k in specs
+            )
+            if not has_known_dims:
                 top_dims = _clean(p.get("dimensions"))
                 if top_dims and _split_axes(top_dims):
                     specs["Product Dimensions"] = top_dims
-            if not any("weight" in normalise_key(k) for k in specs):
+            has_known_weight = any(
+                FIXED_COLUMN_KEYS.get(normalise_key(k)) == "weight" for k in specs
+            )
+            if not has_known_weight:
                 top_weight = _clean(p.get("weight"))
                 if top_weight:
                     specs["Item Weight"] = top_weight
