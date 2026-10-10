@@ -180,7 +180,19 @@ async function walkAmazonCatalogue(
         body: JSON.stringify({ url: targetUrl, page: nextPage, pages: CHUNK_PAGES }),
         signal: AbortSignal.timeout(300000),
       });
-      if (!r.ok) { lastErr = `tunnel HTTP ${r.status}`; break; }
+      if (!r.ok) {
+        let bodyText = "";
+        try { bodyText = await r.text(); } catch { /* ignore */ }
+        // ngrok returns 404 ERR_NGROK_3200 when the reserved domain's tunnel is
+        // down (the Windows host that serves it is off/asleep). Surface that
+        // clearly instead of a bare "tunnel HTTP 404".
+        if (r.status === 404 && /offline|ERR_NGROK_3200/i.test(bodyText)) {
+          lastErr = "Scraper host is OFFLINE — the ngrok tunnel is down. Start the Gajab stack on the Windows PC (desktop-deghg21).";
+        } else {
+          lastErr = `tunnel HTTP ${r.status}`;
+        }
+        break;
+      }
       const d: any = await r.json();
       storeName = d.storeName || d.store_name || storeName;
       const prods: any[] = d.products || [];
