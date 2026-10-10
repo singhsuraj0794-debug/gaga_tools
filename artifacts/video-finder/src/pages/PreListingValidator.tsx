@@ -2013,10 +2013,10 @@ export default function PreListingValidator() {
 
   // ── Check with Texts ─────────────────────────────────────────────────────
   // 1) Annotates the image-identified duplicates with their title score.
-  // 2) Also removes 100%-title duplicates that share an image but were missed by
-  //    the image pass (e.g. a shared stock photo is excluded from image
-  //    candidacy). Rule: the export removes ALL image-match duplicates AND all
-  //    100%-title same-image duplicates — the text check never un-removes.
+  // 2) Also removes 100%-title duplicates REGARDLESS of image that the image
+  //    pass missed (e.g. a shared stock photo is excluded from image candidacy).
+  //    Rule: the export removes ALL image-match duplicates AND all 100%-title
+  //    duplicates — the text check never un-removes.
   const checkDuplicatesWithText = () => {
     if (duplicateGroups.length === 0 && rows.length < 2) {
       setDuplicateStatus("Load a sheet and run Find Duplicates first, then Check with Texts.");
@@ -2041,8 +2041,9 @@ export default function PreListingValidator() {
       return { ...g, remove: removes, textScore: avg, text_checked: true };
     });
 
-    // 2) Exact-title (100%) duplicates among the current rows that ALSO share an
-    //    image (avoids nuking legitimate same-title different-image variants).
+    // 2) Exact-title (100%) duplicates among the current rows — regardless of
+    //    images (the image pass can miss them when a shared stock image is
+    //    excluded from image candidacy).
     const byTitle = new Map<string, ListingRow[]>();
     for (const row of rows) {
       const k = titleKey(getTitle(row));
@@ -2057,12 +2058,9 @@ export default function PreListingValidator() {
       if (group.length < 2) continue;
       const sorted = [...group].sort((a, b) => getTitle(b).length - getTitle(a).length);
       const keep = sorted[0];
-      const keepImgs = new Set(getImages(keep));
-      const removes = sorted
-        .slice(1)
-        .filter((r) => getImages(r).some((u) => keepImgs.has(u)))
-        .map((r) => ({ sku: getSku(r), title: getTitle(r), textScore: 1, reason: "100% title + shared image" }));
-      if (removes.length === 0) continue;
+      const removes = sorted.slice(1).map((r) => ({
+        sku: getSku(r), title: getTitle(r), textScore: 1, reason: "100% title match",
+      }));
       removes.forEach((r) => textRemoveSkus.add(r.sku));
       textGroups.push({
         keep: { sku: getSku(keep), title: getTitle(keep) },
@@ -2088,7 +2086,7 @@ export default function PreListingValidator() {
 
     setDuplicateGroups([...annotated, ...textGroups]);
     setDuplicateStatus(
-      `Text check: ${exact100}/${totalCandidates} image-duplicate(s) are a 100% title match (${near60} ≥${Math.round(TEXT_DUPLICATE_THRESHOLD * 100)}%); ${textRemoveSkus.size} extra 100%-title same-image duplicate(s) removed. All remain removed on export.`,
+      `Text check: ${exact100}/${totalCandidates} image-duplicate(s) are a 100% title match (${near60} ≥${Math.round(TEXT_DUPLICATE_THRESHOLD * 100)}%); ${textRemoveSkus.size} extra 100%-title duplicate(s) removed. All remain removed on export.`,
     );
   };
 
