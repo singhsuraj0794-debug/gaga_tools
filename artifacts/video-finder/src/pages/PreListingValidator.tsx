@@ -49,6 +49,7 @@ import {
   getSheetDuplicatesJob,
   titleTextSimilarity,
   TEXT_DUPLICATE_THRESHOLD,
+  titleKey,
   type ValidationResult,
   type ListingRow,
   type CheckResult,
@@ -2011,15 +2012,17 @@ export default function PreListingValidator() {
   };
 
   // ── Check with Texts ─────────────────────────────────────────────────────
-  // Re-verifies the image-identified duplicate groups by TITLE similarity and
-  // annotates each with its text score. Rule: the export removes ALL image-match
-  // duplicates — the text check NEVER un-removes one; it only confirms which are
-  // also a 100% title match.
+  // 1) Annotates the image-identified duplicates with their title score.
+  // 2) Also removes 100%-title duplicates that share an image but were missed by
+  //    the image pass (e.g. a shared stock photo is excluded from image
+  //    candidacy). Rule: the export removes ALL image-match duplicates AND all
+  //    100%-title same-image duplicates — the text check never un-removes.
   const checkDuplicatesWithText = () => {
-    if (duplicateGroups.length === 0) {
-      setDuplicateStatus("Run Find Duplicates first — Check with Texts then re-verifies those groups by title.");
+    if (duplicateGroups.length === 0 && rows.length < 2) {
+      setDuplicateStatus("Load a sheet and run Find Duplicates first, then Check with Texts.");
       return;
     }
+
     let totalCandidates = 0;
     let exact100 = 0;
     let near60 = 0;
@@ -2037,10 +2040,55 @@ export default function PreListingValidator() {
         : 0;
       return { ...g, remove: removes, textScore: avg, text_checked: true };
     });
-    setDuplicateGroups(annotated);
-    // Every image-match duplicate stays removed; the text check never un-removes.
+
+    // 2) Exact-title (100%) duplicates among the current rows that ALSO share an
+    //    image (avoids nuking legitimate same-title different-image variants).
+    const byTitle = new Map<string, ListingRow[]>();
+    for (const row of rows) {
+      const k = titleKey(getTitle(row));
+      if (!k) continue;
+      const arr = byTitle.get(k);
+      if (arr) arr.push(row);
+      else byTitle.set(k, [row]);
+    }
+    const textGroups: any[] = [];
+    const textRemoveSkus = new Set<string>();
+    for (const group of byTitle.values()) {
+      if (group.length < 2) continue;
+      const sorted = [...group].sort((a, b) => getTitle(b).length - getTitle(a).length);
+      const keep = sorted[0];
+      const keepImgs = new Set(getImages(keep));
+      const removes = sorted
+        .slice(1)
+        .filter((r) => getImages(r).some((u) => keepImgs.has(u)))
+        .map((r) => ({ sku: getSku(r), title: getTitle(r), textScore: 1, reason: "100% title + shared image" }));
+      if (removes.length === 0) continue;
+      removes.forEach((r) => textRemoveSkus.add(r.sku));
+      textGroups.push({
+        keep: { sku: getSku(keep), title: getTitle(keep) },
+        remove: removes,
+        match_type: "text_exact",
+        textScore: 1,
+        text_checked: true,
+      });
+    }
+
+    // 3) Apply — keep every image duplicate removed, add the text-only ones.
+    if (textRemoveSkus.size > 0) {
+      textRemoveSkus.forEach((sku) => _allRemovedSkus.current.add(sku));
+      setDuplicateRemoveSkus((prev) => {
+        const next = new Set(prev);
+        textRemoveSkus.forEach((s) => next.add(s));
+        return next;
+      });
+      setRows((prev) => prev.filter((row) => !textRemoveSkus.has(getSku(row))));
+      setResults((prev) => prev.filter((r) => !textRemoveSkus.has(r.sku)));
+      _currentResults.current = _currentResults.current.filter((r) => !textRemoveSkus.has(r.sku));
+    }
+
+    setDuplicateGroups([...annotated, ...textGroups]);
     setDuplicateStatus(
-      `Text check: ${exact100} of ${totalCandidates} image-duplicate(s) have a 100% title match (${near60} are ≥${Math.round(TEXT_DUPLICATE_THRESHOLD * 100)}%). All ${totalCandidates} remain removed on export.`,
+      `Text check: ${exact100}/${totalCandidates} image-duplicate(s) are a 100% title match (${near60} ≥${Math.round(TEXT_DUPLICATE_THRESHOLD * 100)}%); ${textRemoveSkus.size} extra 100%-title same-image duplicate(s) removed. All remain removed on export.`,
     );
   };
 

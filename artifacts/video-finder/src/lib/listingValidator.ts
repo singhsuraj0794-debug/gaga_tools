@@ -2206,6 +2206,19 @@ export function titleTextSimilarity(a: string, b: string): number {
 /** A text similarity at/above this counts as a text-confirmed duplicate. */
 export const TEXT_DUPLICATE_THRESHOLD = 0.6;
 
+/**
+ * Exact-comparison key for a title (lowercase, alphanumerics only, collapsed
+ * spaces). Two titles with the same key are a 100% match — used to catch
+ * same-title duplicates the image pass misses (e.g. shared stock photos).
+ */
+export function titleKey(s: string): string {
+  return (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function startSheetDuplicatesJob(
   products: SheetDupProduct[],
   apiBase: string = "",
