@@ -211,7 +211,9 @@ def _encode_labels(candidate_labels: List[str]):
         disk = _load_disk_cache()
         for label in candidate_labels:
             if label not in _label_emb_cache and label in disk:
-                _label_emb_cache[label] = disk[label]
+                # Disk cache may hold CPU tensors from an earlier run; move to the
+                # active device so the cosine matmul doesn't hit a device mismatch.
+                _label_emb_cache[label] = disk[label].to(_device)
 
         missing = [l for l in candidate_labels if l not in _label_emb_cache]
         if missing:
@@ -228,7 +230,7 @@ def _encode_labels(candidate_labels: List[str]):
             except Exception as e:
                 print(f"[MARQO] label encoding failed: {e}", file=sys.stderr)
                 return None
-        return torch.stack([_label_emb_cache[l] for l in candidate_labels])
+        return torch.stack([_label_emb_cache[l] for l in candidate_labels]).to(_device)
 
 
 def classify_features(feature, candidate_labels: List[str], top_k: int = 5) -> List[Tuple[str, float]]:
