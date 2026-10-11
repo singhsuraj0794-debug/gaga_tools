@@ -1406,7 +1406,7 @@ def _text_is_claim_oriented(text: str) -> bool:
     except Exception:
         return True  # conservative: check claims if we can't classify
 
-def detect_op_claims(text: str, min_len: int = 15, min_text_len: int = 20) -> List[str]:
+def detect_op_claims(text: str, min_len: int = 15, min_text_len: int = 20, threshold_override: Optional[float] = None) -> List[str]:
     """Detect operations/marketing claims in text using MiniLM semantic
     similarity. Entire text is first classified as claim-oriented or product-
     oriented; product-oriented text gets a much higher threshold, eliminating
@@ -1450,7 +1450,10 @@ def detect_op_claims(text: str, min_len: int = 15, min_text_len: int = 20) -> Li
     # (titles ~0.65-0.68, claims ~0.86), so the MiniLM cutoffs would strip
     # ordinary titles as "claims".
     _embed_backend = (os.environ.get("EMBED_BACKEND") or "").lower()
-    if _embed_backend in ("llama", "gguf"):
+    if threshold_override is not None:
+        # OCR text is noisy, so its caller passes a lower threshold.
+        threshold = threshold_override
+    elif _embed_backend in ("llama", "gguf"):
         threshold = 0.74 if claim_oriented else 0.80
     else:
         threshold = 0.52 if claim_oriented else 0.62

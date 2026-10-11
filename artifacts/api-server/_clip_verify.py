@@ -956,6 +956,12 @@ def check_ops_on_image(image_url: str) -> dict:
         # "50% OFF"). These are too short for the embedding pipeline to catch.
         claims: list = []
         low = (text or "").upper()
+        # OCR is noisy on low-res marketplace images ("Weter", "REPEATEO",
+        # "M@@IG"). Normalise common confusions and match patterns against BOTH
+        # the raw and the normalised text.
+        norm = low.replace("0", "O").replace("1", "I").replace("5", "S").replace("|", "I")
+        norm = re.sub(r"[^A-Z% ]+", " ", norm)
+        norm = re.sub(r"\s{2,}", " ", norm)
         short_claim_patterns = [
             (r"\bFREE\s*(SHIPPING|DELIVERY|RETURN|RETURNS|REPLACEMENT|EXCHANGE|GIFT)\b", "free shipping/delivery/return claim"),
             (r"\b(COD|CASH ON DELIVERY)\b", "COD available claim"),
@@ -982,8 +988,19 @@ def check_ops_on_image(image_url: str) -> dict:
             (r"\bGREAT\s*DEAL\b", "deal claim"),
             (r"\bHURRY\b", "urgency claim"),
         ]
+        # Loose variants tolerant of OCR noise.
+        short_claim_patterns += [
+            (r"\bFRE?E\s*(SHIP|DEL|RET)", "free shipping/delivery/return claim"),
+            (r"\bC\s*[O0]\s*D\b", "COD available claim"),
+            (r"\b\d{1,3}\s*%\s*[O0]FF\b", "discount/off claim"),
+            (r"\bB[E3]ST\s*PRIC[E3]\b", "best price claim"),
+            (r"\bL[O0]W[E3]ST\s*PRIC[E3]\b", "lowest price claim"),
+            (r"\bS[AB]L[E3]\b", "sale claim"),
+            (r"\bBUY\s*N[O0]W\b", "buy now claim"),
+            (r"\bWARRANT[YV]\b", "warranty claim"),
+        ]
         for pat, label in short_claim_patterns:
-            if re.search(pat, low):
+            if re.search(pat, low) or re.search(pat, norm):
                 # Skip if the matched context is a product descriptor
                 if _CLAIM_CONTEXT.search(text):
                     continue
@@ -999,7 +1016,8 @@ def check_ops_on_image(image_url: str) -> dict:
         # Semantic pipeline for longer OCR text. OCR lines are short standalone
         # blocks, not sentences — keep min_len small and lower the min_text_len
         # so short blocks like "Free Shipping COD Available" are still analyzed.
-        claims = detect_op_claims(text, min_len=6, min_text_len=6)
+        # OCR text is noisy, so use a lower semantic threshold than titles.
+        claims = detect_op_claims(text, min_len=6, min_text_len=6, threshold_override=0.60)
 
         return {
             "url": image_url,
@@ -1256,12 +1274,16 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
         # catalogues (1000 products) we OCR only the first image to keep
         # validation tractable. The regex/semantic detection is broad enough to
         # catch "BEST SELLER", "FREE SHIPPING", "COD", etc. on the hero image.
-        if first_image:
-            print(f"[INFO] [{sku}] Rule 7: OCR claims check on first image...", file=sys.stderr)
-            r7 = check_ops_on_image(first_image)
+        # Rule 7: OCR-based ops/marketing claim detection on the first few images
+        # (claims often live on images 2-4, not just the hero).
+        ocr_urls = [u for u in (all_images or []) if u][:4] or ([first_image] if first_image else [])
+        if ocr_urls:
+            print(f"[INFO] [{sku}] Rule 7: OCR claims check on {len(ocr_urls)} image(s)...", file=sys.stderr)
+            r7_results = _run_ocr_parallel(ocr_urls)
             out["rule7"] = {
-                "images": [r7],
-                "anyFlagged": bool(r7.get("flagged")),
+                "images": r7_results,
+                "anyFlagged": any(r.get("flagged") for r in r7_results),
+                "flaggedImages": [r["url"] for r in r7_results if r.get("flagged")],
             }
         else:
             out["rule7"] = {"images": [], "anyFlagged": False}
