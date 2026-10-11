@@ -24,7 +24,9 @@ _model_path = None
 _lock = threading.Lock()
 
 MODEL_PATH = os.path.expanduser("~/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct")
-HF_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
+# Default model; override with QWEN_MODEL (HF id) — e.g. a bigger/stronger VL
+# model on the CUDA host (Qwen/Qwen2.5-VL-7B-Instruct) or a text-only model.
+HF_ID = os.environ.get("QWEN_MODEL") or "Qwen/Qwen2.5-VL-3B-Instruct"
 
 
 def _pick_device() -> str:
