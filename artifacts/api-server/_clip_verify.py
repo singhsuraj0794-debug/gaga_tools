@@ -77,9 +77,9 @@ RULE5_CHECKS = [
         "added_text",
         "a product photo with promotional captions, price tags, or sale text edited on top of the image",
         "a product photo with no promotional text added on top",
-        # Raised to 0.90: CLIP scores ordinary packaging/label text as
-        # "promotional text" and was flagging clean images at ~70-75%.
-        0.90,
+        # 0.80: clean product/packaging shots score 0.53-0.75, while a real
+        # promotional badge ("BESTSELLER" ribbon) scores ~0.82 — 0.90 missed it.
+        0.80,
     ),
 ]
 
