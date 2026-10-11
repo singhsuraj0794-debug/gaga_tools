@@ -60,7 +60,7 @@ def get_model():
             return _model, _processor
 
         import torch
-        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+        from transformers import AutoProcessor
 
         # NOTE: only transformers-compatible checkpoints are candidates. The old
         # mlx-community 4-bit MLX build cannot be loaded here.
@@ -69,6 +69,11 @@ def get_model():
             (p for p in candidates if p and os.path.exists(os.path.join(p, "config.json"))),
             HF_ID,
         )
+        # Qwen3-VL and Qwen2.5-VL use different model classes.
+        if "qwen3-vl" in str(_model_path).lower():
+            from transformers import Qwen3VLForConditionalGeneration as VLM
+        else:
+            from transformers import Qwen2_5_VLForConditionalGeneration as VLM
 
         device = _pick_device()
         load_4bit = (
@@ -93,7 +98,7 @@ def get_model():
 
         print(f"[QWEN] Loading {_model_path} on {device} ({quant})...", file=sys.stderr)
         t0 = time.time()
-        _model = Qwen2_5_VLForConditionalGeneration.from_pretrained(_model_path, **kwargs)
+        _model = VLM.from_pretrained(_model_path, **kwargs)
         if not load_4bit:
             _model = _model.to(device)
         _model.eval()
