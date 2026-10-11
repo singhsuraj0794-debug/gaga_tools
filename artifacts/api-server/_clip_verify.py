@@ -44,6 +44,12 @@ from typing import Optional, Dict, List, Any
 import requests
 from PIL import Image
 
+# Paddle 3.x static inference crashes on some CPUs with the oneDNN (MKLDNN)
+# backend ("ConvertPirAttribute2RuntimeAttribute not support"). Disable it
+# before paddle is imported. Must be set before the paddle import in
+# get_ocr_reader().
+os.environ.setdefault("FLAGS_use_mkldnn", "0")
+
 # ─── Lazy-loaded model ───────────────────────────────────────────────────────
 _clip_model = None
 _clip_processor = None
@@ -290,20 +296,23 @@ def get_clip():
     global _clip_model, _clip_processor
     if _clip_model is None:
         import torch
-        from transformers import CLIPProcessor, CLIPModel
+        # AutoModel/AutoProcessor load either a CLIP or a SigLIP checkpoint, so
+        # CLIP_MODEL can be swapped (e.g. google/siglip-so400m-patch14-384) for
+        # stronger zero-shot. Both expose get_text_features/get_image_features.
+        from transformers import AutoProcessor, AutoModel
 
         model_name = os.environ.get("CLIP_MODEL") or "openai/clip-vit-base-patch32"
-        print(f"[INFO] Loading CLIP model: {model_name}", file=sys.stderr)
+        print(f"[INFO] Loading image model: {model_name}", file=sys.stderr)
         t0 = time.time()
-        _clip_model = CLIPModel.from_pretrained(model_name)
-        _clip_processor = CLIPProcessor.from_pretrained(model_name)
+        _clip_model = AutoModel.from_pretrained(model_name)
+        _clip_processor = AutoProcessor.from_pretrained(model_name)
         _clip_model.eval()
         if torch.cuda.is_available():
             _clip_model = _clip_model.to("cuda")
         elif torch.backends.mps.is_available():
             _clip_model = _clip_model.to("mps")
         t1 = time.time()
-        print(f"[INFO] CLIP model loaded in {t1 - t0:.1f}s on {'mps' if torch.backends.mps.is_available() else 'cpu'}", file=sys.stderr)
+        print(f"[INFO] Image model loaded in {t1 - t0:.1f}s", file=sys.stderr)
     return _clip_model, _clip_processor
 
 
@@ -375,26 +384,39 @@ def clip_zero_shot(
     image: Image.Image,
     candidate_labels: list,
 ) -> Dict[str, float]:
-    """Run CLIP zero-shot classification, return {label: score} dict (softmax)."""
+    """Zero-shot classification, return {label: score} dict (softmax over cosine).
+
+    Works for CLIP and SigLIP: both expose get_text_features/get_image_features.
+    CLIP scales cosine by its learned logit_scale (identical to the old
+    logits_per_image path); SigLIP has no logit_scale so a fixed temperature is
+    used — the scores stay a comparable relative ranking.
+    """
     import torch
     import torch.nn.functional as F
 
     model, processor = get_clip()
-
-    inputs = processor(
-        text=candidate_labels,
-        images=image,
-        return_tensors="pt",
-        padding=True,
-    )
-
     device = next(model.parameters()).device
-    inputs = {k: v.to(device) for k, v in inputs.items()}
+    is_siglip = type(model).__name__.startswith("Siglip")
+
+    text_kwargs: dict = {"text": candidate_labels, "return_tensors": "pt", "truncation": True}
+    if is_siglip:
+        # SigLIP pads text to a fixed length (64) with max_length.
+        text_kwargs["padding"] = "max_length"
+        text_kwargs["max_length"] = 64
+    else:
+        text_kwargs["padding"] = True
+    text_inputs = {k: v.to(device) for k, v in processor(**text_kwargs).items()}
+    image_inputs = {k: v.to(device) for k, v in processor(images=image, return_tensors="pt").items()}
 
     with torch.no_grad():
-        outputs = model(**inputs)
-        logits_per_image = outputs.logits_per_image  # shape: (1, num_labels)
-        probs = F.softmax(logits_per_image, dim=-1).squeeze(0)
+        text_feats = model.get_text_features(**text_inputs)
+        image_feats = model.get_image_features(**image_inputs)
+    text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
+    image_feats = image_feats / image_feats.norm(dim=-1, keepdim=True)
+    logits = image_feats @ text_feats.T
+    scale = getattr(model, "logit_scale", None)
+    logits = logits * (scale.exp() if scale is not None else 100.0)
+    probs = F.softmax(logits, dim=-1).squeeze(0)
 
     return {label: float(probs[i]) for i, label in enumerate(candidate_labels)}
 
@@ -520,7 +542,12 @@ def dinov2_clip_classify(
 
             # Get CLIP text features for each label
             try:
-                text_inputs = clip_processor(text=labels, padding=True, truncation=True, return_tensors="pt")
+                _is_siglip = type(clip_model).__name__.startswith("Siglip")
+                _tkw = {"text": labels, "return_tensors": "pt", "truncation": True,
+                        "padding": "max_length" if _is_siglip else True}
+                if _is_siglip:
+                    _tkw["max_length"] = 64
+                text_inputs = clip_processor(**_tkw)
                 text_inputs = {k: v.to("cpu") for k, v in text_inputs.items()}
                 with torch.no_grad():
                     text_features = clip_model.get_text_features(**text_inputs)
@@ -713,19 +740,33 @@ def get_ocr_reader():
         _ocr_lock = threading.Lock()
     with _ocr_lock:
         if _ocr_reader is None:
-            import easyocr
-            print("[INFO] Loading EasyOCR reader (en + ch_sim)...", file=sys.stderr)
-            t0 = time.time()
-            # gpu=True uses Apple Metal (MPS) and is ~2.2x faster than CPU
-            # (1.35s vs 3.0s per image). Fall back to CPU if the GPU path
-            # is unavailable on this machine.
+            # Prefer PaddleOCR (better accuracy; lang="ch" covers EN + Chinese
+            # overlay text for Rule 5). Falls back to EasyOCR if Paddle isn't
+            # installed. Returns (backend_name, reader).
             try:
-                _ocr_reader = easyocr.Reader(["en", "ch_sim"], gpu=True, verbose=False)
-                print("[INFO] EasyOCR ready (GPU/MPS)", file=sys.stderr)
+                print("[INFO] Loading PaddleOCR (en+ch)...", file=sys.stderr)
+                t0 = time.time()
+                from paddleocr import PaddleOCR
+                reader = None
+                last_err = None
+                for _kwargs in (
+                    {"lang": "ch", "enable_mkldnn": False},  # PaddleOCR v3
+                    {"use_angle_cls": True, "lang": "ch", "show_log": False, "enable_mkldnn": False},  # v2
+                    {"lang": "ch"},  # minimal
+                ):
+                    try:
+                        reader = PaddleOCR(**_kwargs)
+                        break
+                    except Exception as e:
+                        last_err = e
+                if reader is None:
+                    raise last_err or RuntimeError("PaddleOCR init failed")
+                _ocr_reader = ("paddle", reader)
+                print(f"[INFO] PaddleOCR ready in {time.time() - t0:.1f}s", file=sys.stderr)
             except Exception as e:
-                print(f"[INFO] EasyOCR GPU unavailable ({str(e)[:60]}) — using CPU", file=sys.stderr)
-                _ocr_reader = easyocr.Reader(["en", "ch_sim"], gpu=False, verbose=False)
-            print(f"[INFO] EasyOCR ready in {time.time() - t0:.1f}s", file=sys.stderr)
+                print(f"[INFO] PaddleOCR unavailable ({str(e)[:80]}) — falling back to EasyOCR", file=sys.stderr)
+                import easyocr
+                _ocr_reader = ("easyocr", easyocr.Reader(["en", "ch_sim"], gpu=True, verbose=False))
     return _ocr_reader
 
 
@@ -752,14 +793,51 @@ def extract_image_text(img: Image.Image) -> str:
     if cached is not None:
         return cached
 
-    reader = get_ocr_reader()
+    backend, reader = get_ocr_reader()
     arr = np.array(img.convert("RGB"))
-    results = reader.readtext(arr, detail=0)
-    if not results:
-        text = ""
-    else:
-        lines = [str(line).strip() for line in results if line]
-        text = "\n".join(l for l in lines if l)
+    lines: list = []
+    try:
+        if backend == "paddle":
+            # PaddleOCR v3: predict() -> list of dicts with "rec_texts";
+            # v2: ocr() -> [[box, (text, conf)], ...].
+            res = None
+            for meth in ("predict", "ocr"):
+                fn = getattr(reader, meth, None)
+                if fn is None:
+                    continue
+                try:
+                    res = fn(arr)
+                    break
+                except Exception:
+                    continue
+            for page in (res or []):
+                # PaddleOCR v3 OCRResult is dict-like (supports .get/.keys).
+                texts = None
+                try:
+                    texts = page.get("rec_texts") if hasattr(page, "get") else None
+                except Exception:
+                    texts = None
+                if texts:
+                    for t in texts:
+                        if t:
+                            lines.append(str(t).strip())
+                    continue
+                if isinstance(page, (list, tuple)):
+                    for line in page:
+                        try:
+                            txt = line[1][0]
+                        except Exception:
+                            txt = None
+                        if txt:
+                            lines.append(str(txt).strip())
+        else:
+            for line in reader.readtext(arr, detail=0):
+                if line:
+                    lines.append(str(line).strip())
+    except Exception as e:
+        print(f"[WARN] OCR failed: {e}", file=sys.stderr)
+
+    text = "\n".join(l for l in lines if l)
 
     if len(_ocr_text_cache) >= _OCR_CACHE_MAX:
         _ocr_text_cache.clear()

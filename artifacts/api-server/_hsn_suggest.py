@@ -341,8 +341,60 @@ def get_model():
     return _model, _tokenizer
 
 
-def embed_texts(texts: List[str]) -> np.ndarray:
-    """Mean-pool + L2-normalize sentence embeddings -> (N, D)."""
+_gguf_llm = None
+_GGUF_LOCK = None
+
+
+def _get_gguf_embedder():
+    """Lazy-load a GGUF text-embedding model via llama.cpp (CPU/GPU, tiny RAM).
+
+    Defaults to unsloth/embeddinggemma-2-GGUF — Google's EmbeddingGemma (300M,
+    768-dim, multilingual) which is stronger than MiniLM-L6 for HSN + claim
+    matching. Enable with EMBED_BACKEND=gguf; override the repo/file with
+    EMBED_GGUF_REPO / EMBED_GGUF_FILE.
+    """
+    global _gguf_llm, _GGUF_LOCK
+    if _gguf_llm is not None:
+        return _gguf_llm
+    if _GGUF_LOCK is None:
+        import threading
+        _GGUF_LOCK = threading.Lock()
+    with _GGUF_LOCK:
+        if _gguf_llm is None:
+            from llama_cpp import Llama
+            repo = os.environ.get("EMBED_GGUF_REPO") or "unsloth/embeddinggemma-2-GGUF"
+            fname = os.environ.get("EMBED_GGUF_FILE") or "embeddinggemma-2-Q8_0.gguf"
+            print(f"[INFO] Loading GGUF embedder {repo}/{fname}...", file=sys.stderr)
+            t0 = time.time()
+            _gguf_llm = Llama.from_pretrained(
+                repo_id=repo, filename=fname, embedding=True, n_ctx=512, verbose=False,
+            )
+            print(f"[INFO] GGUF embedder loaded in {time.time() - t0:.1f}s", file=sys.stderr)
+    return _gguf_llm
+
+
+def _embed_texts_gguf(texts: List[str], kind: str = "document") -> np.ndarray:
+    """EmbeddingGemma prompt format: queries vs documents use different prefixes."""
+    llm = _get_gguf_embedder()
+    out = []
+    for t in texts:
+        s = (("task: search result | query: " + (t or "")) if kind == "query"
+             else ("title: none | text: " + (t or "")))
+        out.append(llm.create_embedding(s)["data"][0]["embedding"])
+    arr = np.asarray(out, dtype=np.float32)
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    return arr / np.maximum(norms, 1e-12)
+
+
+def embed_texts(texts: List[str], kind: str = "document") -> np.ndarray:
+    """Mean-pool + L2-normalize sentence embeddings -> (N, D).
+
+    Backend selected by EMBED_BACKEND: "gguf" (EmbeddingGemma via llama.cpp) or
+    the default transformers MiniLM path.
+    """
+    if (os.environ.get("EMBED_BACKEND") or "").lower() == "gguf":
+        return _embed_texts_gguf(texts, kind=kind)
+
     import torch
 
     model, tokenizer = get_model()
@@ -1025,7 +1077,7 @@ def suggest(
         else:
             query_texts = [normalize_query(query)]
             weights = (1.0,)
-        query_vecs = embed_texts(query_texts)
+        query_vecs = embed_texts(query_texts, kind="query")
         vecs = get_corpus_vecs().astype(np.float64)
         cand_scores = {}
         preferred_hsn = {}
@@ -1100,7 +1152,7 @@ def _general_suggest(title: str, description: str, query: str, image_sources: Li
     else:
         query_texts = [full_query]
         weights = (1.0,)
-    query_vecs = embed_texts(query_texts)
+    query_vecs = embed_texts(query_texts, kind="query")
 
     with np.errstate(all="ignore"):
         corpus = vecs.astype(np.float64)

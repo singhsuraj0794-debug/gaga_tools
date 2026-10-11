@@ -46,9 +46,7 @@ import re
 import sys
 import time
 from typing import Dict, List, Optional
-from io import BytesIO
 
-import requests
 from PIL import Image
 
 # ─── Model loading ────────────────────────────────────────────────────────────

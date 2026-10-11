@@ -116,26 +116,11 @@ def _load_image(url: str, timeout: int = 15) -> Optional[Image.Image]:
 
 # ─── CLIP zero-shot ───────────────────────────────────────────────────────────
 
-_clip_model = None
-_clip_processor = None
-
 
 def _get_clip():
-    """Lazy-load openai/clip-vit-base-patch32."""
-    global _clip_model, _clip_processor
-    if _clip_model is not None:
-        return _clip_model, _clip_processor
-    import torch
-    from transformers import CLIPProcessor, CLIPModel
-
-    model_name = "openai/clip-vit-base-patch32"
-    print(f"[CLIP_FLAG] Loading {model_name}...", file=sys.stderr)
-    t0 = time.time()
-    _clip_model = CLIPModel.from_pretrained(model_name)
-    _clip_processor = CLIPProcessor.from_pretrained(model_name)
-    _clip_model.eval()
-    print(f"[CLIP_FLAG] Loaded in {time.time()-t0:.1f}s", file=sys.stderr)
-    return _clip_model, _clip_processor
+    """Shared image model from _clip_verify (respects CLIP_MODEL, CLIP or SigLIP)."""
+    from _clip_verify import get_clip
+    return get_clip()
 
 
 def clip_rank_vocabulary(
@@ -152,13 +137,24 @@ def clip_rank_vocabulary(
     import torch.nn.functional as F
 
     model, processor = _get_clip()
-    inputs = processor(text=vocabulary, images=image, return_tensors="pt", padding=True)
     device = next(model.parameters()).device
-    inputs = {k: v.to(device) for k, v in inputs.items()}
+    is_siglip = type(model).__name__.startswith("Siglip")
+    tkw: dict = {"text": vocabulary, "return_tensors": "pt", "truncation": True,
+                 "padding": "max_length" if is_siglip else True}
+    if is_siglip:
+        tkw["max_length"] = 64
+    text_inputs = {k: v.to(device) for k, v in processor(**tkw).items()}
+    image_inputs = {k: v.to(device) for k, v in processor(images=image, return_tensors="pt").items()}
 
     with torch.no_grad():
-        outputs = model(**inputs)
-        probs = F.softmax(outputs.logits_per_image, dim=-1).squeeze(0)
+        tf = model.get_text_features(**text_inputs)
+        imf = model.get_image_features(**image_inputs)
+    tf = tf / tf.norm(dim=-1, keepdim=True)
+    imf = imf / imf.norm(dim=-1, keepdim=True)
+    logits = imf @ tf.T
+    scale = getattr(model, "logit_scale", None)
+    logits = logits * (scale.exp() if scale is not None else 100.0)
+    probs = F.softmax(logits, dim=-1).squeeze(0)
 
     scores = {vocabulary[i]: float(probs[i]) for i in range(len(vocabulary))}
     return dict(sorted(scores.items(), key=lambda x: -x[1]))
