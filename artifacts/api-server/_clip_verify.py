@@ -836,7 +836,15 @@ def extract_image_text(img: Image.Image) -> str:
         return cached
 
     backend, reader = get_ocr_reader()
-    arr = np.array(img.convert("RGB"))
+    # Downscale before OCR: PaddleOCR on CPU is pixel-bound (a 1500px hero image
+    # took ~30s). Overlay/claim text is large, so ~1000px keeps accuracy while
+    # cutting the cost several-fold. Override with OCR_MAX_SIDE.
+    _im = img.convert("RGB")
+    _maxside = int(os.environ.get("OCR_MAX_SIDE") or "1000")
+    if max(_im.size) > _maxside:
+        _scale = _maxside / float(max(_im.size))
+        _im = _im.resize((max(1, int(_im.size[0] * _scale)), max(1, int(_im.size[1] * _scale))))
+    arr = np.array(_im)
     lines: list = []
     try:
         if backend == "paddle":
