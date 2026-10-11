@@ -292,7 +292,7 @@ def get_clip():
         import torch
         from transformers import CLIPProcessor, CLIPModel
 
-        model_name = "openai/clip-vit-base-patch32"
+        model_name = os.environ.get("CLIP_MODEL") or "openai/clip-vit-base-patch32"
         print(f"[INFO] Loading CLIP model: {model_name}", file=sys.stderr)
         t0 = time.time()
         _clip_model = CLIPModel.from_pretrained(model_name)

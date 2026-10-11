@@ -119,3 +119,12 @@ $env:PYTHON_BIN = Get-Python
 # several concurrent CDP sessions; 6 mixed-platform workers ran cleanly here.
 if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "6" }
 if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
+
+# ── Model upgrades for the RTX 5060 Ti (17GB VRAM) ──────────────────────────
+# Stronger CLIP for image rules (markings/moderation/colour) — ViT-L/14 @336.
+if (-not $env:CLIP_MODEL) { $env:CLIP_MODEL = "openai/clip-vit-large-patch14-336" }
+# Qwen2.5-VL-7B (better than 3B) in 4-bit NF4 (~6GB VRAM, fits with CLIP/Marqo).
+if (-not $env:QWEN_MODEL) { $env:QWEN_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct" }
+if (-not $env:QWEN_LOAD_IN_4BIT) { $env:QWEN_LOAD_IN_4BIT = "1" }
+# Shared cross-process product-image disk cache.
+if (-not $env:GAJAB_IMG_CACHE) { $env:GAJAB_IMG_CACHE = Join-Path $env:USERPROFILE ".cache\gajab_images" }

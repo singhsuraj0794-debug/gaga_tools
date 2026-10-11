@@ -68,7 +68,10 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ENTRIES_PATH = os.environ.get("HSN_ENTRIES") or os.path.join(_SCRIPT_DIR, "hsn_entries.json")
 MODEL_NAME = os.environ.get("HSN_MODEL") or "sentence-transformers/all-MiniLM-L6-v2"
 CACHE_PATH = os.path.join(_SCRIPT_DIR, ".hsn_embeddings.npy")
-CLIP_TEXT_CACHE = os.path.join(_SCRIPT_DIR, ".hsn_clip_text.npy")
+# Tag the CLIP text cache by the CLIP model so switching models (e.g. ViT-B/32 →
+# ViT-L/14-336) never reuses embeddings from a different vector space.
+_CLIP_TAG = (os.environ.get("CLIP_MODEL") or "openai/clip-vit-base-patch32").replace("/", "_").replace("-", "_")
+CLIP_TEXT_CACHE = os.path.join(_SCRIPT_DIR, f".hsn_clip_text_{_CLIP_TAG}.npy")
 TOPK = 1
 ALGORITHM_VERSION = "clip-type-v5"
 MAX_TOKENS = 256

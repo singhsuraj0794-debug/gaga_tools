@@ -23,10 +23,15 @@ _processor = None
 _model_path = None
 _lock = threading.Lock()
 
-MODEL_PATH = os.path.expanduser("~/.cache/huggingface/hub/Qwen2.5-VL-3B-Instruct")
-# Default model; override with QWEN_MODEL (HF id) — e.g. a bigger/stronger VL
-# model on the CUDA host (Qwen/Qwen2.5-VL-7B-Instruct) or a text-only model.
-HF_ID = os.environ.get("QWEN_MODEL") or "Qwen/Qwen2.5-VL-3B-Instruct"
+_DEFAULT_HF_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
+# Override with QWEN_MODEL (HF id) — e.g. a bigger/stronger VL model on the CUDA
+# host (Qwen/Qwen2.5-VL-7B-Instruct). MODEL_PATH follows the chosen id so a
+# locally-cached bigger model is used when present, otherwise it is downloaded.
+HF_ID = os.environ.get("QWEN_MODEL") or _DEFAULT_HF_ID
+MODEL_PATH = os.path.expanduser(
+    os.environ.get("QWEN_MODEL_PATH")
+    or os.path.join("~/.cache/huggingface/hub", HF_ID.split("/")[-1])
+)
 
 
 def _pick_device() -> str:
@@ -66,16 +71,34 @@ def get_model():
         )
 
         device = _pick_device()
-        dtype = torch.bfloat16 if device == "cuda" else torch.float32
-        print(f"[QWEN] Loading model from {_model_path} on {device}...", file=sys.stderr)
-        t0 = time.time()
-        _model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            _model_path, torch_dtype=dtype, low_cpu_mem_usage=True,
+        load_4bit = (
+            device == "cuda"
+            and str(os.environ.get("QWEN_LOAD_IN_4BIT", "")).lower() in ("1", "true", "yes", "on")
         )
-        _model = _model.to(device)
+        kwargs: dict = {"low_cpu_mem_usage": True}
+        if load_4bit:
+            # 4-bit NF4 lets a 7B VL model fit in ~6GB VRAM alongside CLIP/Marqo.
+            from transformers import BitsAndBytesConfig
+            kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+            )
+            kwargs["device_map"] = "auto"
+            quant = "4bit"
+        else:
+            kwargs["torch_dtype"] = torch.bfloat16 if device == "cuda" else torch.float32
+            quant = "bf16" if device == "cuda" else "fp32"
+
+        print(f"[QWEN] Loading {_model_path} on {device} ({quant})...", file=sys.stderr)
+        t0 = time.time()
+        _model = Qwen2_5_VLForConditionalGeneration.from_pretrained(_model_path, **kwargs)
+        if not load_4bit:
+            _model = _model.to(device)
         _model.eval()
         _processor = AutoProcessor.from_pretrained(_model_path)
-        print(f"[QWEN] Model loaded in {time.time()-t0:.1f}s on {device}", file=sys.stderr)
+        print(f"[QWEN] Model loaded in {time.time()-t0:.1f}s ({quant})", file=sys.stderr)
         return _model, _processor
 
 
