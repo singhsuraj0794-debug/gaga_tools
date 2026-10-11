@@ -775,6 +775,10 @@ def check_rule6(image_url: str) -> dict:
 
 _ocr_reader = None
 _ocr_lock = None
+# EasyOCR/PaddleOCR readers are NOT reentrant — concurrent inference from the
+# analysis server's worker threads deadlocks. Serialize the actual OCR call.
+import threading as _threading
+_OCR_INFER_LOCK = _threading.Lock()
 
 
 def get_ocr_reader():
@@ -868,6 +872,7 @@ def extract_image_text(img: Image.Image) -> str:
         _im = _im.resize((max(1, int(_im.size[0] * _scale)), max(1, int(_im.size[1] * _scale))))
     arr = np.array(_im)
     lines: list = []
+    _OCR_INFER_LOCK.acquire()
     try:
         if backend == "paddle":
             # PaddleOCR v3: predict() -> list of dicts with "rec_texts";
@@ -908,6 +913,8 @@ def extract_image_text(img: Image.Image) -> str:
                     lines.append(str(line).strip())
     except Exception as e:
         print(f"[WARN] OCR failed: {e}", file=sys.stderr)
+    finally:
+        _OCR_INFER_LOCK.release()
 
     text = "\n".join(l for l in lines if l)
 
