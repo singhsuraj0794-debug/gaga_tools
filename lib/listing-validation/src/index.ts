@@ -884,7 +884,8 @@ export function validateProduct(
   }
 
   // c) HSN code sanity check
-  const hsn = str(getField(row, "Hsn *"));
+  // Excel often stores the HSN as a float ("95030090.0"); drop the decimal.
+  const hsn = str(getField(row, "Hsn *")).replace(/\.0+$/, "");
   const mrp = str(getField(row, "Mrp Price *"));
   const transfer = str(getField(row, "Transfer Price *"));
 

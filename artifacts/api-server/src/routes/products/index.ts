@@ -1672,9 +1672,12 @@ router.post("/products/validate", async (req, res): Promise<void> => {
           for (const { row, i } of hsnRows) {
             const sku = String(_rowField(row, "Sku *", "Sku") ?? "");
             const sheetHsn = _hsnOf(row);
-            const head = sheetHsn.slice(0, 4);
+            // Compare the 2-digit chapter: the suggester is known to be imprecise
+            // at the 4-digit heading (toys 9503 -> 9504), so only gross chapter
+            // mismatches should flag.
+            const head = sheetHsn.slice(0, 2);
             const sugs = sugBySku.get(sku) || [];
-            const ok = sugs.some((s) => s.slice(0, 4) === head);
+            const ok = sugs.some((s) => s.slice(0, 2) === head);
             results[i].checks.push({
               field: "Hsn *",
               check: "HSN correctness",
