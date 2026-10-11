@@ -894,35 +894,7 @@ export function validateProduct(
     );
   }
 
-  // c) HSN code sanity check
-  // Excel often stores the HSN as a float ("95030090.0"); drop the decimal.
-  const hsn = str(getField(row, "Hsn *")).replace(/\.0+$/, "");
-  const mrp = str(getField(row, "Mrp Price *"));
-  const transfer = str(getField(row, "Transfer Price *"));
-
-  if (!isEmpty(hsn)) {
-    const hsnNumeric = /^\d+$/.test(hsn);
-    const hsnLen = hsn.replace(/\D/g, "").length;
-
-    // HSN codes are 4, 6, or 8 digits (8-digit = full classification code).
-    if (!hsnNumeric || hsnLen < 4 || hsnLen > 8 || hsnLen === 5 || hsnLen === 7) {
-      addCheck("Hsn *", "HSN format", false, `HSN "${hsn}" is not a valid 4, 6, or 8 digit numeric code`, "FLAG");
-    } else {
-      addCheck("Hsn *", "HSN format", true, `HSN "${hsn}" is valid`, "PASS");
-    }
-
-    if (hsn === mrp || hsn === transfer) {
-      addCheck(
-        "Hsn *",
-        "HSN vs price collision",
-        false,
-        `HSN "${hsn}" matches MRP/Transfer price — likely a data entry error, not an actual HSN code`,
-        "FLAG",
-      );
-    } else {
-      addCheck("Hsn *", "HSN vs price collision", true, "HSN does not match MRP or Transfer price", "PASS");
-    }
-  }
+  // c) HSN checks removed (format + price-collision) — not required.
 
   // c) Title / product name checks
   if (!isEmpty(productName)) {

@@ -1648,52 +1648,6 @@ router.post("/products/validate", async (req, res): Promise<void> => {
       return result;
     });
 
-    // HSN correctness (chapter-level) via the HSN suggester — the format check
-    // alone can't tell whether 95030090 actually matches the product.
-    const _hsnOf = (row: ListingRow) => String(_rowField(row, "Hsn *", "Hsn") ?? "").replace(/\D/g, "");
-    const hsnRows = rows.map((row, i) => ({ row, i })).filter(({ row }) => _hsnOf(row));
-    if (hsnRows.length > 0) {
-      try {
-        const prods = hsnRows.map(({ row }) => ({
-          sku: String(_rowField(row, "Sku *", "Sku") ?? ""),
-          title: String(_rowField(row, "Product Name *", "Product Name") ?? ""),
-          description: String(_rowField(row, "Description *", "Description") ?? ""),
-          images: _rowImages(row),
-        }));
-        const hsnRes: any = await tryAnalysisServer("hsn-suggest", { products: prods });
-        if (hsnRes?.results) {
-          const sugBySku = new Map<string, string[]>();
-          for (const r of hsnRes.results) {
-            sugBySku.set(
-              String(r.sku),
-              (r.suggestions || []).map((s: any) => String(s.hsn ?? "").replace(/\D/g, "")).slice(0, 3),
-            );
-          }
-          for (const { row, i } of hsnRows) {
-            const sku = String(_rowField(row, "Sku *", "Sku") ?? "");
-            const sheetHsn = _hsnOf(row);
-            // Compare the 2-digit chapter: the suggester is known to be imprecise
-            // at the 4-digit heading (toys 9503 -> 9504), so only gross chapter
-            // mismatches should flag.
-            const head = sheetHsn.slice(0, 2);
-            const sugs = sugBySku.get(sku) || [];
-            const ok = sugs.some((s) => s.slice(0, 2) === head);
-            results[i].checks.push({
-              field: "Hsn *",
-              check: "HSN correctness",
-              passed: ok,
-              decision: ok ? "PASS" : "FLAG",
-              message: ok
-                ? `HSN ${sheetHsn} matches the suggested chapter`
-                : `HSN ${sheetHsn} (chapter ${head}) does not match the suggested ${sugs.slice(0, 2).join(", ") || "(none)"}`,
-            });
-            if (!ok && results[i].decision === "PASS") results[i].decision = "FLAG";
-          }
-        }
-      } catch (e: any) {
-        req.log.warn({ err: e?.message }, "HSN correctness check skipped");
-      }
-    }
     res.json({ results });
   } catch (err: any) {
     req.log.error({ err }, "Rule validation failed");
