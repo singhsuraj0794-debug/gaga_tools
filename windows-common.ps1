@@ -129,3 +129,9 @@ if (-not $env:QWEN_MODEL) { $env:QWEN_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct" }
 if (-not $env:QWEN_LOAD_IN_4BIT) { $env:QWEN_LOAD_IN_4BIT = "1" }
 # Shared cross-process product-image disk cache.
 if (-not $env:GAJAB_IMG_CACHE) { $env:GAJAB_IMG_CACHE = Join-Path $env:USERPROFILE ".cache\gajab_images" }
+
+# EmbeddingGemma text embeddings via the standalone llama.cpp embedding server
+# (started by start-prelisting-tunnel.ps1 on 8081). Falls back to MiniLM if the
+# server isn't up. Better than MiniLM for HSN + claim matching.
+if (-not $env:EMBED_BACKEND) { $env:EMBED_BACKEND = "llama" }
+if (-not $env:EMBED_LLAMA_URL) { $env:EMBED_LLAMA_URL = "http://127.0.0.1:8081" }

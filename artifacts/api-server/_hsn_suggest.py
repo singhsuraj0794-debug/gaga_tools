@@ -386,14 +386,49 @@ def _embed_texts_gguf(texts: List[str], kind: str = "document") -> np.ndarray:
     return arr / np.maximum(norms, 1e-12)
 
 
+def _embed_texts_llama_server(texts: List[str], kind: str = "document") -> np.ndarray:
+    """Embed via a running `llama-server --embedding` (standalone llama.cpp).
+
+    The pip `llama-cpp-python` build can be too old to know newer architectures
+    (e.g. EmbeddingGemma's `gemma-embedding2`); the standalone llama.cpp from
+    winget does. Start it with:
+        llama-server -hf unsloth/embeddinggemma-2-GGUF:UD-Q4_K_XL --embedding --port 8081
+    and set EMBED_BACKEND=llama (+ EMBED_LLAMA_URL, default http://127.0.0.1:8081).
+    """
+    import requests as _rq
+    base = (os.environ.get("EMBED_LLAMA_URL") or "http://127.0.0.1:8081").rstrip("/")
+    out = []
+    for t in texts:
+        s = (("task: search result | query: " + (t or "")) if kind == "query"
+             else ("title: none | text: " + (t or "")))
+        resp = _rq.post(f"{base}/embedding", json={"content": s}, timeout=60)
+        resp.raise_for_status()
+        emb = np.asarray(resp.json()[0]["embedding"], dtype=np.float32)
+        if emb.ndim == 2:          # token-level embeddings -> mean pool
+            emb = emb.mean(axis=0)
+        out.append(emb)
+    arr = np.stack(out, axis=0)
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    return arr / np.maximum(norms, 1e-12)
+
+
 def embed_texts(texts: List[str], kind: str = "document") -> np.ndarray:
     """Mean-pool + L2-normalize sentence embeddings -> (N, D).
 
-    Backend selected by EMBED_BACKEND: "gguf" (EmbeddingGemma via llama.cpp) or
-    the default transformers MiniLM path.
+    Backend selected by EMBED_BACKEND: "llama" (standalone llama.cpp embedding
+    server), "gguf" (llama-cpp-python), or the default transformers MiniLM path.
     """
-    if (os.environ.get("EMBED_BACKEND") or "").lower() == "gguf":
-        return _embed_texts_gguf(texts, kind=kind)
+    _backend = (os.environ.get("EMBED_BACKEND") or "").lower()
+    if _backend == "llama":
+        try:
+            return _embed_texts_llama_server(texts, kind=kind)
+        except Exception as e:
+            print(f"[WARN] llama embedding server unavailable ({str(e)[:80]}) — using transformers", file=sys.stderr)
+    if _backend == "gguf":
+        try:
+            return _embed_texts_gguf(texts, kind=kind)
+        except Exception as e:
+            print(f"[WARN] gguf embedder unavailable ({str(e)[:80]}) — using transformers", file=sys.stderr)
 
     import torch
 

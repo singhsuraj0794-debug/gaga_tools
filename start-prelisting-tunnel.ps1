@@ -39,6 +39,27 @@ if (Test-PortOpen $AnalysisPort) {
     Start-Sleep -Seconds 2
 }
 
+# Embedding server (standalone llama.cpp) — EmbeddingGemma for HSN/claim text
+# embeddings. The pip llama-cpp-python build is too old to load this model, but
+# the winget llama.cpp does. Optional: skipped if llama-server isn't on PATH
+# (the analysis server then falls back to MiniLM).
+$LlamaPort = 8081
+$llama = Get-Command llama-server -ErrorAction SilentlyContinue
+if ($llama) {
+    if (Test-PortOpen $LlamaPort) {
+        Write-Host "Embedding server already running on $LlamaPort"
+    } else {
+        Write-Host "Starting llama.cpp embedding server on $LlamaPort ..."
+        Start-Bg -FilePath $llama.Source -Arguments @(
+            "-hf", "unsloth/embeddinggemma-2-GGUF:UD-Q4_K_XL",
+            "--embedding", "--port", "$LlamaPort", "--host", "127.0.0.1"
+        ) -WorkingDirectory $ApiDir -LogName "llama-embed.log" | Out-Null
+        Start-Sleep -Seconds 3
+    }
+} else {
+    Write-Warning "llama-server not on PATH - HSN/claim embeddings fall back to MiniLM"
+}
+
 $cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
 if (-not $cloudflared) {
     Write-Warning "cloudflared not on PATH - skipping compute tunnel (install it first)"

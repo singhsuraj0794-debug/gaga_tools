@@ -12,7 +12,8 @@ $patterns = @(
     "local_scraper_server.py",
     "_clip_verify_server.py",
     "_analysis_server.py",
-    "local_proxy.py"
+    "local_proxy.py",
+    "llama-server"
 )
 
 foreach ($pat in $patterns) {
