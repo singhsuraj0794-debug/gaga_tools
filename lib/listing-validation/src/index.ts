@@ -799,9 +799,15 @@ function evaluateTitleAccuracy(
   return { passed: false, message: issues.join("; ") };
 }
 
+export interface CategoryTaxonomy {
+  l1: Set<string>;
+  l2: Record<string, Set<string>>;
+}
+
 export function validateProduct(
   row: ListingRow,
   allRows: ListingRow[],
+  taxonomy?: CategoryTaxonomy,
 ): ValidationResult {
   const checks: CheckResult[] = [];
   const sku = str(getField(row, "Sku *"));
@@ -857,7 +863,27 @@ export function validateProduct(
     }
   }
 
-  // b) HSN code sanity check
+  // b) Category must exist in the Gajab taxonomy (L1, then L2 if present).
+  // Previously the category was only checked for PRESENCE, so legacy paths like
+  // "#8| Home & Garden > Household Supplies" (no such L1) passed silently.
+  if (!isEmpty(rawCategory) && taxonomy) {
+    const segs = stripIdPrefix(rawCategory).split(">").map((s) => s.trim()).filter(Boolean);
+    let bad = "";
+    if (!segs[0] || !taxonomy.l1.has(segs[0])) {
+      bad = `L1 "${segs[0] ?? ""}"`;
+    } else if (segs[1] && taxonomy.l2[segs[0]] && !taxonomy.l2[segs[0]].has(segs[1])) {
+      bad = `L2 "${segs[0]} > ${segs[1]}"`;
+    }
+    addCheck(
+      "Category Name *",
+      "Category in taxonomy",
+      !bad,
+      bad ? `Category ${bad} is not in the Gajab taxonomy — pick a valid path` : "Category path exists in the Gajab taxonomy",
+      "FLAG",
+    );
+  }
+
+  // c) HSN code sanity check
   const hsn = str(getField(row, "Hsn *"));
   const mrp = str(getField(row, "Mrp Price *"));
   const transfer = str(getField(row, "Transfer Price *"));
@@ -1388,30 +1414,30 @@ export async function validateImages(
     loadedImages.push({ url, img });
   }
 
-  // ── RULE 3: Resolution ≥ 500x500 for EVERY image ─────────────────
+  // ── RULE 3: Resolution ≥ 350x350 for EVERY image ─────────────────
   for (const { url, img } of loadedImages) {
     const w = img.naturalWidth;
     const h = img.naturalHeight;
     imageChecks.push({ url, loaded: true, width: w, height: h, isDuplicate: false });
-    if (w < 500 || h < 500) {
+    if (w < 350 || h < 350) {
       checks.push({
         field: "Product Images",
-        check: "RULE 3: Resolution ≥ 500x500",
+        check: "RULE 3: Resolution ≥ 350x350",
         passed: false,
         decision: "REJECT",
-        message: `Image ${w}x${h} below 500x500 minimum: ${url.substring(0, 60)}...`,
+        message: `Image ${w}x${h} below 350x350 minimum: ${url.substring(0, 60)}...`,
       });
     }
   }
   // Add a single PASS for resolution if all passed
-  const allResolutionPass = loadedImages.every(({ img }) => img.naturalWidth >= 500 && img.naturalHeight >= 500);
+  const allResolutionPass = loadedImages.every(({ img }) => img.naturalWidth >= 350 && img.naturalHeight >= 350);
   if (allResolutionPass && loadedImages.length > 0) {
     checks.push({
       field: "Product Images",
-      check: "RULE 3: Resolution ≥ 500x500",
+      check: "RULE 3: Resolution ≥ 350x350",
       passed: true,
       decision: "PASS",
-      message: `All ${loadedImages.length} loaded image(s) meet 500x500 minimum`,
+      message: `All ${loadedImages.length} loaded image(s) meet 350x350 minimum`,
     });
   }
 

@@ -1076,7 +1076,7 @@ def check_rule2(image_urls: List[str]) -> dict:
 
 
 def check_rule3(image_urls: List[str]) -> dict:
-    """RULE 3: Resolution >= 500x500 for every image."""
+    """RULE 3: Resolution >= 350x350 for every image."""
     issues = []
     checked = 0
     for url in image_urls[:10]:
@@ -1086,11 +1086,11 @@ def check_rule3(image_urls: List[str]) -> dict:
             continue
         w, h = img.size
         checked += 1
-        if w < 500 or h < 500:
-            issues.append(f"{w}x{h} below 500x500: {url[:60]}")
+        if w < 350 or h < 350:
+            issues.append(f"{w}x{h} below 350x350: {url[:60]}")
     if issues:
         return {"passed": False, "message": "; ".join(issues)}
-    return {"passed": True, "message": f"All {checked} loaded image(s) meet 500x500 minimum"}
+    return {"passed": True, "message": f"All {checked} loaded image(s) meet 350x350 minimum"}
 
 
 # Rule 4 removed — white-background check dropped per product-team request.

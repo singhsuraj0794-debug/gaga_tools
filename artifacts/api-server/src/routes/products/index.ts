@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { logger } from "../../lib/logger";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { getSupabase } from "../../lib/supabase";
 import { tmpPath } from "../../lib/tmp";
 import { pythonBin } from "../../lib/py";
@@ -1601,6 +1601,21 @@ function _rowImages(row: ListingRow): string[] {
   return keys.map((k) => String(row[k] ?? "").trim()).filter(Boolean);
 }
 
+// Gajab taxonomy for the category check (dist/category_l1l4.json).
+let _catTaxonomy: { l1: Set<string>; l2: Record<string, Set<string>> } | null | undefined;
+function loadCategoryTaxonomy() {
+  if (_catTaxonomy !== undefined) return _catTaxonomy ?? undefined;
+  try {
+    const d = JSON.parse(readFileSync(resolveScript("category_l1l4.json"), "utf8"));
+    const l2: Record<string, Set<string>> = {};
+    for (const [k, v] of Object.entries(d.l2 || {})) l2[k] = new Set(v as string[]);
+    _catTaxonomy = { l1: new Set<string>(d.l1 || []), l2 };
+  } catch {
+    _catTaxonomy = null;
+  }
+  return _catTaxonomy ?? undefined;
+}
+
 router.post("/products/validate", async (req, res): Promise<void> => {
   try {
     const { rows } = req.body as { rows: ListingRow[] };
@@ -1608,10 +1623,11 @@ router.post("/products/validate", async (req, res): Promise<void> => {
       res.status(400).json({ error: "rows required" });
       return;
     }
+    const taxonomy = loadCategoryTaxonomy();
     const results = rows.map((row) => {
       let result: any;
       try {
-        result = validateProduct(row, rows);
+        result = validateProduct(row, rows, taxonomy);
       } catch (err: any) {
         result = {
           sku: String(_rowField(row, "Sku *", "Sku") ?? ""),
@@ -1631,6 +1647,50 @@ router.post("/products/validate", async (req, res): Promise<void> => {
       });
       return result;
     });
+
+    // HSN correctness (chapter-level) via the HSN suggester — the format check
+    // alone can't tell whether 95030090 actually matches the product.
+    const _hsnOf = (row: ListingRow) => String(_rowField(row, "Hsn *", "Hsn") ?? "").replace(/\D/g, "");
+    const hsnRows = rows.map((row, i) => ({ row, i })).filter(({ row }) => _hsnOf(row));
+    if (hsnRows.length > 0) {
+      try {
+        const prods = hsnRows.map(({ row }) => ({
+          sku: String(_rowField(row, "Sku *", "Sku") ?? ""),
+          title: String(_rowField(row, "Product Name *", "Product Name") ?? ""),
+          description: String(_rowField(row, "Description *", "Description") ?? ""),
+          images: _rowImages(row),
+        }));
+        const hsnRes: any = await tryAnalysisServer("hsn-suggest", { products: prods });
+        if (hsnRes?.results) {
+          const sugBySku = new Map<string, string[]>();
+          for (const r of hsnRes.results) {
+            sugBySku.set(
+              String(r.sku),
+              (r.suggestions || []).map((s: any) => String(s.hsn ?? "").replace(/\D/g, "")).slice(0, 3),
+            );
+          }
+          for (const { row, i } of hsnRows) {
+            const sku = String(_rowField(row, "Sku *", "Sku") ?? "");
+            const sheetHsn = _hsnOf(row);
+            const head = sheetHsn.slice(0, 4);
+            const sugs = sugBySku.get(sku) || [];
+            const ok = sugs.some((s) => s.slice(0, 4) === head);
+            results[i].checks.push({
+              field: "Hsn *",
+              check: "HSN correctness",
+              passed: ok,
+              decision: ok ? "PASS" : "FLAG",
+              message: ok
+                ? `HSN ${sheetHsn} matches the suggested chapter`
+                : `HSN ${sheetHsn} (chapter ${head}) does not match the suggested ${sugs.slice(0, 2).join(", ") || "(none)"}`,
+            });
+            if (!ok && results[i].decision === "PASS") results[i].decision = "FLAG";
+          }
+        }
+      } catch (e: any) {
+        req.log.warn({ err: e?.message }, "HSN correctness check skipped");
+      }
+    }
     res.json({ results });
   } catch (err: any) {
     req.log.error({ err }, "Rule validation failed");
