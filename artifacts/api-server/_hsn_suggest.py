@@ -1774,7 +1774,10 @@ def correct_product_text(
 
         # Inject brand if missing from title (flagged as "Brand not found in title")
         if brand and brand.strip():
-            brand_clean = brand.strip()
+            # Strip a leading "#NNN|" id prefix — sheets store brands as
+            # "#178| blufurn"; without this it leaked into the corrected title
+            # ("#178| Blufurn King …", "#178| - Grey").
+            brand_clean = re.sub(r"^#\d+\s*\|\s*", "", brand.strip()).strip()
             if brand_clean.lower() not in t.lower():
                 # Check if the title already starts with a DIFFERENT brand-like word
                 # (e.g. title says "Techtiq ..." but sheet brand is "calyxia").
@@ -1854,7 +1857,7 @@ def correct_product_text(
                 t = _to_title_case(t)
             # If claims ate everything, rebuild from available data
             if not t or len(t.split()) < 2:
-                parts = [brand, product_type_label]
+                parts = [re.sub(r"^#\d+\s*\|\s*", "", (brand or "").strip()).strip(), product_type_label]
                 t = " ".join(p for p in parts if p)
                 if t and not _is_allcaps(t):
                     t = _to_title_case(t)
@@ -1869,7 +1872,7 @@ def correct_product_text(
         elif len(t.strip().split()) < 3 and (brand or product_type_label):
             # Too-short title: rebuild from brand + product type so the title
             # follows [Brand] + [Product Type] + [Key Attributes] structure.
-            parts = [brand, product_type_label]
+            parts = [re.sub(r"^#\d+\s*\|\s*", "", (brand or "").strip()).strip(), product_type_label]
             rebuilt = " ".join(p for p in parts if p and p not in t)
             if rebuilt:
                 t = f"{t} {rebuilt}".strip()
