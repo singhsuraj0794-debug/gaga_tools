@@ -393,25 +393,27 @@ def _embed_texts_gguf(texts: List[str], kind: str = "document") -> np.ndarray:
 def _embed_texts_llama_server(texts: List[str], kind: str = "document") -> np.ndarray:
     """Embed via a running `llama-server --embedding` (standalone llama.cpp).
 
-    The pip `llama-cpp-python` build can be too old to know newer architectures
-    (e.g. EmbeddingGemma's `gemma-embedding2`); the standalone llama.cpp from
-    winget does. Start it with:
+    Uses the OpenAI-compatible /v1/embeddings endpoint with a BATCH `input` list
+    (100 short texts in ~0.45s), so the claim-detection workload is fast. The pip
+    `llama-cpp-python` build can be too old to load newer architectures (e.g.
+    EmbeddingGemma's `gemma-embedding2`); the standalone llama.cpp from winget
+    does. Start it with:
         llama-server -hf unsloth/embeddinggemma-2-GGUF:UD-Q4_K_XL --embedding --port 8081
     and set EMBED_BACKEND=llama (+ EMBED_LLAMA_URL, default http://127.0.0.1:8081).
     """
     import requests as _rq
     base = (os.environ.get("EMBED_LLAMA_URL") or "http://127.0.0.1:8081").rstrip("/")
-    out = []
-    for t in texts:
-        s = (("task: search result | query: " + (t or "")) if kind == "query"
-             else ("title: none | text: " + (t or "")))
-        resp = _rq.post(f"{base}/embedding", json={"content": s}, timeout=60)
-        resp.raise_for_status()
-        emb = np.asarray(resp.json()[0]["embedding"], dtype=np.float32)
-        if emb.ndim == 2:          # token-level embeddings -> mean pool
-            emb = emb.mean(axis=0)
-        out.append(emb)
-    arr = np.stack(out, axis=0)
+    prompts = [
+        (("task: search result | query: " + (t or "")) if kind == "query"
+         else ("title: none | text: " + (t or "")))
+        for t in texts
+    ]
+    resp = _rq.post(f"{base}/v1/embeddings", json={"input": prompts, "model": "embeddinggemma"}, timeout=180)
+    resp.raise_for_status()
+    data = resp.json()["data"]
+    arr = np.asarray([d["embedding"] for d in data], dtype=np.float32)
+    if arr.ndim == 3:          # token-level embeddings -> mean pool
+        arr = arr.mean(axis=1)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
     return arr / np.maximum(norms, 1e-12)
 
