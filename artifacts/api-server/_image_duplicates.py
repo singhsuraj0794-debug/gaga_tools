@@ -63,7 +63,7 @@ def load_model():
     global _dinov2_processor, _dinov2_model
     if _dinov2_model is None:
         _dinov2_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
-        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small")
+        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small").to("cuda" if torch.cuda.is_available() else "cpu")
         _dinov2_model.eval()
 
 
@@ -96,7 +96,8 @@ def compute_embeddings(products):
 
 
 def _encode_batch(images):
-    inputs = _dinov2_processor(images=images, return_tensors="pt", padding=True)
+    _dev = "cuda" if torch.cuda.is_available() else "cpu"
+    inputs = {k: v.to(_dev) for k, v in _dinov2_processor(images=images, return_tensors="pt", padding=True).items()}
     with torch.no_grad():
         outputs = _dinov2_model(**inputs)
         embeddings = outputs.last_hidden_state.mean(dim=1)

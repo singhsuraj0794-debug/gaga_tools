@@ -228,7 +228,7 @@ def _load_dinov2():
     try:
         from transformers import AutoImageProcessor, AutoModel
         _dinov2_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
-        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small")
+        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small").to("cuda" if torch.cuda.is_available() else "cpu")
     except Exception:
         pass
 
@@ -239,7 +239,7 @@ def _load_clip():
     try:
         from transformers import CLIPProcessor, CLIPModel
         _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda" if torch.cuda.is_available() else "cpu")
     except Exception:
         pass
 
@@ -277,7 +277,7 @@ def _get_dinov2_emb(url: str):
         return None
     try:
         import torch
-        inputs = _dinov2_processor(images=img, return_tensors="pt")
+        inputs = {k: v.to("cuda" if torch.cuda.is_available() else "cpu") for k, v in _dinov2_processor(images=img, return_tensors="pt").items()}
         with torch.no_grad():
             f = _dinov2_model(**inputs).last_hidden_state.mean(dim=1)
         _DINO_EMB_CACHE[url] = f
@@ -314,7 +314,7 @@ def _get_clip_emb(url: str):
         return None
     try:
         import torch
-        inputs = _clip_processor(images=img, return_tensors="pt")
+        inputs = {k: v.to("cuda" if torch.cuda.is_available() else "cpu") for k, v in _clip_processor(images=img, return_tensors="pt").items()}
         with torch.no_grad():
             f = _clip_model.get_image_features(**inputs)
         _CLIP_EMB_CACHE[url] = f

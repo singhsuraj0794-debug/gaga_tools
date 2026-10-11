@@ -27,15 +27,16 @@ def _load_dinov2():
         if _dinov2_model is not None: return
         print("Loading DINOv2...")
         _dinov2_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small", use_fast=True)
-        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small")
+        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small").to("cuda" if torch.cuda.is_available() else "cpu")
         _dinov2_model.eval()
         print("DINOv2 loaded")
 
 def _dinov2_similarity(img1, img2):
     global _dinov2_processor, _dinov2_model
     if _dinov2_model is None: _load_dinov2()
-    inputs1 = _dinov2_processor(images=img1, return_tensors="pt")
-    inputs2 = _dinov2_processor(images=img2, return_tensors="pt")
+    _dev = "cuda" if torch.cuda.is_available() else "cpu"
+    inputs1 = {k: v.to(_dev) for k, v in _dinov2_processor(images=img1, return_tensors="pt").items()}
+    inputs2 = {k: v.to(_dev) for k, v in _dinov2_processor(images=img2, return_tensors="pt").items()}
     with torch.no_grad():
         emb1 = _dinov2_model(**inputs1).last_hidden_state.mean(dim=1)
         emb2 = _dinov2_model(**inputs2).last_hidden_state.mean(dim=1)

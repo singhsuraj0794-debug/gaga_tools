@@ -203,7 +203,7 @@ def _load_dinov2():
     try:
         from transformers import AutoImageProcessor, AutoModel
         _dinov2_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
-        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small")
+        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small").to("cuda" if torch.cuda.is_available() else "cpu")
     except Exception:
         pass
 
@@ -214,7 +214,7 @@ def _load_clip():
     try:
         from transformers import CLIPProcessor, CLIPModel
         _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda" if torch.cuda.is_available() else "cpu")
     except Exception:
         pass
 
@@ -248,8 +248,8 @@ def _get_dinov2_sim(url1: str, url2: str):
         return None
     try:
         import torch
-        inputs1 = _dinov2_processor(images=img1, return_tensors="pt")
-        inputs2 = _dinov2_processor(images=img2, return_tensors="pt")
+        inputs1 = {k: v.to("cuda" if torch.cuda.is_available() else "cpu") for k, v in _dinov2_processor(images=img1, return_tensors="pt").items()}
+        inputs2 = {k: v.to("cuda" if torch.cuda.is_available() else "cpu") for k, v in _dinov2_processor(images=img2, return_tensors="pt").items()}
         with torch.no_grad():
             f1 = _dinov2_model(**inputs1).last_hidden_state.mean(dim=1)
             f2 = _dinov2_model(**inputs2).last_hidden_state.mean(dim=1)
@@ -268,8 +268,8 @@ def _get_clip_sim(url1: str, url2: str):
         return None
     try:
         import torch
-        inputs1 = _clip_processor(images=img1, return_tensors="pt")
-        inputs2 = _clip_processor(images=img2, return_tensors="pt")
+        inputs1 = {k: v.to("cuda" if torch.cuda.is_available() else "cpu") for k, v in _clip_processor(images=img1, return_tensors="pt").items()}
+        inputs2 = {k: v.to("cuda" if torch.cuda.is_available() else "cpu") for k, v in _clip_processor(images=img2, return_tensors="pt").items()}
         with torch.no_grad():
             f1 = _clip_model.get_image_features(**inputs1)
             f2 = _clip_model.get_image_features(**inputs2)

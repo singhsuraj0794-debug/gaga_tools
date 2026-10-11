@@ -411,6 +411,31 @@ def _clip_text_features(model, processor, labels):
     return feats
 
 
+_clip_img_feat_cache: dict = {}
+
+
+def _clip_image_features(model, processor, image):
+    """CLIP/SigLIP image features, cached by image content.
+
+    clip_zero_shot is called once per taxonomy for the SAME image; SigLIP image
+    encoding (~0.14s) × 6 taxonomies was ~1s/product. Cache by content hash.
+    """
+    import torch
+    key = hash(image.tobytes())
+    hit = _clip_img_feat_cache.get(key)
+    if hit is not None:
+        return hit
+    device = next(model.parameters()).device
+    inputs = {k: v.to(device) for k, v in processor(images=image, return_tensors="pt").items()}
+    with torch.no_grad():
+        feats = model.get_image_features(**inputs)
+    feats = feats / feats.norm(dim=-1, keepdim=True)
+    if len(_clip_img_feat_cache) > 2000:
+        _clip_img_feat_cache.clear()
+    _clip_img_feat_cache[key] = feats
+    return feats
+
+
 def clip_zero_shot(
     image: Image.Image,
     candidate_labels: list,
@@ -429,10 +454,7 @@ def clip_zero_shot(
     device = next(model.parameters()).device
 
     text_feats = _clip_text_features(model, processor, candidate_labels)
-    image_inputs = {k: v.to(device) for k, v in processor(images=image, return_tensors="pt").items()}
-    with torch.no_grad():
-        image_feats = model.get_image_features(**image_inputs)
-    image_feats = image_feats / image_feats.norm(dim=-1, keepdim=True)
+    image_feats = _clip_image_features(model, processor, image)
     logits = image_feats @ text_feats.T
     scale = getattr(model, "logit_scale", None)
     logits = logits * (scale.exp() if scale is not None else 100.0)

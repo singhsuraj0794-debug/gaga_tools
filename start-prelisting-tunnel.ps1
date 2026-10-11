@@ -59,7 +59,7 @@ if ($llama) {
         Write-Host "Starting llama.cpp embedding server on $LlamaPort ..."
         Start-Bg -FilePath $llamaExe -Arguments @(
             "-hf", "unsloth/embeddinggemma-2-GGUF:UD-Q4_K_XL",
-            "--embedding", "--port", "$LlamaPort", "--host", "127.0.0.1"
+            "--embedding", "-ngl", "99", "--port", "$LlamaPort", "--host", "127.0.0.1"
         ) -WorkingDirectory $ApiDir -LogName "llama-embed.log" | Out-Null
         # Wait until the embedding server answers /health before the analysis
         # server makes embedding calls (else the first call would fall back to
