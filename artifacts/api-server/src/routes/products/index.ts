@@ -10,6 +10,7 @@ import { existsSync } from "node:fs";
 import { getSupabase } from "../../lib/supabase";
 import { tmpPath } from "../../lib/tmp";
 import { pythonBin } from "../../lib/py";
+import { validateProduct, type ListingRow } from "@workspace/listing-validation";
 
 const __filename = fileURLToPath(import.meta.url);
 const __parentDirname = path.dirname(__filename);
@@ -1570,6 +1571,69 @@ router.post("/products/visual-verify", async (req, res): Promise<void> => {
     });
   } catch (err: any) {
     req.log.error({ err }, "Visual verification failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/validate ──────────────────────────────────────────
+// Rule-based validation runs on the API host (Windows) instead of the browser.
+// The browser used to run validateProduct() row-by-row AND download every image
+// (validateImages) just to build imageChecks — that image loading was the slow
+// part of Step 2. Here the server runs the shared validateProduct() logic and
+// builds imageChecks from the row's image URLs (exact-URL duplicates only); the
+// authoritative image rules come from clip-verify.
+const _normColKey = (s: string) => s.replace(/[*＊]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+function _rowField(row: ListingRow, ...names: string[]): unknown {
+  const keys = Object.keys(row);
+  for (const n of names) {
+    const nn = _normColKey(n);
+    const k = keys.find((key) => _normColKey(key) === nn);
+    if (k) return row[k];
+  }
+  return undefined;
+}
+
+function _rowImages(row: ListingRow): string[] {
+  const keys = Object.keys(row)
+    .filter((k) => /^product image \d+$/.test(_normColKey(k)))
+    .sort((a, b) => Number(_normColKey(a).replace(/\D/g, "")) - Number(_normColKey(b).replace(/\D/g, "")));
+  return keys.map((k) => String(row[k] ?? "").trim()).filter(Boolean);
+}
+
+router.post("/products/validate", async (req, res): Promise<void> => {
+  try {
+    const { rows } = req.body as { rows: ListingRow[] };
+    if (!Array.isArray(rows) || rows.length === 0) {
+      res.status(400).json({ error: "rows required" });
+      return;
+    }
+    const results = rows.map((row) => {
+      let result: any;
+      try {
+        result = validateProduct(row, rows);
+      } catch (err: any) {
+        result = {
+          sku: String(_rowField(row, "Sku *", "Sku") ?? ""),
+          productName: String(_rowField(row, "Product Name *", "Product Name") ?? ""),
+          category: "",
+          decision: "FLAG",
+          score: 1,
+          checks: [{ field: "Internal", check: "Validation error", passed: false, decision: "FLAG", message: String(err?.message ?? err) }],
+        };
+      }
+      const imgs = _rowImages(row);
+      const seen = new Set<string>();
+      result.imageChecks = imgs.map((url) => {
+        const dup = seen.has(url);
+        if (!dup) seen.add(url);
+        return { url, loaded: true, width: 0, height: 0, isDuplicate: dup };
+      });
+      return result;
+    });
+    res.json({ results });
+  } catch (err: any) {
+    req.log.error({ err }, "Rule validation failed");
     res.status(500).json({ error: err.message });
   }
 });

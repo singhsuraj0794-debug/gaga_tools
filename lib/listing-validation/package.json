@@ -1,0 +1,16 @@
+{
+  "name": "@workspace/listing-validation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "papaparse": "^5.5.4",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/papaparse": "^5.3.16"
+  }
+}

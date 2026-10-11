@@ -558,50 +558,42 @@ export default function PreListingValidator() {
     setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: true } : s)));
 
     const localRows = rows;
-    const results: ValidationResult[] = [];
-    const batchLogs: LogEntry[] = [];
-    const batchNow = now;
+    setStageLabel(`Validating ${localRows.length} products on server...`);
+    setProgress(35);
 
-    for (let i = 0; i < localRows.length; i++) {
-      const row = localRows[i];
-      setCurrentRow(i + 1);
-      const pct = 20 + Math.round(((i + 1) / localRows.length) * 30);
-      setProgress(pct);
-      setStageLabel(`Validating product ${i + 1}/${localRows.length}`);
-
-      let result: ValidationResult;
-      try {
-        result = validateProduct(row, localRows);
-      } catch (err) {
-        console.error("validateProduct crashed on row", i + 1, localRows[i], err);
-        result = {
-          sku: getSku(row) || `row-${i}`,
-          productName: getTitle(row),
-          category: getCategory(row),
-          decision: "FLAG",
-          score: 1,
-          checks: [{ field: "Internal", check: "Validation error", passed: false, decision: "FLAG", message: String(err) }],
-        };
-      }
-
-      // Populate imageChecks (URLs for thumbnails + export feedback) WITHOUT
-      // adding the client-side rule checks — the backend clip-verify is the
-      // authoritative source for image rules (it loads images server-side,
-      // avoiding browser CORS failures on Meesho/etc.).
-      try {
-        const imgResult = await validateImages(row);
-        result = { ...result, imageChecks: imgResult.imageChecks };
-      } catch (err) {
-        console.error("validateImages crashed on row", i + 1, err);
-      }
-
-      results.push(result);
-
-      batchLogs.push({
-        time: batchNow(), row: i + 1, sku: result.sku,
-        productName: result.productName, result,
+    let results: ValidationResult[] = [];
+    try {
+      const resp = await fetch(`${getPrelistingApiBase()}/api/products/validate`, withApiHeaders({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: localRows }),
+        signal: AbortSignal.timeout(1800000),
+      }));
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      const data = await resp.json();
+      results = (data.results as ValidationResult[]) || [];
+      pushLog("SYS", 0, `[VALIDATE] ${results.length} products validated on server (${elapsed()})`);
+    } catch (err: any) {
+      pushLog("SYS", 0, `[VALIDATE] server validation failed (${err?.message || err}) — running locally`);
+      results = localRows.map((row) => {
+        try {
+          return validateProduct(row, localRows);
+        } catch (e: any) {
+          return {
+            sku: getSku(row) || "",
+            productName: getTitle(row),
+            category: getCategory(row),
+            decision: "FLAG",
+            score: 1,
+            checks: [{ field: "Internal", check: "Validation error", passed: false, decision: "FLAG", message: String(e) }],
+          } as ValidationResult;
+        }
       });
     }
+    setCurrentRow(localRows.length);
+    const batchLogs: LogEntry[] = results.map((result, i) => ({
+      time: now(), row: i + 1, sku: result.sku, productName: result.productName, result,
+    }));
 
     _currentResults.current = results;
     _currentRows.current = localRows;

@@ -17,6 +17,7 @@
     "@supabase/supabase-js": "^2.106.0",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
+    "@workspace/listing-validation": "workspace:*",
     "axios": "^1.16.1",
     "cheerio": "^1.2.0",
     "cookie-parser": "^1.4.7",
