@@ -792,6 +792,13 @@ def get_ocr_reader():
                 reader = None
                 last_err = None
                 for _kwargs in (
+                    # PaddleOCR v3, with the extra pipeline models disabled:
+                    # doc-orientation / unwarp / textline-orientation add several
+                    # CPU forwards per image for no benefit on flat product shots.
+                    {"lang": "ch", "enable_mkldnn": False,
+                     "use_doc_orientation_classify": False,
+                     "use_doc_unwarping": False,
+                     "use_textline_orientation": False},
                     {"lang": "ch", "enable_mkldnn": False},  # PaddleOCR v3
                     {"use_angle_cls": True, "lang": "ch", "show_log": False, "enable_mkldnn": False},  # v2
                     {"lang": "ch"},  # minimal
