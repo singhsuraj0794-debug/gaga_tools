@@ -304,10 +304,13 @@ def get_clip():
         model_name = os.environ.get("CLIP_MODEL") or "openai/clip-vit-base-patch32"
         print(f"[INFO] Loading image model: {model_name}", file=sys.stderr)
         t0 = time.time()
-        _clip_model = AutoModel.from_pretrained(model_name)
+        _use_cuda = torch.cuda.is_available()
+        # bf16 on CUDA: halves VRAM and uses the tensor cores (fp32 wasted both).
+        _dt = torch.bfloat16 if _use_cuda else torch.float32
+        _clip_model = AutoModel.from_pretrained(model_name, torch_dtype=_dt)
         _clip_processor = AutoProcessor.from_pretrained(model_name)
         _clip_model.eval()
-        if torch.cuda.is_available():
+        if _use_cuda:
             _clip_model = _clip_model.to("cuda")
         elif torch.backends.mps.is_available():
             _clip_model = _clip_model.to("mps")
@@ -403,7 +406,10 @@ def _clip_text_features(model, processor, labels):
         kwargs["max_length"] = 64
     else:
         kwargs["padding"] = True
-    text_inputs = {k: v.to(device) for k, v in processor(**kwargs).items()}
+    text_inputs = {
+        k: (v.to(device=device, dtype=next(model.parameters()).dtype) if v.is_floating_point() else v.to(device))
+        for k, v in processor(**kwargs).items()
+    }
     with torch.no_grad():
         feats = model.get_text_features(**text_inputs)
     feats = feats / feats.norm(dim=-1, keepdim=True)
@@ -426,7 +432,10 @@ def _clip_image_features(model, processor, image):
     if hit is not None:
         return hit
     device = next(model.parameters()).device
-    inputs = {k: v.to(device) for k, v in processor(images=image, return_tensors="pt").items()}
+    inputs = {
+        k: (v.to(device=device, dtype=next(model.parameters()).dtype) if v.is_floating_point() else v.to(device))
+        for k, v in processor(images=image, return_tensors="pt").items()
+    }
     with torch.no_grad():
         feats = model.get_image_features(**inputs)
     feats = feats / feats.norm(dim=-1, keepdim=True)
@@ -486,7 +495,9 @@ def _get_dinov2():
 
     print(f"[INFO] Loading DINOv2 model: {model_name}", file=sys.stderr)
     _dinov2_processor = AutoImageProcessor.from_pretrained(model_name, use_fast=True)
-    _dinov2_model = AutoModel.from_pretrained(model_name)
+    _dinov2_model = AutoModel.from_pretrained(
+        model_name, torch_dtype=(torch.bfloat16 if _dinov2_device == "cuda" else torch.float32)
+    )
     _dinov2_model.to(_dinov2_device)
     _dinov2_model.eval()
     print(f"[INFO] DINOv2 model loaded on {_dinov2_device}", file=sys.stderr)
@@ -507,7 +518,7 @@ def dinov2_extract_features(image_sources: List[str]) -> Optional[Any]:
             if img is None:
                 continue
             inputs = processor(images=img, return_tensors="pt")
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+            inputs = {k: (v.to(device=device, dtype=next(dinov2_model.parameters()).dtype) if v.is_floating_point() else v.to(device)) for k, v in inputs.items()}
             with torch.no_grad():
                 outputs = model(**inputs)
                 # Use CLS token as global image feature

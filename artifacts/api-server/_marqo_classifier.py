@@ -70,7 +70,11 @@ def _ensure_model():
             _model, _, _preprocess = open_clip.create_model_and_transforms(_MODEL_NAME)
             _tokenizer = open_clip.get_tokenizer(_MODEL_NAME)
             _device = _pick_device()
-            _model = _model.to(_device)
+            # bf16 on CUDA: halves VRAM + tensor cores (fp32 wasted both).
+            if _device == "cuda":
+                _model = _model.to(_device, dtype=torch.bfloat16)
+            else:
+                _model = _model.to(_device)
             _model.eval()
             print(f"[MARQO] Loaded in {time.time() - t0:.0f}s on {_device}", file=sys.stderr)
             return True
@@ -140,6 +144,8 @@ def encode_images(image_sources: List[str], max_images: int = 5):
 
     try:
         stack = torch.cat(tensors, dim=0).to(_device)
+        if next(_model.parameters()).dtype == torch.bfloat16:
+            stack = stack.to(torch.bfloat16)
         with torch.no_grad():
             feat = _model.encode_image(stack)
             feat = feat / feat.norm(dim=-1, keepdim=True)

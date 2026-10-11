@@ -121,9 +121,11 @@ if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "6" }
 if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
 
 # ── Model upgrades for the RTX 5060 Ti (17GB VRAM) ──────────────────────────
-# Stronger image model for the image rules (markings/moderation/colour).
-# SigLIP so400m generally beats CLIP zero-shot. Swap to any CLIP/SigLIP id.
-if (-not $env:CLIP_MODEL) { $env:CLIP_MODEL = "google/siglip-so400m-patch14-384" }
+# Vision model for the image/attribute checks. SigLIP-base (86M) is ~10x lighter
+# than so400m (880M) and the checks only need colour/material/overlay signal, so
+# it is much faster on the GPU (which is the bottleneck). Swap to
+# google/siglip-so400m-patch14-384 for more accuracy at ~10x the cost.
+if (-not $env:CLIP_MODEL) { $env:CLIP_MODEL = "google/siglip-base-patch16-224" }
 # VL model. Qwen2.5-VL-7B (4-bit, ~6GB) is the fastest good option here.
 # Qwen3-VL-8B is newer/stronger but ~3.5x slower on this GPU (measured), so it is
 # NOT the default — enable it with: $env:QWEN_MODEL="Qwen/Qwen3-VL-8B-Instruct"

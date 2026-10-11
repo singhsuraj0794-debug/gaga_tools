@@ -780,7 +780,7 @@ def detect_visual_attributes(image_sources: List[str]) -> tuple:
         from _clip_verify import clip_zero_shot, load_image
         totals = {lbl: 0.0 for lbl in _COMBINED_LABELS}
         loaded = 0
-        for source in image_sources[:3]:
+        for source in image_sources[:1]:  # hero image only — 3x fewer CLIP passes
             image = load_image(str(source))
             if image is None:
                 continue
@@ -1735,31 +1735,14 @@ def correct_product_text(
         if clip_materials:
             _log(f"  Materials: {', '.join(clip_materials)}")
 
-        # Marqo ecommerce embeddings for better product category understanding
-        try:
-            from _marqo_classifier import classify as _marqo_classify
-            from _category_specs import CATEGORY_SCHEMA as _CAT_SCHEMA
-            _marqo_labels = [data.get("full_path", cid) for cid, data in _CAT_SCHEMA.items()]
-            _marqo_ids = list(_CAT_SCHEMA.keys())
-            _marqo_results = _marqo_classify([u for u in images if u], _marqo_labels)
-            if _marqo_results:
-                marqo_label, marqo_score = _marqo_results[0]
-                if marqo_score > 0.05:
-                    marqo_category = _marqo_ids[_marqo_labels.index(marqo_label)]
-                    _log(f"  Marqo classification: {marqo_label} (confidence={marqo_score:.2f})")
-        except Exception as e:
-            _log(f"  Marqo classification skipped: {e}")
-        _tmark("marqo_classify")
+        # Marqo/CLIP-taxonomy/describe_product_context were removed from text
+        # correction — they added GPU cost and shared non-reentrant state (which
+        # deadlocked parallel runs) for output we no longer use. The correction
+        # only needs: image colours/materials (fact-check) + claim detection.
 
-    # ── Product context engine ────────────────────────────────────────
-    # Run CLIP zero-shot taxonomy to understand what the product actually is
-    ctx = describe_product_context(
-        title=title, description=description, images=images,
-        brand=brand, category=category, product_type_label=product_type_label,
-    )
-    for ctx_line in ctx.get("log", []):
-        _log(ctx_line)
-    _tmark("describe_product_context")
+    # ── Product context engine (removed) ──────────────────────────────
+    # detected_type drives only the title type-conflict check below and is
+    # derived from product_type_label / keyword taxonomy — no model needed.
 
     # Map the authoritative product_type_label back to its PRODUCT_TYPES id so
     # the Title accuracy correction uses the same taxonomy as the flag.
@@ -1990,18 +1973,9 @@ def correct_product_text(
             except Exception as e:
                 _log(f"  → Qwen correction failed: {e} (falling back to exclusion only)")
 
-        # ── Qwen VLM spec extraction for description ──────────────────
-        # When use_qwen=True and we have images, extract accurate specs
-        # from the product image to generate a correct description
-        if use_qwen and images:
-            try:
-                from _qwen_specs import extract_specs_qwen, _load_image as qwen_spec_load_image
-                img = qwen_spec_load_image(images[0])
-                if img:
-                    qwen_specs = extract_specs_qwen(img, title or "", description or "")
-                    _log(f"  → Qwen VLM extracted specs: {qwen_specs}")
-            except Exception as e:
-                _log(f"  → Qwen spec extraction failed: {e}")
+        # ── Qwen VLM spec extraction REMOVED ─────────────────────────────
+        # Text correction no longer builds specs/attributes; it only rewrites
+        # title/description from claim + colour/material findings.
 
     # ── DESCRIPTION ────────────────────────────────────────────────────
     if description and description.strip():
