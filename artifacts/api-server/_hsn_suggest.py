@@ -421,9 +421,11 @@ def _embed_texts_llama_server(texts: List[str], kind: str = "document") -> np.nd
         resp.raise_for_status()
         out.extend(d["embedding"] for d in resp.json()["data"])
     arr = np.asarray(out, dtype=np.float32)
+    if arr.ndim == 1:          # single embedding returned flat
+        arr = arr.reshape(1, -1)
     if arr.ndim == 3:          # token-level embeddings -> mean pool
         arr = arr.mean(axis=1)
-    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    norms = np.linalg.norm(arr, axis=-1, keepdims=True)
     return arr / np.maximum(norms, 1e-12)
 
 
