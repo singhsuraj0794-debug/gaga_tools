@@ -64,14 +64,10 @@ def _get_model():
 # ─── Image loading ────────────────────────────────────────────────────────────
 
 def _load_image(url: str, timeout: int = 15) -> Optional[Image.Image]:
-    """Load image from URL."""
-    try:
-        resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
-        return Image.open(BytesIO(resp.content)).convert("RGB")
-    except Exception as e:
-        print(f"[QWEN] Failed to load image {url}: {e}", file=sys.stderr)
-        return None
+    """Load image via the shared cached loader (_clip_verify.load_image) so it
+    reuses the cross-process disk cache instead of re-downloading."""
+    from _clip_verify import load_image
+    return load_image(url, timeout=timeout, fast=True)
 
 
 # ─── VLM query ────────────────────────────────────────────────────────────────

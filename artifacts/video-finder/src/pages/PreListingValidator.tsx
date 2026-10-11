@@ -26,7 +26,6 @@ import {
 import {
   parseFile,
   validateProduct,
-  validateImages,
   runClipVerificationBatched,
   mergeClipResults,
   runHsnSuggestionBatched,
@@ -720,200 +719,6 @@ export default function PreListingValidator() {
 
   // ── Step 1: Title & Description validation ─────────────────────────────
   const [currentRow, setCurrentRow] = useState(0);
-
-  const runStep1 = async () => {
-    setStepLogs((prev) => prev.map((s, i) => (i === 0 ? { ...s, running: true } : s)));
-
-    const allResults: ValidationResult[] = [];
-    const localRows = _currentRows.current;
-    const applied = _appliedCorrections.current;
-
-    for (let i = 0; i < localRows.length; i++) {
-      setCurrentRow(i + 1);
-
-      // Use applied corrections to build a modified row for validation
-      const row = localRows[i];
-      const sku = getSku(row);
-      const corr = applied.get(sku);
-      let effectiveRow = row;
-      if (corr) {
-        effectiveRow = { ...row };
-        if (corr.title) { const k = _findCol(row, "Product Name *", "Product Name"); if (k) effectiveRow[k] = corr.title; }
-        if (corr.description) { const k = _findCol(row, "Description *", "Description"); if (k) effectiveRow[k] = corr.description; }
-      }
-
-      let result: ValidationResult;
-      try {
-        result = validateProduct(effectiveRow, localRows);
-      } catch (err) {
-        console.error("validateProduct crashed on row", i + 1, localRows[i], err);
-        const sku = localRows[i] ? getSku(localRows[i]) || `row-${i + 1}` : `row-${i + 1}`;
-        setLogs((prev) => [
-          ...prev,
-          {
-            time: new Date().toLocaleTimeString("en-US", { hour12: false }),
-            row: i + 1,
-            sku,
-            productName: localRows[i] ? getTitle(localRows[i]) || "?" : "?",
-            result: {
-              sku,
-              productName: localRows[i] ? getTitle(localRows[i]) || "?" : "?",
-              category: "",
-              decision: "REJECT",
-              score: 0,
-              checks: [{
-                field: "Internal",
-                check: "Validation crashed",
-                passed: false,
-                decision: "REJECT",
-                message: err instanceof Error ? err.message : String(err),
-              }],
-            },
-          },
-        ]);
-        continue;
-      }
-
-      allResults.push(result);
-
-      setLogs((prev) => [
-        ...prev,
-        {
-          time: new Date().toLocaleTimeString("en-US", { hour12: false }),
-          row: i + 1,
-          sku: result.sku,
-          productName: corr?.title || result.productName,
-          result,
-        },
-      ]);
-      setResults([...allResults]);
-      _currentResults.current = allResults;
-      scrollLogToBottom();
-
-      await new Promise((r) => setTimeout(r, 50));
-    }
-
-    const passCount = allResults.filter((r) => r.decision === "PASS").length;
-    const flagCount = allResults.filter((r) => r.decision === "FLAG").length;
-    const rejectCount = allResults.filter((r) => r.decision === "REJECT").length;
-    setStepLogs((prev) =>
-      prev.map((s, i) =>
-        i === 0
-          ? {
-              ...s,
-              running: false,
-              done: true,
-              summary: `${allResults.length} products · ${passCount}P ${flagCount}F ${rejectCount}R`,
-            }
-          : s,
-      ),
-    );
-    scrollLogToBottom();
-  };
-
-  // ── Step 2: HSN suggestion ─────────────────────────────────────────────
-  const runStep2 = async () => {
-    setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: true } : s)));
-
-    const localRows = _currentRows.current;
-    const localResults = _currentResults.current;
-    const applied = _appliedCorrections.current;
-    if (localRows.length === 0) {
-      setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: false, done: true, summary: "No products" } : s)));
-      return;
-    }
-
-    const products = localRows.map((row, idx) => {
-      const sku = getSku(row) || localResults[idx]?.sku || "";
-      const corr = applied.get(sku);
-      const images = getImages(row);
-      return { sku, title: corr?.title || getTitle(row), description: corr?.description || getDesc(row), images };
-    });
-
-    try {
-      const hsnResult = await runHsnSuggestionBatched(products);
-      const hsnDataBySku = new Map(hsnResult.results.map((r) => [r.sku, r]));
-      _hsnData.current = hsnDataBySku;
-      const map = new Map<string, HsnSuggestion[]>();
-      const visualMap = new Map<string, string>();
-
-      // Per-product HSN logging
-      const hsnNow = () => new Date().toLocaleTimeString("en-US", { hour12: false });
-      const hsnLogs: LogEntry[] = [];
-      for (const item of hsnResult.results) {
-        if (item.suggestions.length > 0) {
-          map.set(item.sku, item.suggestions);
-          const top = item.suggestions[0];
-          hsnLogs.push({
-            time: hsnNow(), row: 0, sku: item.sku,
-            productName: `HSN: ${item.sku} — top=${top.hsn} GST=${top.gst_rate}% conf=${(top.confidence * 100).toFixed(0)}% | "${top.description?.substring(0, 50)}"`,
-            result: { sku: "", productName: "", category: "", decision: "PASS", score: 0, checks: [] },
-          });
-        }
-        if (item.visualContext) visualMap.set(item.sku, item.visualContext);
-      }
-
-      setHsnSuggestions(map);
-      setHsnVisualContext(visualMap);
-      setHsnAlgorithmVersion(hsnResult.algorithmVersion || hsnResult.results[0]?.algorithmVersion || "");
-
-      // Refine checks + commit top-ranked HSN automatically. Compute the
-      // array synchronously so the next step cannot read a stale ref.
-      if (hsnDataBySku.size > 0) {
-        const updated = _currentResults.current.map((res) => {
-          const item = hsnDataBySku.get(res.sku);
-          if (!item) return res;
-          let r = res;
-          if (item.unitVariation && item.unitVariation !== "optional") {
-            r = applyUnitVariationContext(r, item.unitVariation, item.productTypeLabel);
-          }
-          r = applyTitleAccuracyContext(r, item.productType, item.productTypeLabel, item.titleProductType, item.titleProductTypeLabel, item.titleAccuracyStatus);
-          r = applyCategoryContext(r, item.categoryStatus as any, item.categoryV2Label || item.categoryV2, item.originalCategoryV2Label || item.originalCategoryV2, item.marqoConfidence);
-          r = applyValidationHints(r, item.validationHints, item.productType);
-          // AI corrections will be populated after HSN, keep undefined for now
-          if (item.opClaims && item.opClaims.length > 0) {
-            const flags = item.opClaims.slice(0, 3).join("; ");
-            r.checks = r.checks.map((c) => {
-              if (c.check !== "Misleading claims") return c;
-              return { ...c, passed: false, decision: "FLAG" as Decision, message: `Semantic claim: "${flags}"` };
-            });
-          }
-          return r;
-        });
-        _currentResults.current = updated;
-        setResults(updated);
-      }
-
-      // Commit top-ranked HSN
-      setHsnSelections(() => {
-        const next = new Map<string, { hsn: string; tax: string }>();
-        for (const [sku, suggestions] of map) {
-          const designated = designatedHsn(suggestions[0]);
-          if (designated) next.set(sku, designated);
-        }
-        return next;
-      });
-
-      if (hsnLogs.length > 0) {
-        setLogs((prev) => [...prev, ...hsnLogs]);
-        scrollLogToBottom();
-      }
-
-      setStepLogs((prev) =>
-        prev.map((s, i) =>
-          i === 1 ? { ...s, running: false, done: true, summary: `${map.size} products suggested · ${hsnResult.algorithmVersion || ""}` } : s,
-        ),
-      );
-    } catch (err) {
-      console.error("HSN suggestion failed:", err);
-      setStepLogs((prev) =>
-        prev.map((s, i) =>
-          i === 1 ? { ...s, running: false, done: true, summary: `Failed: ${err instanceof Error ? err.message : String(err)}` } : s,
-        ),
-      );
-    }
-  };
-
   // ── Step 2 inline (called from new pipeline, no stepLog management) ───
   const runStep2_inline = async () => {
     const localRows = _currentRows.current;
@@ -999,125 +804,6 @@ export default function PreListingValidator() {
     }
   };
 
-  // ── Step 3: Image verification ─────────────────────────────────────────
-  const runStep3 = async () => {
-    setStepLogs((prev) => prev.map((s, i) => (i === 1 ? { ...s, running: true } : s)));
-
-    const localRows = _currentRows.current;
-    const currentR = _currentResults.current;
-    let updatedResults = [...currentR];
-    const now = () => new Date().toLocaleTimeString("en-US", { hour12: false });
-    const batchLogs: LogEntry[] = [];
-    const pushLog = (sku: string, row: number, msg: string) => {
-      batchLogs.push({
-        time: now(), row, sku, productName: msg,
-        result: { sku: "", productName: "", category: "", decision: "PASS", score: 0, checks: [] },
-      });
-    };
-
-    // 3a: Client-side image checks (Rules 1-4)
-    for (let i = 0; i < updatedResults.length; i++) {
-      const r = updatedResults[i];
-      const row = localRows[i];
-      const sku = r.sku;
-      const title = getTitle(row).substring(0, 40);
-      pushLog(sku, i + 1, `[IMG] Checking ${sku} — "${title}..."`);
-      try {
-        const imageResult = await validateImages(row);
-        updatedResults[i] = {
-          ...updatedResults[i],
-          checks: [...updatedResults[i].checks, ...imageResult.checks],
-          imageChecks: imageResult.imageChecks,
-        };
-        const imgCount = imageResult.imageChecks?.length ?? 0;
-        const dupes = imageResult.imageChecks?.filter((ic) => ic.isDuplicate).length ?? 0;
-        const ops = imageResult.imageChecks?.filter((ic) => ic.hasOpsClaim).length ?? 0;
-        const failed = imageResult.imageChecks?.filter((ic) => !ic.loaded).length ?? 0;
-        const imgIssues = [
-          dupes > 0 ? `${dupes} dupe` : "",
-          ops > 0 ? `${ops} ops-claim` : "",
-          failed > 0 ? `${failed} failed-load` : "",
-        ].filter(Boolean).join(", ");
-        pushLog(sku, i + 1, `[IMG] ${sku} — ${imgCount} images${imgIssues ? ` · Issues: ${imgIssues}` : " · All OK"}`);
-
-        const hasReject = updatedResults[i].checks.some((c) => c.decision === "REJECT" && !c.passed);
-        const hasFlag = updatedResults[i].checks.some((c) => c.decision === "FLAG" && !c.passed);
-        const total = updatedResults[i].checks.length;
-        const passedC = updatedResults[i].checks.filter((c) => c.passed).length;
-        if (hasReject) {
-          updatedResults[i].decision = "REJECT";
-          updatedResults[i].score = Math.max(0, Math.round((passedC / total) * 6));
-        } else if (hasFlag && updatedResults[i].decision === "PASS") {
-          updatedResults[i].decision = "FLAG";
-          updatedResults[i].score = Math.min(10, 7 + Math.round((passedC / total) * 3));
-        } else {
-          updatedResults[i].score = Math.min(10, 7 + Math.round((passedC / total) * 3));
-        }
-      } catch (err) {
-        pushLog(sku, i + 1, `[IMG] ${sku} — ERROR: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      await new Promise((r) => setTimeout(r, 30));
-    }
-
-    setResults(updatedResults);
-    _currentResults.current = updatedResults;
-
-    // 3b: Server-side Rules 5-7 (CLIP + OCR)
-    const clipProducts: ClipVerificationProduct[] = updatedResults
-      .map((r, idx) => {
-        const row = localRows[idx];
-        const imageUrls = getImages(row);
-        return { sku: r.sku, firstImageUrl: imageUrls[0] || "", allImageUrls: imageUrls };
-      })
-      .filter((p) => p.firstImageUrl);
-
-    if (clipProducts.length > 0) {
-      pushLog("BATCH", 0, `[CLIP] Verifying ${clipProducts.length} products with images...`);
-      try {
-        const clipResult = await runClipVerificationBatched(clipProducts, "", (bi, tb) => {
-          pushLog("BATCH", 0, `[CLIP] Batch ${bi}/${tb}...`);
-        });
-        const clipMap = new Map(clipResult.results.map((cr) => [cr.sku, cr]));
-
-        for (const cr of clipResult.results) {
-          const parts: string[] = [];
-          if (cr.rule5?.hasMarkings) parts.push(`RULE5: markings on img1`);
-          if (cr.rule6?.anyFlagged) parts.push(`RULE6: content issue`);
-          if (cr.rule7?.anyFlagged) {
-            const ocr = cr.rule7.images?.map((image) => image.ocrText).filter(Boolean).join("; ");
-            parts.push(`RULE7: ops claim${ocr ? ` OCR=\"${ocr.substring(0, 40)}\"` : ""}`);
-          }
-          if (!cr.rule5?.hasMarkings && !cr.rule6?.anyFlagged && !cr.rule7?.anyFlagged) parts.push("All OK");
-          pushLog(cr.sku, 0, `[CLIP] ${cr.sku} — ${parts.join(" | ")}`);
-        }
-        updatedResults = updatedResults.map((r) => {
-          const clipItem = clipMap.get(r.sku);
-          return clipItem ? mergeClipResults(r, clipItem) : r;
-        });
-        setResults(updatedResults);
-        _currentResults.current = updatedResults;
-      } catch (err) {
-        pushLog("BATCH", 0, `[CLIP] FAILED — ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    // Push ALL step-3 logs in ONE batch
-    if (batchLogs.length > 0) {
-      setLogs((prev) => [...prev, ...batchLogs]);
-      scrollLogToBottom();
-    }
-
-    const dupCount = updatedResults.filter((r) => r.imageChecks?.some((ic) => ic.isDuplicate)).length;
-    setStepLogs((prev) =>
-      prev.map((s, i) =>
-        i === 2
-          ? { ...s, running: false, done: true, summary: `${updatedResults.length} checked${dupCount ? ` · ${dupCount} w/ dupes` : ""}` }
-          : s,
-      ),
-    );
-    scrollLogToBottom();
-  };
-
   // ── Revalidation ────────────────────────────────────────────────────────
   const revalidate = async () => {
     const t0 = performance.now();
@@ -1144,50 +830,51 @@ export default function PreListingValidator() {
     setStageLabel("Re-running validation checks...");
     setStepLogs((prev) => prev.map((s, i) => (i === 0 ? { ...s, running: true } : s)));
 
-    const localResults = _currentResults.current;
     const localRows = _currentRows.current;
     const applied = _appliedCorrections.current;
-    const results: ValidationResult[] = [];
 
-    for (let i = 0; i < localRows.length; i++) {
-      const row = localRows[i];
-      setCurrentRow(i + 1);
-      setProgress(10 + Math.round(((i + 1) / localRows.length) * 30));
-
+    // Build effective rows (apply any title/description corrections) then run
+    // the rule validation on the server (Windows) instead of per-row in the
+    // browser — no image downloads in the browser.
+    const effectiveRows = localRows.map((row) => {
       const effectiveRow = { ...row };
-      const sku = getSku(row);
-      if (applied.has(sku)) {
-        const corr = applied.get(sku)!;
+      const corr = applied.get(getSku(row));
+      if (corr) {
         if (corr.title) { const k = _findCol(row, "Product Name *", "Product Name"); if (k) effectiveRow[k] = corr.title; }
         if (corr.description) { const k = _findCol(row, "Description *", "Description"); if (k) effectiveRow[k] = corr.description; }
       }
-      let result: ValidationResult;
-      try {
-        result = validateProduct(effectiveRow, localRows);
-      } catch (err) {
-        result = {
-          sku, productName: getTitle(row),
-          category: getCategory(row),
-          decision: "FLAG", score: 1,
-          checks: [{ field: "Internal", check: "Error", passed: false, decision: "FLAG", message: String(err) }],
-        };
-      }
-      const imgChk = await validateImages(effectiveRow);
-      result = { ...result, imageChecks: imgChk.imageChecks };
+      return effectiveRow;
+    });
 
-      // Preserve CLIP rule5/6/7 from previous run
-      const prevClip = localResults.find((r) => r.sku === sku);
-      if (prevClip) {
-        const clipChecks = prevClip.checks.filter((c) =>
-          c.check.startsWith("RULE 5") || c.check.startsWith("RULE 6") || c.check.startsWith("RULE 7")
-        );
-        if (clipChecks.length > 0) {
-          result = { ...result, checks: [...result.checks, ...clipChecks] };
+    setStageLabel(`Re-validating ${effectiveRows.length} products on server...`);
+    setProgress(35);
+    let results: ValidationResult[] = [];
+    try {
+      const resp = await fetch(`${getPrelistingApiBase()}/api/products/validate`, withApiHeaders({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: effectiveRows }),
+        signal: AbortSignal.timeout(1800000),
+      }));
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      const data = await resp.json();
+      results = (data.results as ValidationResult[]) || [];
+    } catch (err: any) {
+      pushLog("SYS", 0, `[VALIDATE] server re-validation failed (${err?.message || err}) — running locally`);
+      results = effectiveRows.map((effectiveRow, i) => {
+        try {
+          return validateProduct(effectiveRow, effectiveRows);
+        } catch (e: any) {
+          return {
+            sku: getSku(localRows[i]) || "", productName: getTitle(localRows[i]),
+            category: getCategory(localRows[i]),
+            decision: "FLAG", score: 1,
+            checks: [{ field: "Internal", check: "Error", passed: false, decision: "FLAG", message: String(e) }],
+          } as ValidationResult;
         }
-      }
-
-      results.push(result);
+      });
     }
+    setCurrentRow(effectiveRows.length);
 
     // Re-apply CLIP rule5/6/7 from _clipMapRef
     const clipMap = _clipMapRef.current;

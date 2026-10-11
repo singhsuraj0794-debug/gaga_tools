@@ -118,6 +118,26 @@ _image_pil_cache: Dict[str, "Image.Image"] = {}
 _IMAGE_CACHE_MAX = 150          # raw bytes (~30MB)
 _IMAGE_PIL_CACHE_MAX = 24       # decoded PIL images (~120MB)
 
+# ── Shared cross-process disk cache ─────────────────────────────────────────
+# clip-verify, HSN, correct-text, Qwen, Marqo and sheet-duplicates all download
+# the SAME product images; without a shared cache each URL is fetched 4-6x per
+# run. Cache the raw bytes on disk keyed by URL so any process reuses them.
+# Override the location with GAJAB_IMG_CACHE.
+_IMG_CACHE_DIR = os.environ.get("GAJAB_IMG_CACHE") or os.path.join(
+    os.path.expanduser("~"), ".cache", "gajab_images"
+)
+try:
+    os.makedirs(_IMG_CACHE_DIR, exist_ok=True)
+except OSError:
+    _IMG_CACHE_DIR = None
+
+
+def _disk_cache_path(url: str) -> Optional[str]:
+    if not _IMG_CACHE_DIR:
+        return None
+    import hashlib
+    return os.path.join(_IMG_CACHE_DIR, hashlib.sha256(url.encode("utf-8")).hexdigest() + ".img")
+
 
 _http_session = None
 _http_session_fast = None
@@ -210,6 +230,15 @@ def load_image(source: str, timeout: int = 15, fast: bool = False) -> Optional[I
                 return cached
             data = _image_bytes_cache.get(source)
             if data is None:
+                # Shared cross-process disk cache (see _disk_cache_path).
+                disk = _disk_cache_path(source)
+                if disk and os.path.exists(disk) and os.path.getsize(disk) > 0:
+                    try:
+                        with open(disk, "rb") as fh:
+                            data = fh.read()
+                    except OSError:
+                        data = None
+            if data is None:
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                 }
@@ -234,6 +263,15 @@ def load_image(source: str, timeout: int = 15, fast: bool = False) -> Optional[I
                 if len(_image_bytes_cache) >= _IMAGE_CACHE_MAX:
                     _image_bytes_cache.pop(next(iter(_image_bytes_cache)), None)
                 _image_bytes_cache[source] = data
+                # Persist to the shared disk cache so other processes reuse it.
+                if disk:
+                    try:
+                        tmp = disk + ".tmp"
+                        with open(tmp, "wb") as fh:
+                            fh.write(data)
+                        os.replace(tmp, disk)
+                    except OSError:
+                        pass
             img = Image.open(io.BytesIO(data)).convert("RGB")
             if len(_image_pil_cache) >= _IMAGE_PIL_CACHE_MAX:
                 _image_pil_cache.pop(next(iter(_image_pil_cache)), None)

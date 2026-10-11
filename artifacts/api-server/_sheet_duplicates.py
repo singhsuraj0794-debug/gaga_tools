@@ -31,10 +31,13 @@ PROXIED_RE = re.compile(r'^https://resize\.gajab\.com/V[^/]+/(https?://.*)')
 # (not as decoded PIL objects in RAM) so large sheets (1000s of images) don't
 # OOM the process. Files persist across runs in the temp dir, so re-running the
 # same sheet reuses downloads instead of re-fetching everything.
-# Persistent disk cache location — NOT the OS temp dir (macOS clears
-# /var/folders on reboot, forcing a full re-download every run). Under
-# ~/Library/Caches it survives reboots so re-runs reuse downloaded images.
-_CACHE_DIR = os.path.join(os.path.expanduser("~/Library/Caches"), "gajab_sheet_dup_cache")
+# Persistent disk cache location — the SAME directory _clip_verify.load_image
+# uses, so images downloaded by clip-verify/HSN/Qwen/correct-text are reused
+# here (and vice-versa) instead of being fetched again. Override with
+# GAJAB_IMG_CACHE.
+_CACHE_DIR = os.environ.get("GAJAB_IMG_CACHE") or os.path.join(
+    os.path.expanduser("~"), ".cache", "gajab_images"
+)
 try:
     os.makedirs(_CACHE_DIR, exist_ok=True)
 except OSError:
