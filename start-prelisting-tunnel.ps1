@@ -54,7 +54,16 @@ if ($llama) {
             "-hf", "unsloth/embeddinggemma-2-GGUF:UD-Q4_K_XL",
             "--embedding", "--port", "$LlamaPort", "--host", "127.0.0.1"
         ) -WorkingDirectory $ApiDir -LogName "llama-embed.log" | Out-Null
-        Start-Sleep -Seconds 3
+        # Wait until the embedding server answers /health before the analysis
+        # server makes embedding calls (else the first call would fall back to
+        # MiniLM and cache mismatched vectors).
+        for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+                $h = Invoke-WebRequest -Uri "http://127.0.0.1:$LlamaPort/health" -TimeoutSec 3 -UseBasicParsing
+                if ($h.StatusCode -eq 200) { Write-Host "Embedding server ready"; break }
+            } catch { }
+        }
     }
 } else {
     Write-Warning "llama-server not on PATH - HSN/claim embeddings fall back to MiniLM"

@@ -67,7 +67,11 @@ import numpy as np
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ENTRIES_PATH = os.environ.get("HSN_ENTRIES") or os.path.join(_SCRIPT_DIR, "hsn_entries.json")
 MODEL_NAME = os.environ.get("HSN_MODEL") or "sentence-transformers/all-MiniLM-L6-v2"
-CACHE_PATH = os.path.join(_SCRIPT_DIR, ".hsn_embeddings.npy")
+# Tag the corpus cache by the embedding backend/model so switching backends
+# (MiniLM 384-d ↔ EmbeddingGemma 768-d) never reuses a mismatched vector space.
+_EMBED_TAG = (((os.environ.get("EMBED_BACKEND") or "transformers") + "_" +
+               (os.environ.get("HSN_MODEL") or "minilm")).replace("/", "_").replace("-", "_").replace(".", "_"))
+CACHE_PATH = os.path.join(_SCRIPT_DIR, f".hsn_embeddings_{_EMBED_TAG}.npy")
 # Tag the CLIP text cache by the CLIP model so switching models (e.g. ViT-B/32 →
 # ViT-L/14-336) never reuses embeddings from a different vector space.
 _CLIP_TAG = (os.environ.get("CLIP_MODEL") or "openai/clip-vit-base-patch32").replace("/", "_").replace("-", "_")
