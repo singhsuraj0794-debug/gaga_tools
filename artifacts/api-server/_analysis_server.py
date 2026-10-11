@@ -311,6 +311,17 @@ def _warm_marqo():
             _encode_labels([p["full"] for p in cv._index.get("paths", [])])
         _marqo_ready = True
         print(f"[ANALYSIS] Marqo warmed in {time.time() - t0:.1f}s", file=sys.stderr)
+        # Also warm the image model (SigLIP/CLIP), DINOv2 and the OCR reader —
+        # correct-text / clip-verify use all three and the FIRST request used to
+        # pay their cold load (tens of seconds, which looked like a hang).
+        try:
+            from _clip_verify import get_clip, _get_dinov2, get_ocr_reader
+            get_clip()
+            _get_dinov2()
+            get_ocr_reader()
+            print(f"[ANALYSIS] image models warmed in {time.time() - t0:.1f}s", file=sys.stderr)
+        except Exception as e:
+            print(f"[ANALYSIS] image warm-up failed: {e}", file=sys.stderr)
     except Exception as e:
         print(f"[ANALYSIS] warm-up failed: {e}", file=sys.stderr)
 

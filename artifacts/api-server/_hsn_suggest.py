@@ -2551,6 +2551,11 @@ def correct_product_text(
         except Exception:
             pass  # T5 not available — return mechanically-cleaned result
 
+    # Guard: never suggest a title that collapsed to a brand-only fragment or a
+    # handful of words (a previous bug emitted "#178| - Grey" / "Blufurn").
+    if out_title is not None and len(str(out_title).split()) < 3:
+        out_title = None
+
     return {"title": out_title, "description": out_desc, "log": log}
 
 

@@ -1010,7 +1010,9 @@ export default function PreListingValidator() {
       let _failCount = 0;
       const result = await runTextCorrectionBatched(correctProducts, "", useQwen, (bi, tb) => {
         pushLog("BATCH", 0, `[TXT] Batch ${bi}/${tb}...`);
-      }, useQwen ? 2 : 10, (bi, tb, err) => {
+        setStageLabel(`Generating text corrections… batch ${bi}/${tb}`);
+        setProgress(80 + Math.round((bi / tb) * 15));
+      }, useQwen ? 2 : 20, (bi, tb, err) => {
         _failCount++;
         pushLog("BATCH", 0, `[TXT] ⚠️ Batch ${bi}/${tb} FAILED — ${err instanceof Error ? err.message : String(err)}`);
       });
