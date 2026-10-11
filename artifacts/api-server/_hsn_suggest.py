@@ -405,13 +405,22 @@ def _embed_texts_llama_server(texts: List[str], kind: str = "document") -> np.nd
     base = (os.environ.get("EMBED_LLAMA_URL") or "http://127.0.0.1:8081").rstrip("/")
     prompts = [
         (("task: search result | query: " + (t or "")) if kind == "query"
-         else ("title: none | text: " + (t or "")))
+         else ("title: none | text: " + (t or "")))[:2000]
         for t in texts
     ]
-    resp = _rq.post(f"{base}/v1/embeddings", json={"input": prompts, "model": "embeddinggemma"}, timeout=180)
-    resp.raise_for_status()
-    data = resp.json()["data"]
-    arr = np.asarray([d["embedding"] for d in data], dtype=np.float32)
+    # Chunk so an over-long input can't 400 the whole batch; the server's
+    # context is limited, so a single huge text would otherwise reject everything.
+    out: list = []
+    CHUNK = 64
+    for i in range(0, len(prompts), CHUNK):
+        resp = _rq.post(
+            f"{base}/v1/embeddings",
+            json={"input": prompts[i:i + CHUNK], "model": "embeddinggemma"},
+            timeout=180,
+        )
+        resp.raise_for_status()
+        out.extend(d["embedding"] for d in resp.json()["data"])
+    arr = np.asarray(out, dtype=np.float32)
     if arr.ndim == 3:          # token-level embeddings -> mean pool
         arr = arr.mean(axis=1)
     norms = np.linalg.norm(arr, axis=1, keepdims=True)
