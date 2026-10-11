@@ -1963,13 +1963,10 @@ export default function PreListingValidator() {
   // Image review counts (manual review — not auto-correctable)
   const imgDupes = results.filter((r) => r.imageChecks?.some((ic) => ic.isDuplicate)).length;
   const imgOpsClaims = results.filter((r) => r.imageChecks?.some((ic) => ic.hasOpsClaim)).length;
-  const imgMarkings = results.filter((r) =>
-    r.checks.some((c) => c.check === "RULE 5: Promotional overlay (1st image)" && !c.passed && c.message !== "Markings check pending — run DINOv2+CLIP to verify"),
-  ).length;
   const imgContent = results.filter((r) =>
     r.checks.some((c) => c.check === "RULE 6: Content restrictions" && !c.passed && c.message !== "Content check pending — run DINOv2+CLIP to verify"),
   ).length;
-  const imgReviewCount = imgDupes + imgOpsClaims + imgMarkings + imgContent;
+  const imgReviewCount = imgDupes + imgOpsClaims + imgContent;
   const hasImageReviewItems = imgReviewCount > 0;
 
   // ── Toolbar component ───────────────────────────────────────────────────
@@ -2001,7 +1998,6 @@ export default function PreListingValidator() {
           <div className="absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg py-1 z-20 min-w-[240px]">
             <div className="px-3 py-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Manual Review Required</div>
             {imgDupes > 0 && <div className="px-3 py-1 text-xs text-amber-700">Duplicate images: {imgDupes} product{imgDupes !== 1 ? "s" : ""}</div>}
-            {imgMarkings > 0 && <div className="px-3 py-1 text-xs text-amber-700">Promotional overlay: {imgMarkings} product{imgMarkings !== 1 ? "s" : ""}</div>}
             {imgOpsClaims > 0 && <div className="px-3 py-1 text-xs text-red-700">Ops claims on images: {imgOpsClaims} product{imgOpsClaims !== 1 ? "s" : ""}</div>}
             {imgContent > 0 && <div className="px-3 py-1 text-xs text-red-700">Content restrictions: {imgContent} product{imgContent !== 1 ? "s" : ""}</div>}
             <div className="border-t mt-1 pt-1 px-3 py-1 text-[11px] text-slate-400 italic">Replace flagged images manually in the sheet</div>

@@ -1511,16 +1511,7 @@ export async function validateImages(
     });
   }
 
-  // ── RULE 5: First image markings (logos/text/watermarks) ─────────
-  // Placeholder — requires server-side CLIP, marked as FLAG
-  // Will be filled in by runClipVerification() later
-  checks.push({
-    field: "Product Images",
-    check: "RULE 5: Promotional overlay (1st image)",
-    passed: false,
-    decision: "FLAG",
-    message: "Markings check pending — run DINOv2+CLIP to verify",
-  });
+  // RULE 5 removed (promotional overlay is folded into RULE 7 now).
 
   // ── RULE 6: Content restrictions (all images) ────────────────────
   // Placeholder — requires server-side CLIP, marked as FLAG
@@ -1791,43 +1782,7 @@ export function mergeClipResults(
     });
   }
 
-  // RULE 5: Markings
-  const r5 = clipResult.rule5;
-  if (r5) {
-    const rule5Idx = updated.checks.findIndex((c) => c.check === "RULE 5: Promotional overlay (1st image)");
-    const r5Check: { field: string; check: string; passed: boolean; decision: Decision; message: string } = {
-      field: "Product Images",
-      check: "RULE 5: Promotional overlay (1st image)",
-      passed: false,
-      decision: "FLAG",
-      message: "Markings check pending",
-    };
-    if (r5.error) {
-      r5Check.passed = false;
-      r5Check.decision = "FLAG";
-      r5Check.message = `Markings check failed: ${r5.error}`;
-    } else if (r5.flagged) {
-      const flaggedChecks = r5.details?.filter((d: any) => d.flagged).map((d: any) => d.check).join(", ") || "markings detected";
-      const detailStr = r5.details
-        ? r5.details.map((d: any) => `${d.check}: ${((d.ratio || 0) * 100).toFixed(0)}%`).join(", ")
-        : "";
-      r5Check.passed = false;
-      r5Check.decision = "FLAG";
-      r5Check.message = `First image flagged for: ${flaggedChecks}${detailStr ? ` (scores: ${detailStr})` : ""}`;
-    } else {
-      const detailStr = r5.details
-        ? r5.details.map((d: any) => `${d.check}: clear`).join(", ")
-        : "";
-      r5Check.passed = true;
-      r5Check.decision = "PASS";
-      r5Check.message = `First image is clean — no markings detected${detailStr ? ` (${detailStr})` : ""}`;
-    }
-    if (rule5Idx >= 0) {
-      updated.checks[rule5Idx] = r5Check;
-    } else {
-      updated.checks.push(r5Check);
-    }
-  }
+  // RULE 5 removed (folded into RULE 7).
 
   // RULE 6: Content restrictions
   const r6 = clipResult.rule6;
@@ -1888,16 +1843,26 @@ export function mergeClipResults(
       r7Check.decision = "WARN";
       r7Check.message = `Image could not be loaded (broken or unreachable URL)${badUrl ? `: ${badUrl.substring(0, 80)}` : ""} — ops-claim check skipped`;
     } else if (r7.anyFlagged) {
-      // Report the EXACT OCR text that matched, so reviewers can verify.
+      const parts: string[] = [];
+      // CLIP promotional-overlay (sale badge) on the hero image.
+      if ((r7 as any).overlayFlagged) {
+        const det = ((r7 as any).overlay?.details || [])
+          .filter((d: any) => d.flagged)
+          .map((d: any) => `${d.check} ${Math.round((d.ratio || 0) * 100)}%`)
+          .join(", ");
+        parts.push(`hero-image promotional overlay${det ? ` (${det})` : ""}`);
+      }
+      // Exact OCR claim text per image.
       const detail = flaggedImages
         .map((i: any) => {
           const txt: string[] = (i.claimTexts && i.claimTexts.length ? i.claimTexts : i.claims) || [];
           return `${i.url.split("/").pop()}: "${txt.join('", "')}"`;
         })
         .join(" | ");
+      if (detail) parts.push(detail);
       r7Check.passed = false;
       r7Check.decision = "FLAG";
-      r7Check.message = `${flaggedImages.length}/${r7.images.length} image(s) flagged for ops/marketing claims: ${detail}`;
+      r7Check.message = `Ops/marketing claims on images — ${parts.join(" | ")}`;
     } else {
       r7Check.passed = true;
       r7Check.decision = "PASS";

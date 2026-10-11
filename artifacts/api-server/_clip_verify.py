@@ -1087,11 +1087,14 @@ def check_rule2(image_urls: List[str]) -> dict:
 
     total_dupes = exact_dupes + phash_dupes
     distinct = len(image_urls) - total_dupes
-    if total_dupes > 0:
+    # Flag only when there are >=2 duplicate images: 1 duplicate (3 distinct out
+    # of 4) is tolerated; >=2 duplicates (<=2 distinct out of 4, or 3 distinct
+    # out of >4) is a real problem.
+    if total_dupes >= 2:
         return {"passed": False, "distinct": distinct, "total": len(image_urls),
                 "message": f"{total_dupes} duplicate(s) detected — {distinct} distinct out of {len(image_urls)}"}
     return {"passed": True, "distinct": distinct, "total": len(image_urls),
-            "message": f"All {len(image_urls)} images are distinct"}
+            "message": f"{len(image_urls)} images ({distinct} distinct, {total_dupes} duplicate) — within tolerance"}
 
 
 def check_rule3(image_urls: List[str]) -> dict:
@@ -1216,32 +1219,8 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
         out["rule3"] = check_rule3(all_images)
         _tm("rule3")
 
-        # Rule 5: Only on first image
-        if first_image:
-            print(f"[INFO] [{sku}] Rule 5: checking first image markings...", file=sys.stderr)
-            out["rule5"] = check_rule5(first_image)
-            # Qwen second-pass verification for markings false positives
-            if use_qwen_verify and out["rule5"].get("flagged"):
-                print(f"[INFO] [{sku}] Rule 5 flagged — verifying with Qwen VLM...", file=sys.stderr)
-                img = load_image(first_image)
-                if img is not None:
-                    qwen_verdict = verify_rule_with_qwen(img, "markings")
-                    if qwen_verdict is False:
-                        out["rule5"]["flagged"] = False
-                        out["rule5"]["hasMarkings"] = False
-                        out["rule5"]["qwenVerified"] = "cleared"
-                    elif qwen_verdict is True:
-                        out["rule5"]["qwenVerified"] = "confirmed"
-                    else:
-                        out["rule5"]["qwenVerified"] = "unsure"
-        else:
-            out["rule5"] = {
-                "hasMarkings": None,
-                "watermarkScore": None,
-                "cleanScore": None,
-                "flagged": None,
-                "error": "No first image URL provided",
-            }
+        # Rule 5 removed (markings / separate promotional-overlay check). The
+        # promotional-overlay signal is folded into Rule 7 below.
         _tm("rule5")
 
         # Rule 6: All images
@@ -1278,16 +1257,24 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
         # Rule 7: OCR-based ops/marketing claim detection on the first few images
         # (claims often live on images 2-4, not just the hero).
         ocr_urls = [u for u in (all_images or []) if u][:4] or ([first_image] if first_image else [])
-        if ocr_urls:
-            print(f"[INFO] [{sku}] Rule 7: OCR claims check on {len(ocr_urls)} image(s)...", file=sys.stderr)
-            r7_results = _run_ocr_parallel(ocr_urls)
-            out["rule7"] = {
-                "images": r7_results,
-                "anyFlagged": any(r.get("flagged") for r in r7_results),
-                "flaggedImages": [r["url"] for r in r7_results if r.get("flagged")],
-            }
-        else:
-            out["rule7"] = {"images": [], "anyFlagged": False}
+        r7_results = _run_ocr_parallel(ocr_urls) if ocr_urls else []
+        # CLIP promotional-overlay detection on the hero image (catches sale
+        # badges like "BESTSELLER" that OCR mis-reads) — folded into Rule 7 now
+        # that the separate Rule 5 check is gone.
+        overlay = None
+        if first_image:
+            try:
+                overlay = check_rule5(first_image)
+            except Exception:
+                overlay = None
+        overlay_flagged = bool(overlay and overlay.get("flagged"))
+        out["rule7"] = {
+            "images": r7_results,
+            "anyFlagged": any(r.get("flagged") for r in r7_results) or overlay_flagged,
+            "flaggedImages": [r["url"] for r in r7_results if r.get("flagged")],
+            "overlayFlagged": overlay_flagged,
+            "overlay": overlay,
+        }
         _tm("rule7")
 
         results.append(out)
