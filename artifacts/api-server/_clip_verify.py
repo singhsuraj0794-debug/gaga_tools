@@ -958,6 +958,9 @@ def check_ops_on_image(image_url: str) -> dict:
         norm = low.replace("0", "O").replace("1", "I").replace("5", "S").replace("|", "I")
         norm = re.sub(r"[^A-Z% ]+", " ", norm)
         norm = re.sub(r"\s{2,}", " ", norm)
+        # Compact form: OCR splits words ("SE LLE R", "SuLER", "SEIIER") —
+        # strip ALL non-alphanumerics so those collapse near "BESTSELLER".
+        compact = re.sub(r"[^A-Z0-9]+", "", norm)
         short_claim_patterns = [
             (r"\bFREE\s*(SHIPPING|DELIVERY|RETURN|RETURNS|REPLACEMENT|EXCHANGE|GIFT)\b", "free shipping/delivery/return claim"),
             (r"\b(COD|CASH ON DELIVERY)\b", "COD available claim"),
@@ -995,11 +998,31 @@ def check_ops_on_image(image_url: str) -> dict:
             (r"\bBUY\s*N[O0]W\b", "buy now claim"),
             (r"\bWARRANT[YV]\b", "warranty claim"),
         ]
+        # Compact variants (matched against the space-stripped text) — tolerate
+        # OCR splitting/mis-reading words like "BEST SELLER" -> "BESTSEIIER".
+        compact_claim_patterns = [
+            (r"BESTS[EIUO][IL]{1,2}[EI]?R", "best seller claim"),
+            (r"BESTPRICE", "best price claim"),
+            (r"LOWESTPRICE", "lowest price claim"),
+            (r"FREESHIP", "free shipping claim"),
+            (r"CASHONDELIVERY", "COD available claim"),
+            (r"\d{1,3}%?OFF", "discount/off claim"),
+            (r"MONEYBACKGUARANTEE", "money-back guarantee claim"),
+            (r"TOPRATED", "top rated claim"),
+            (r"MOSTPOPULAR", "most popular claim"),
+        ]
         claim_texts: list = []
         for pat, label in short_claim_patterns:
             m = re.search(pat, low) or re.search(pat, norm)
             if m:
                 # Skip if the matched context is a product descriptor
+                if _CLAIM_CONTEXT.search(text):
+                    continue
+                claims.append(label)
+                claim_texts.append(m.group(0).strip())
+        for pat, label in compact_claim_patterns:
+            m = re.search(pat, compact)
+            if m:
                 if _CLAIM_CONTEXT.search(text):
                     continue
                 claims.append(label)
