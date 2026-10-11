@@ -786,40 +786,51 @@ def get_ocr_reader():
         _ocr_lock = threading.Lock()
     with _ocr_lock:
         if _ocr_reader is None:
-            # Prefer PaddleOCR (better accuracy; lang="ch" covers EN + Chinese
-            # overlay text for Rule 5). Falls back to EasyOCR if Paddle isn't
-            # installed. Returns (backend_name, reader).
-            try:
-                print("[INFO] Loading PaddleOCR (en+ch)...", file=sys.stderr)
-                t0 = time.time()
-                from paddleocr import PaddleOCR
-                reader = None
-                last_err = None
-                for _kwargs in (
-                    # PaddleOCR v3, with the extra pipeline models disabled:
-                    # doc-orientation / unwarp / textline-orientation add several
-                    # CPU forwards per image for no benefit on flat product shots.
-                    {"lang": "ch", "enable_mkldnn": False,
-                     "use_doc_orientation_classify": False,
-                     "use_doc_unwarping": False,
-                     "use_textline_orientation": False},
-                    {"lang": "ch", "enable_mkldnn": False},  # PaddleOCR v3
-                    {"use_angle_cls": True, "lang": "ch", "show_log": False, "enable_mkldnn": False},  # v2
-                    {"lang": "ch"},  # minimal
-                ):
-                    try:
-                        reader = PaddleOCR(**_kwargs)
+            # Prefer EasyOCR on the GPU (torch/CUDA): ~100x faster than PaddleOCR
+            # CPU (0.06s vs ~3-8s per image), and the Paddle GPU build is blocked
+            # by a Windows Application Control policy on this host. PaddleOCR
+            # (lang="ch") is the fallback. Override with OCR_BACKEND=paddle.
+            pref = (os.environ.get("OCR_BACKEND") or "easyocr").lower()
+            order = ["paddle", "easyocr"] if pref == "paddle" else ["easyocr", "paddle"]
+            for backend in order:
+                try:
+                    if backend == "easyocr":
+                        import easyocr
+                        import torch as _torch
+                        gpu = _torch.cuda.is_available()
+                        print(f"[INFO] Loading EasyOCR (gpu={gpu})...", file=sys.stderr)
+                        t0 = time.time()
+                        reader = easyocr.Reader(["en", "ch_sim"], gpu=gpu, verbose=False)
+                        print(f"[INFO] EasyOCR ready in {time.time() - t0:.1f}s", file=sys.stderr)
+                        _ocr_reader = ("easyocr", reader)
                         break
-                    except Exception as e:
-                        last_err = e
-                if reader is None:
-                    raise last_err or RuntimeError("PaddleOCR init failed")
-                _ocr_reader = ("paddle", reader)
-                print(f"[INFO] PaddleOCR ready in {time.time() - t0:.1f}s", file=sys.stderr)
-            except Exception as e:
-                print(f"[INFO] PaddleOCR unavailable ({str(e)[:80]}) — falling back to EasyOCR", file=sys.stderr)
-                import easyocr
-                _ocr_reader = ("easyocr", easyocr.Reader(["en", "ch_sim"], gpu=True, verbose=False))
+                    os.environ.setdefault("FLAGS_use_mkldnn", "0")
+                    from paddleocr import PaddleOCR
+                    print("[INFO] Loading PaddleOCR (en+ch)...", file=sys.stderr)
+                    t0 = time.time()
+                    reader = None
+                    last_err = None
+                    for _kwargs in (
+                        {"lang": "ch", "enable_mkldnn": False,
+                         "use_doc_orientation_classify": False,
+                         "use_doc_unwarping": False,
+                         "use_textline_orientation": False},
+                        {"lang": "ch", "enable_mkldnn": False},
+                        {"lang": "ch"},
+                    ):
+                        try:
+                            reader = PaddleOCR(**_kwargs)
+                            break
+                        except Exception as e:
+                            last_err = e
+                    if reader is None:
+                        raise last_err or RuntimeError("PaddleOCR init failed")
+                    _ocr_reader = ("paddle", reader)
+                    print(f"[INFO] PaddleOCR ready in {time.time() - t0:.1f}s", file=sys.stderr)
+                    break
+                except Exception as e:
+                    print(f"[INFO] {backend} unavailable ({str(e)[:80]})", file=sys.stderr)
+                    continue
     return _ocr_reader
 
 
