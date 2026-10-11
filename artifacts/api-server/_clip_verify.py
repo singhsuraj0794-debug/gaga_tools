@@ -649,6 +649,8 @@ def check_rule5(image_url: str) -> dict:
     try:
         details = []
         any_flagged = False
+        import time as _t5
+        _c0 = _t5.time()
 
         for check_name, positive_prompt, negative_prompt, threshold in RULE5_CHECKS:
             scores = clip_zero_shot(img, [positive_prompt, negative_prompt])
@@ -677,7 +679,9 @@ def check_rule5(image_url: str) -> dict:
         # Chinese overlays are invisible to CLIP's English prompts but EasyOCR
         # (now loaded with ch_sim) can detect them directly.
         try:
+            _c1 = _t5.time()
             ocr_text = extract_image_text(img)
+            print(f"[TIMING] rule5.clip={_c1-_c0:.2f}s ocr={_t5.time()-_c1:.2f}s", file=sys.stderr)
             # CJK Unified Ideographs: U+4E00–U+9FFF
             cjk_chars = [ch for ch in ocr_text if "\u4e00" <= ch <= "\u9fff"]
             cjk_ratio = len(cjk_chars) / max(len(ocr_text.strip()), 1)
