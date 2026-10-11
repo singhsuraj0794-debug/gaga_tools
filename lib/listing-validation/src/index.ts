@@ -1843,26 +1843,16 @@ export function mergeClipResults(
       r7Check.decision = "WARN";
       r7Check.message = `Image could not be loaded (broken or unreachable URL)${badUrl ? `: ${badUrl.substring(0, 80)}` : ""} — ops-claim check skipped`;
     } else if (r7.anyFlagged) {
-      const parts: string[] = [];
-      // CLIP promotional-overlay (sale badge) on the hero image.
-      if ((r7 as any).overlayFlagged) {
-        const det = ((r7 as any).overlay?.details || [])
-          .filter((d: any) => d.flagged)
-          .map((d: any) => `${d.check} ${Math.round((d.ratio || 0) * 100)}%`)
-          .join(", ");
-        parts.push(`hero-image promotional overlay${det ? ` (${det})` : ""}`);
-      }
-      // Exact OCR claim text per image.
+      // Flag only on actual OCR claim text (a bare overlay is not an ops claim).
       const detail = flaggedImages
         .map((i: any) => {
           const txt: string[] = (i.claimTexts && i.claimTexts.length ? i.claimTexts : i.claims) || [];
           return `${i.url.split("/").pop()}: "${txt.join('", "')}"`;
         })
         .join(" | ");
-      if (detail) parts.push(detail);
       r7Check.passed = false;
       r7Check.decision = "FLAG";
-      r7Check.message = `Ops/marketing claims on images — ${parts.join(" | ")}`;
+      r7Check.message = `${flaggedImages.length}/${r7.images.length} image(s) flagged for ops/marketing claims: ${detail}`;
     } else {
       r7Check.passed = true;
       r7Check.decision = "PASS";

@@ -1258,22 +1258,12 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
         # (claims often live on images 2-4, not just the hero).
         ocr_urls = [u for u in (all_images or []) if u][:4] or ([first_image] if first_image else [])
         r7_results = _run_ocr_parallel(ocr_urls) if ocr_urls else []
-        # CLIP promotional-overlay detection on the hero image (catches sale
-        # badges like "BESTSELLER" that OCR mis-reads) — folded into Rule 7 now
-        # that the separate Rule 5 check is gone.
-        overlay = None
-        if first_image:
-            try:
-                overlay = check_rule5(first_image)
-            except Exception:
-                overlay = None
-        overlay_flagged = bool(overlay and overlay.get("flagged"))
+        # Flag ONLY on actual ops-claim TEXT found by OCR. A bare promotional
+        # overlay (any added text) is not itself an ops claim, so it never flags.
         out["rule7"] = {
             "images": r7_results,
-            "anyFlagged": any(r.get("flagged") for r in r7_results) or overlay_flagged,
+            "anyFlagged": any(r.get("flagged") for r in r7_results),
             "flaggedImages": [r["url"] for r in r7_results if r.get("flagged")],
-            "overlayFlagged": overlay_flagged,
-            "overlay": overlay,
         }
         _tm("rule7")
 
