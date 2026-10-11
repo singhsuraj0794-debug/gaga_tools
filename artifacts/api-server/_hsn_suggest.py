@@ -1445,7 +1445,15 @@ def detect_op_claims(text: str, min_len: int = 15, min_text_len: int = 20) -> Li
         ):
             claim_oriented = True
 
-    threshold = 0.52 if claim_oriented else 0.62
+    # Thresholds are backend-specific: MiniLM (384-d) spreads similarities out
+    # (titles <0.52, claims ~0.7); EmbeddingGemma (768-d) compresses them
+    # (titles ~0.65-0.68, claims ~0.86), so the MiniLM cutoffs would strip
+    # ordinary titles as "claims".
+    _embed_backend = (os.environ.get("EMBED_BACKEND") or "").lower()
+    if _embed_backend in ("llama", "gguf"):
+        threshold = 0.74 if claim_oriented else 0.80
+    else:
+        threshold = 0.52 if claim_oriented else 0.62
 
     try:
         sentence_vecs = embed_texts(sentences)
