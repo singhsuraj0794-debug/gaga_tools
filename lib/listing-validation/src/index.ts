@@ -624,6 +624,7 @@ async function batchCall<TInput, TOutput>(
   onBatch?: (batchIdx: number, totalBatches: number) => void,
   batchSize: number = BATCH_SIZE,
   onFail?: (batchIdx: number, totalBatches: number, err: unknown) => void,
+  shouldStop?: () => boolean,
 ): Promise<TOutput> {
   const batches: TInput[][] = [];
   for (let i = 0; i < items.length; i += batchSize) {
@@ -632,6 +633,11 @@ async function batchCall<TInput, TOutput>(
   const outputs: TOutput[] = [];
   const failedBatches: number[] = [];
   for (let i = 0; i < batches.length; i++) {
+    // User pressed Stop — bail before starting the next batch.
+    if (shouldStop?.()) {
+      console.warn(`[batchCall] stopped by user at batch ${i + 1}/${batches.length}`);
+      break;
+    }
     onBatch?.(i + 1, batches.length);
     // Retry transient tunnel drops (TypeError: Failed to fetch / Load failed)
     let lastErr: unknown;
@@ -667,6 +673,7 @@ export async function runTextCorrectionBatched(
   onBatch?: (batchIdx: number, totalBatches: number) => void,
   batchSize: number = BATCH_SIZE,
   onFail?: (batchIdx: number, totalBatches: number, err: unknown) => void,
+  shouldStop?: () => boolean,
 ): Promise<CorrectTextResult> {
   return batchCall(
     products,
@@ -677,6 +684,7 @@ export async function runTextCorrectionBatched(
     onBatch,
     batchSize,
     onFail,
+    shouldStop,
   );
 }
 
@@ -701,6 +709,7 @@ export async function runClipVerificationBatched(
   apiBase: string = "",
   onBatch?: (batchIdx: number, totalBatches: number) => void,
   useQwenVerify: boolean = false,
+  shouldStop?: () => boolean,
 ): Promise<ClipVerificationResult> {
   return batchCall(
     products,
@@ -716,6 +725,8 @@ export async function runClipVerificationBatched(
     // Small batch keeps each request under the cloudflared tunnel's ~100s
     // limit (CLIP is ~8-15s/product; ~6 products ≈ 60-90s).
     6,
+    undefined,
+    shouldStop,
   );
 }
 /** Multi-signal title-accuracy check against the product description. */
@@ -1121,18 +1132,7 @@ export function validateProduct(
       addCheck("Description *", "Prohibited content", true, "No prohibited wording in description", "PASS");
     }
 
-    // Key attributes presence: material, dimensions, weight, color, etc.
-    const descLower = descPlain.toLowerCase();
-    const matMention = MATERIAL_WORDS.filter((m) => descLower.includes(m)).length;
-    const sizeMention = SIZE_WORDS.filter((s) => descLower.includes(s)).length;
-    const hasDims = /\b\d+\s*(ml|g|kg|l|oz|gm|mg|inch|inches|cm|mm|foot|feet|lt)\b/i.test(descPlain);
-    const hasColor = /\b(color|colour|shade|black|white|red|blue|green|pink|brown|silver|gold|grey|navy|beige|purple|maroon|multi|multicolor|transparent|clear|yellow|orange)\b/i.test(descLower);
-    const attrCount = (matMention > 0 ? 1 : 0) + (sizeMention > 0 ? 1 : 0) + (hasDims ? 1 : 0) + (hasColor ? 1 : 0);
-    if (attrCount < 1) {
-      addCheck("Description *", "Product attributes", false, "Description missing key product attributes (material, size, color, weight, or capacity)", "FLAG");
-    } else {
-      addCheck("Description *", "Product attributes", true, "Key product attributes present in description", "PASS");
-    }
+    // "Product attributes" presence check removed — not required.
   } else if (isChildRow) {
     addCheck("Description *", "HTML structure", true, "Description inherited from parent (child/variant row)", "PASS");
   } else {

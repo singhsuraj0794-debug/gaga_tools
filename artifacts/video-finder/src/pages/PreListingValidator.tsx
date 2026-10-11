@@ -113,6 +113,10 @@ export default function PreListingValidator() {
   const [selectedSellers, setSelectedSellers] = useState<Set<string>>(new Set());
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const _allRemovedSkus = useRef<Set<string>>(new Set());
+  // Set true by the "Stop" button; the validation pipeline checks it between
+  // steps/batches and returns to review. (The in-flight server request — one
+  // bounded batch — finishes on its own.)
+  const cancelValidation = useRef(false);
   // Pre-duplicate rows/results, captured before the image pass removes anything,
   // so the text check can restore the image-duplicates it does NOT confirm.
   const _rowsPreDup = useRef<ListingRow[] | null>(null);
@@ -460,6 +464,7 @@ export default function PreListingValidator() {
   const startValidation = async () => {
     try {
       const t0 = performance.now();
+    cancelValidation.current = false;
     setPhase("validating");
     setResults([]);
     setLogs([]);
@@ -534,7 +539,7 @@ export default function PreListingValidator() {
         }));
         const clipResult = await runClipVerificationBatched(clipInput, "", (bi, tb) => {
           pushLog("SYS", 0, `[IMG] CLIP batch ${bi}/${tb}...`);
-        });
+        }, false, () => cancelValidation.current);
         const clipMap = new Map(clipResult.results?.map((cr: any) => [cr.sku, cr]) || []);
         _clipMapRef.current = clipMap as Map<string, any>;
         const flagged = clipResult.results?.filter(
@@ -551,6 +556,8 @@ export default function PreListingValidator() {
     setStepLogs((prev) => prev.map((s, i) => (i === 0 ? { ...s, running: false, done: true, summary: `${productsWithImages.length} analyzed` } : s)));
     setProgress(20);
     scrollLogToBottom();
+
+    if (cancelValidation.current) { pushLog("SYS", 0, "[STOP] Stopped by user"); setStageLabel("Stopped"); setPhase("review"); return; }
 
     // ── Step 2: Validation Checks ──────────────────────────────────────
     setStageLabel("Running validation checks...");
@@ -618,6 +625,8 @@ export default function PreListingValidator() {
     setProgress(55);
     scrollLogToBottom();
 
+    if (cancelValidation.current) { pushLog("SYS", 0, "[STOP] Stopped by user"); setStageLabel("Stopped"); setPhase("review"); return; }
+
     // ── Step 3: HSN Suggestion (skippable) ─────────────────────────────
     if (skipHsn) {
       setStepLogs((prev) => prev.map((s, i) => (i === 2 ? { ...s, running: false, done: true, summary: "Skipped" } : s)));
@@ -631,6 +640,8 @@ export default function PreListingValidator() {
       setProgress(75);
       scrollLogToBottom();
     }
+
+    if (cancelValidation.current) { pushLog("SYS", 0, "[STOP] Stopped by user"); setStageLabel("Stopped"); setPhase("review"); return; }
 
     // ── Step 4: Text Corrections (skippable) ───────────────────────────
     if (skipTextCorrection) {
@@ -1015,7 +1026,7 @@ export default function PreListingValidator() {
       }, useQwen ? 2 : 20, (bi, tb, err) => {
         _failCount++;
         pushLog("BATCH", 0, `[TXT] ⚠️ Batch ${bi}/${tb} FAILED — ${err instanceof Error ? err.message : String(err)}`);
-      });
+      }, () => cancelValidation.current);
       pushLog("BATCH", 0, `[TXT] API returned ${result.results.length}/${correctProducts.length} results${_failCount > 0 ? ` (${_failCount} batch(es) failed)` : ""}`);
 
       const corrMap = new Map(result.results.map((cr) => [cr.sku, { title: cr.title, description: cr.description, log: cr.log }]));
@@ -2401,7 +2412,15 @@ export default function PreListingValidator() {
                    <CheckCircle2 className="w-4 h-4 text-green-600" />}
                   <span className="font-medium">{stageLabel}</span>
                 </div>
-                <span className="text-sm font-mono text-slate-500">{progress}%</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-mono text-slate-500">{progress}%</span>
+                  {progress < 100 && (
+                    <Button size="sm" variant="outline" className="h-7 text-xs border-rose-300 text-rose-700 hover:bg-rose-50"
+                      onClick={() => { cancelValidation.current = true; setStageLabel("Stopping…"); }}>
+                      <XCircle className="w-3 h-3 mr-1" /> Stop
+                    </Button>
+                  )}
+                </div>
               </div>
               <div className="w-full bg-slate-200 rounded-full h-3">
                 <div
