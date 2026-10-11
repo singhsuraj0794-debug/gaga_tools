@@ -81,6 +81,8 @@ def _run_correct_text(products, use_qwen):
     from _hsn_suggest import correct_product_text
 
     def _one(p):
+        import time as _t
+        _t0 = _t.time()
         corrected = correct_product_text(
             title=p.get("title", ""),
             description=p.get("description", ""),
@@ -92,6 +94,7 @@ def _run_correct_text(products, use_qwen):
             v2_category=p.get("v2Category", ""),
             use_qwen=use_qwen,
         )
+        print(f"[TIMING] product {p.get('sku','')}: {_t.time() - _t0:.2f}s total", file=sys.stderr)
         return {
             "sku": p.get("sku", ""),
             "title": corrected.get("title"),

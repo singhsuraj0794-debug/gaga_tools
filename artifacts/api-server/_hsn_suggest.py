@@ -1706,6 +1706,14 @@ def correct_product_text(
         log.append(msg)
         print(f"[ANALYZE] {msg}", file=sys.stderr)
 
+    import time as _time
+    _tlast = [_time.time()]
+
+    def _tmark(label: str) -> None:
+        now = _time.time()
+        print(f"[TIMING] {label}: {now - _tlast[0]:.2f}s", file=sys.stderr)
+        _tlast[0] = now
+
     # ── CLIP image verification ────────────────────────────────────────
     clip_colours: list[str] = []
     clip_materials: list[str] = []
@@ -1713,6 +1721,7 @@ def correct_product_text(
     if images and any(images):
         _log("Running CLIP visual attribute detection...")
         clip_colours, clip_materials = detect_visual_attributes([u for u in images if u])
+        _tmark("detect_visual_attributes")
         if clip_colours:
             _log(f"  Colours: {', '.join(clip_colours)}")
         if clip_materials:
@@ -1732,6 +1741,7 @@ def correct_product_text(
                     _log(f"  Marqo classification: {marqo_label} (confidence={marqo_score:.2f})")
         except Exception as e:
             _log(f"  Marqo classification skipped: {e}")
+        _tmark("marqo_classify")
 
     # ── Product context engine ────────────────────────────────────────
     # Run CLIP zero-shot taxonomy to understand what the product actually is
@@ -1741,6 +1751,7 @@ def correct_product_text(
     )
     for ctx_line in ctx.get("log", []):
         _log(ctx_line)
+    _tmark("describe_product_context")
 
     # Map the authoritative product_type_label back to its PRODUCT_TYPES id so
     # the Title accuracy correction uses the same taxonomy as the flag.
