@@ -45,12 +45,19 @@ if (Test-PortOpen $AnalysisPort) {
 # (the analysis server then falls back to MiniLM).
 $LlamaPort = 8081
 $llama = Get-Command llama-server -ErrorAction SilentlyContinue
+if (-not $llama) {
+    # The Scheduled Task's PATH may not include the winget shim dir; locate the
+    # binary under the WinGet packages folder.
+    $exe = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter "llama-server.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($exe) { $llama = @{ Source = $exe.FullName } }
+}
 if ($llama) {
+    $llamaExe = if ($llama.Source) { $llama.Source } else { $llama.Path }
     if (Test-PortOpen $LlamaPort) {
         Write-Host "Embedding server already running on $LlamaPort"
     } else {
         Write-Host "Starting llama.cpp embedding server on $LlamaPort ..."
-        Start-Bg -FilePath $llama.Source -Arguments @(
+        Start-Bg -FilePath $llamaExe -Arguments @(
             "-hf", "unsloth/embeddinggemma-2-GGUF:UD-Q4_K_XL",
             "--embedding", "--port", "$LlamaPort", "--host", "127.0.0.1"
         ) -WorkingDirectory $ApiDir -LogName "llama-embed.log" | Out-Null
@@ -66,7 +73,7 @@ if ($llama) {
         }
     }
 } else {
-    Write-Warning "llama-server not on PATH - HSN/claim embeddings fall back to MiniLM"
+    Write-Warning "llama-server not found - HSN/claim embeddings fall back to MiniLM"
 }
 
 $cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
