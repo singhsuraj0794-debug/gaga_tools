@@ -1544,7 +1544,7 @@ export async function validateImages(
   // Will be filled in by runClipVerification() later
   checks.push({
     field: "Product Images",
-    check: "RULE 5: Markings (1st image)",
+    check: "RULE 5: Promotional overlay (1st image)",
     passed: false,
     decision: "FLAG",
     message: "Markings check pending — run DINOv2+CLIP to verify",
@@ -1822,10 +1822,10 @@ export function mergeClipResults(
   // RULE 5: Markings
   const r5 = clipResult.rule5;
   if (r5) {
-    const rule5Idx = updated.checks.findIndex((c) => c.check === "RULE 5: Markings (1st image)");
+    const rule5Idx = updated.checks.findIndex((c) => c.check === "RULE 5: Promotional overlay (1st image)");
     const r5Check: { field: string; check: string; passed: boolean; decision: Decision; message: string } = {
       field: "Product Images",
-      check: "RULE 5: Markings (1st image)",
+      check: "RULE 5: Promotional overlay (1st image)",
       passed: false,
       decision: "FLAG",
       message: "Markings check pending",
@@ -1916,11 +1916,12 @@ export function mergeClipResults(
       r7Check.decision = "WARN";
       r7Check.message = `Image could not be loaded (broken or unreachable URL)${badUrl ? `: ${badUrl.substring(0, 80)}` : ""} — ops-claim check skipped`;
     } else if (r7.anyFlagged) {
+      // Report the EXACT OCR text that matched, so reviewers can verify.
       const detail = flaggedImages
-        .map(
-          (i: any) =>
-            `${i.url.split("/").pop()}: ${(i.claims || []).join(", ")}`
-        )
+        .map((i: any) => {
+          const txt: string[] = (i.claimTexts && i.claimTexts.length ? i.claimTexts : i.claims) || [];
+          return `${i.url.split("/").pop()}: "${txt.join('", "')}"`;
+        })
         .join(" | ");
       r7Check.passed = false;
       r7Check.decision = "FLAG";

@@ -61,12 +61,8 @@ _clip_processor = None
 # it is intentionally excluded.
 RULE5_CHECKS = [
     # (check_name, positive_prompt, negative_prompt, threshold)
-    (
-        "watermark",
-        "a photo with a semi-transparent watermark stamp overlaid across it",
-        "a clean product photograph with no watermark stamp",
-        0.70,
-    ),
+    # The "watermark/markings" sub-check was removed (not required). The
+    # promotional-overlay checks below still catch sale badges ("BESTSELLER").
     (
         "overlay_graphics",
         "a photo with a large translucent sale banner, discount badge, or price sticker digitally pasted across the top of a plain product image",
@@ -999,18 +995,22 @@ def check_ops_on_image(image_url: str) -> dict:
             (r"\bBUY\s*N[O0]W\b", "buy now claim"),
             (r"\bWARRANT[YV]\b", "warranty claim"),
         ]
+        claim_texts: list = []
         for pat, label in short_claim_patterns:
-            if re.search(pat, low) or re.search(pat, norm):
+            m = re.search(pat, low) or re.search(pat, norm)
+            if m:
                 # Skip if the matched context is a product descriptor
                 if _CLAIM_CONTEXT.search(text):
                     continue
                 claims.append(label)
+                claim_texts.append(m.group(0).strip())
         if claims:
             return {
                 "url": image_url,
                 "flagged": True,
                 "ocrText": text,
                 "claims": list(dict.fromkeys(claims)),
+                "claimTexts": list(dict.fromkeys(claim_texts)),
             }
 
         # Semantic pipeline for longer OCR text. OCR lines are short standalone
@@ -1024,6 +1024,7 @@ def check_ops_on_image(image_url: str) -> dict:
             "flagged": len(claims) > 0,
             "ocrText": text,
             "claims": claims,
+            "claimTexts": claims,
         }
     except Exception as e:
         return {"url": image_url, "flagged": None, "error": str(e)}
