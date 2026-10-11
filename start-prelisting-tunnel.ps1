@@ -24,6 +24,7 @@ if (Test-PortOpen $ClipPort) {
     Write-Host "CLIP verify already running on $ClipPort"
 } else {
     $env:CLIP_VERIFY_PORT = "$ClipPort"
+    if (-not $env:CLIP_VERIFY_WORKERS) { $env:CLIP_VERIFY_WORKERS = "6" }
     Write-Host "Starting CLIP verify server on $ClipPort ..."
     Start-Bg -FilePath $python -Arguments @("_clip_verify_server.py") -WorkingDirectory $ApiDir -LogName "clip-verify.log" | Out-Null
     Start-Sleep -Seconds 2
@@ -33,7 +34,10 @@ if (Test-PortOpen $AnalysisPort) {
     Write-Host "Analysis server already running on $AnalysisPort"
 } else {
     $env:ANALYSIS_PORT = "$AnalysisPort"
-    if (-not $env:ANALYSIS_WORKERS) { $env:ANALYSIS_WORKERS = "1" }
+    # Products run concurrently (torch releases the GIL for CUDA ops, so threads
+    # give real overlap of CPU prep with GPU work). 3 keeps VRAM in check
+    # alongside SigLIP/Marqo/Qwen on a 16GB card.
+    if (-not $env:ANALYSIS_WORKERS) { $env:ANALYSIS_WORKERS = "3" }
     Write-Host "Starting analysis server on $AnalysisPort ..."
     Start-Bg -FilePath $python -Arguments @("_analysis_server.py") -WorkingDirectory $ApiDir -LogName "analysis.log" | Out-Null
     Start-Sleep -Seconds 2
