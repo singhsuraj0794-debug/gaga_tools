@@ -34,10 +34,11 @@ if (Test-PortOpen $AnalysisPort) {
     Write-Host "Analysis server already running on $AnalysisPort"
 } else {
     $env:ANALYSIS_PORT = "$AnalysisPort"
-    # Products run concurrently (torch releases the GIL for CUDA ops, so threads
-    # give real overlap of CPU prep with GPU work). 3 keeps VRAM in check
-    # alongside SigLIP/Marqo/Qwen on a 16GB card.
-    if (-not $env:ANALYSIS_WORKERS) { $env:ANALYSIS_WORKERS = "3" }
+    # NOTE: keep this at 1. Running correct-text products in worker threads
+    # deadlocks the analysis server (shared Marqo/torch/OCR state) — verified:
+    # ANALYSIS_WORKERS=3 hung a 6-product request indefinitely. clip-verify is
+    # parallel (CLIP_VERIFY_WORKERS) and safe; correct-text stays serial.
+    if (-not $env:ANALYSIS_WORKERS) { $env:ANALYSIS_WORKERS = "1" }
     Write-Host "Starting analysis server on $AnalysisPort ..."
     Start-Bg -FilePath $python -Arguments @("_analysis_server.py") -WorkingDirectory $ApiDir -LogName "analysis.log" | Out-Null
     Start-Sleep -Seconds 2
