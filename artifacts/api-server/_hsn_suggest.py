@@ -1649,7 +1649,9 @@ def _strip_mechanical(text: str) -> str:
     # Underscores/pipes/backslashes are never legitimate in a product title
     # (CSV/import artifacts). \w includes underscore, so strip them explicitly.
     text = re.sub(r"[_|\\]+", " ", text)
-    text = re.sub(r"[^\w\s\-.,()%°'\"&®©™–—!?]+", "", text)
+    # Keep dimension separators ("60*200", "60:40") — stripping them produced
+    # misleading "60200".
+    text = re.sub(r"[^\w\s\-.,()%°'\"&®©™–—!?:*]+", "", text)
     text = re.sub(r"\s{2,}", " ", text)
     text = re.sub(r"\s*:\s*:", " ", text)
     text = re.sub(r",\s*,", ",", text)
@@ -2477,14 +2479,11 @@ def correct_product_text(
             base = re.sub(r"\s+([.,!?])", r"\1", base)       # no space before punctuation
             base = re.sub(r">\s+([.,!?])", ">", base)
             base = re.sub(r"\s{2,}", " ", base).strip()
-            if spec_items:
-                result_desc = base + "\n<h4>Specifications</h4>\n<ul>" + "\n".join(spec_items) + "</ul>"
-            else:
-                result_desc = base
+            # Specs are NOT appended any more — text correction only rewrites
+            # the description (claim/colour fixes), per the streamlined design.
+            result_desc = base
         else:
             result_desc = cleaned
-            if spec_items:
-                result_desc += "\n\n<h4>Specifications</h4>\n<ul>" + "\n".join(spec_items) + "</ul>"
 
         if result_desc.strip() != description.strip():
             out_desc = result_desc.strip()
