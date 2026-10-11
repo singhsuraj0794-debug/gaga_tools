@@ -990,7 +990,7 @@ def check_ops_on_image(image_url: str) -> dict:
         ]
         # Loose variants tolerant of OCR noise.
         short_claim_patterns += [
-            (r"\bFRE?E\s*(SHIP|DEL|RET)", "free shipping/delivery/return claim"),
+            (r"\bFRE?E\s*(SHIPPING|SHIP|DELIVERY|RETURN|REPLACEMENT|EXCHANGE|GIFT)\b", "free shipping/delivery/return claim"),
             (r"\bC\s*[O0]\s*D\b", "COD available claim"),
             (r"\b\d{1,3}\s*%\s*[O0]FF\b", "discount/off claim"),
             (r"\bB[E3]ST\s*PRIC[E3]\b", "best price claim"),
