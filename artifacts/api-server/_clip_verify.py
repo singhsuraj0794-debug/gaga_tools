@@ -1127,17 +1127,27 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
 
         out = {"sku": sku}
 
+        import time as _time
+        _tt = [_time.time()]
+
+        def _tm(lbl):
+            print(f"[TIMING] [{sku}] {lbl}: {_time.time() - _tt[0]:.2f}s", file=sys.stderr)
+            _tt[0] = _time.time()
+
         # Rule 1: Image count
         print(f"[INFO] [{sku}] Rule 1: checking image count...", file=sys.stderr)
         out["rule1"] = check_rule1(all_images)
+        _tm("rule1")
 
         # Rule 2: Duplicates
         print(f"[INFO] [{sku}] Rule 2: checking duplicates...", file=sys.stderr)
         out["rule2"] = check_rule2(all_images)
+        _tm("rule2")
 
         # Rule 3: Resolution
         print(f"[INFO] [{sku}] Rule 3: checking resolution...", file=sys.stderr)
         out["rule3"] = check_rule3(all_images)
+        _tm("rule3")
 
         # Rule 5: Only on first image
         if first_image:
@@ -1165,6 +1175,7 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
                 "flagged": None,
                 "error": "No first image URL provided",
             }
+        _tm("rule5")
 
         # Rule 6: All images
         if all_images:
@@ -1190,6 +1201,7 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
             }
         else:
             out["rule6"] = {"images": [], "anyFlagged": False}
+        _tm("rule6")
 
         # Rule 7: OCR-based ops/marketing claim detection on the hero (first)
         # image only. EasyOCR runs on CPU (~1.5-2.5s/image), so for large
@@ -1205,6 +1217,7 @@ def process_batch(products: List[dict], use_qwen_verify: bool = True) -> dict:
             }
         else:
             out["rule7"] = {"images": [], "anyFlagged": False}
+        _tm("rule7")
 
         results.append(out)
 
