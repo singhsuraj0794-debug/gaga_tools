@@ -380,6 +380,37 @@ def verify_rule_with_qwen(img: Image.Image, rule_type: str) -> Optional[bool]:
         return None
 
 
+_clip_text_feat_cache: dict = {}
+
+
+def _clip_text_features(model, processor, labels):
+    """CLIP/SigLIP text features for a label set, cached across calls.
+
+    clip_zero_shot runs once per image AND per taxonomy; re-encoding the same
+    label set on every call was the dominant cost of the product-context
+    analysis (~10s/product). Cache the normalized text features on device.
+    """
+    import torch
+    key = tuple(labels)
+    hit = _clip_text_feat_cache.get(key)
+    if hit is not None:
+        return hit
+    device = next(model.parameters()).device
+    is_siglip = type(model).__name__.startswith("Siglip")
+    kwargs: dict = {"text": list(labels), "return_tensors": "pt", "truncation": True}
+    if is_siglip:
+        kwargs["padding"] = "max_length"
+        kwargs["max_length"] = 64
+    else:
+        kwargs["padding"] = True
+    text_inputs = {k: v.to(device) for k, v in processor(**kwargs).items()}
+    with torch.no_grad():
+        feats = model.get_text_features(**text_inputs)
+    feats = feats / feats.norm(dim=-1, keepdim=True)
+    _clip_text_feat_cache[key] = feats
+    return feats
+
+
 def clip_zero_shot(
     image: Image.Image,
     candidate_labels: list,
@@ -396,22 +427,11 @@ def clip_zero_shot(
 
     model, processor = get_clip()
     device = next(model.parameters()).device
-    is_siglip = type(model).__name__.startswith("Siglip")
 
-    text_kwargs: dict = {"text": candidate_labels, "return_tensors": "pt", "truncation": True}
-    if is_siglip:
-        # SigLIP pads text to a fixed length (64) with max_length.
-        text_kwargs["padding"] = "max_length"
-        text_kwargs["max_length"] = 64
-    else:
-        text_kwargs["padding"] = True
-    text_inputs = {k: v.to(device) for k, v in processor(**text_kwargs).items()}
+    text_feats = _clip_text_features(model, processor, candidate_labels)
     image_inputs = {k: v.to(device) for k, v in processor(images=image, return_tensors="pt").items()}
-
     with torch.no_grad():
-        text_feats = model.get_text_features(**text_inputs)
         image_feats = model.get_image_features(**image_inputs)
-    text_feats = text_feats / text_feats.norm(dim=-1, keepdim=True)
     image_feats = image_feats / image_feats.norm(dim=-1, keepdim=True)
     logits = image_feats @ text_feats.T
     scale = getattr(model, "logit_scale", None)
