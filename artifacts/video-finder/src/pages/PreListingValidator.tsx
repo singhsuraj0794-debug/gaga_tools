@@ -49,7 +49,6 @@ import {
   getSheetDuplicatesJob,
   titleTextSimilarity,
   TEXT_DUPLICATE_THRESHOLD,
-  titleKey,
   type ValidationResult,
   type ListingRow,
   type CheckResult,
@@ -115,6 +114,10 @@ export default function PreListingValidator() {
   const [selectedSellers, setSelectedSellers] = useState<Set<string>>(new Set());
   const [sellerDropdownOpen, setSellerDropdownOpen] = useState(false);
   const _allRemovedSkus = useRef<Set<string>>(new Set());
+  // Pre-duplicate rows/results, captured before the image pass removes anything,
+  // so the text check can restore the image-duplicates it does NOT confirm.
+  const _rowsPreDup = useRef<ListingRow[] | null>(null);
+  const _resultsPreDup = useRef<ValidationResult[] | null>(null);
   const [useQwen, setUseQwen] = useState(true);
   const [skipHsn, setSkipHsn] = useState(true);
   const [skipTextCorrection, setSkipTextCorrection] = useState(false);
@@ -436,8 +439,10 @@ export default function PreListingValidator() {
     }
     setFile(selectedFile);
     setParseError(null);
-    // New sheet → drop the removal sets from the old file.
+    // New sheet → drop the removal sets + duplicate baseline from the old file.
     _allRemovedSkus.current = new Set();
+    _rowsPreDup.current = null;
+    _resultsPreDup.current = null;
     try {
       const result = await parseFile(selectedFile);
       if (result.rowCount === 0) {
@@ -1895,6 +1900,10 @@ export default function PreListingValidator() {
 
   const findSheetDuplicates = async () => {
     if (rows.length < 2) return;
+    // Capture the pre-duplicate baseline once (reused across re-runs) so the
+    // text check can restore the image-duplicates it does not confirm.
+    _rowsPreDup.current = _rowsPreDup.current ?? rows;
+    _resultsPreDup.current = _resultsPreDup.current ?? results;
     setDuplicateStatus("Scanning images for duplicates...");
     try {
       const products = rows.map((row) => {
@@ -2012,81 +2021,53 @@ export default function PreListingValidator() {
   };
 
   // ── Check with Texts ─────────────────────────────────────────────────────
-  // 1) Annotates the image-identified duplicates with their title score.
-  // 2) Also removes 100%-title duplicates REGARDLESS of image that the image
-  //    pass missed (e.g. a shared stock photo is excluded from image candidacy).
-  //    Rule: the export removes ALL image-match duplicates AND all 100%-title
-  //    duplicates — the text check never un-removes.
+  // Two-stage duplicate removal:
+  //   Stage 1 (image only): export removes ALL image-match duplicates.
+  //   Stage 2 (this): narrow the removal to only the image-match duplicates
+  //     whose titles ALSO match 100%; the rest are put back into the sheet.
   const checkDuplicatesWithText = () => {
-    if (duplicateGroups.length === 0 && rows.length < 2) {
-      setDuplicateStatus("Load a sheet and run Find Duplicates first, then Check with Texts.");
+    if (duplicateGroups.length === 0) {
+      setDuplicateStatus("Run Find Duplicates first — Check with Texts then keeps only the image-duplicates with a 100% title match.");
       return;
     }
 
     let totalCandidates = 0;
     let exact100 = 0;
     let near60 = 0;
+    const confirmedSkus = new Set<string>();
     const annotated = duplicateGroups.map((g: any) => {
       const keepTitle = g.keep?.title || "";
       const removes = (g.remove || []).map((r: any) => {
         totalCandidates++;
         const score = titleTextSimilarity(keepTitle, r.title || "");
-        if (score >= 0.999) exact100++;
+        if (score >= 0.999) { exact100++; confirmedSkus.add(r.sku); }
         if (score >= TEXT_DUPLICATE_THRESHOLD) near60++;
         return { ...r, textScore: score };
       });
       const avg = removes.length
         ? removes.reduce((s: number, r: any) => s + (r.textScore || 0), 0) / removes.length
         : 0;
-      return { ...g, remove: removes, textScore: avg, text_checked: true };
+      const confirmedRemoves = removes.filter((r: any) => (r.textScore || 0) >= 0.999);
+      return { ...g, remove: removes, confirmedRemoves, textScore: avg, text_checked: true };
     });
 
-    // 2) Exact-title (100%) duplicates among the current rows — regardless of
-    //    images (the image pass can miss them when a shared stock image is
-    //    excluded from image candidacy).
-    const byTitle = new Map<string, ListingRow[]>();
-    for (const row of rows) {
-      const k = titleKey(getTitle(row));
-      if (!k) continue;
-      const arr = byTitle.get(k);
-      if (arr) arr.push(row);
-      else byTitle.set(k, [row]);
-    }
-    const textGroups: any[] = [];
-    const textRemoveSkus = new Set<string>();
-    for (const group of byTitle.values()) {
-      if (group.length < 2) continue;
-      const sorted = [...group].sort((a, b) => getTitle(b).length - getTitle(a).length);
-      const keep = sorted[0];
-      const removes = sorted.slice(1).map((r) => ({
-        sku: getSku(r), title: getTitle(r), textScore: 1, reason: "100% title match",
-      }));
-      removes.forEach((r) => textRemoveSkus.add(r.sku));
-      textGroups.push({
-        keep: { sku: getSku(keep), title: getTitle(keep) },
-        remove: removes,
-        match_type: "text_exact",
-        textScore: 1,
-        text_checked: true,
-      });
+    // Removal set = the 100%-title image-duplicates only.
+    _allRemovedSkus.current = new Set(confirmedSkus);
+    setDuplicateRemoveSkus(new Set(confirmedSkus));
+    setDuplicateGroups(annotated);
+
+    // Put back the image-duplicates that text did NOT confirm (100%).
+    const baseRows = _rowsPreDup.current;
+    const baseResults = _resultsPreDup.current;
+    if (baseRows) setRows(baseRows.filter((row) => !confirmedSkus.has(getSku(row))));
+    if (baseResults) {
+      const kept = baseResults.filter((r) => !confirmedSkus.has(r.sku));
+      setResults(kept);
+      _currentResults.current = kept;
     }
 
-    // 3) Apply — keep every image duplicate removed, add the text-only ones.
-    if (textRemoveSkus.size > 0) {
-      textRemoveSkus.forEach((sku) => _allRemovedSkus.current.add(sku));
-      setDuplicateRemoveSkus((prev) => {
-        const next = new Set(prev);
-        textRemoveSkus.forEach((s) => next.add(s));
-        return next;
-      });
-      setRows((prev) => prev.filter((row) => !textRemoveSkus.has(getSku(row))));
-      setResults((prev) => prev.filter((r) => !textRemoveSkus.has(r.sku)));
-      _currentResults.current = _currentResults.current.filter((r) => !textRemoveSkus.has(r.sku));
-    }
-
-    setDuplicateGroups([...annotated, ...textGroups]);
     setDuplicateStatus(
-      `Text check: ${exact100}/${totalCandidates} image-duplicate(s) are a 100% title match (${near60} ≥${Math.round(TEXT_DUPLICATE_THRESHOLD * 100)}%); ${textRemoveSkus.size} extra 100%-title duplicate(s) removed. All remain removed on export.`,
+      `Text check: ${exact100} of ${totalCandidates} image-duplicate(s) have a 100% title match (${near60} ≥${Math.round(TEXT_DUPLICATE_THRESHOLD * 100)}%). Export removes the ${exact100} confirmed; the other ${totalCandidates - exact100} are kept.`,
     );
   };
 
@@ -2668,9 +2649,15 @@ export default function PreListingValidator() {
                             </div>
                             <div className="mt-1 space-y-0.5">
                               <div className="text-green-700">KEEP: {g.keep?.sku} — {g.keep?.title?.substring(0, 40)}</div>
-                              {g.remove?.map((p: any) => (
-                                <div key={p.sku} className="text-rose-600">REMOVE: {p.sku} — {p.title?.substring(0, 40)}{typeof p.textScore === "number" ? ` (text ${Math.round(p.textScore * 100)}%)` : ""}</div>
-                              ))}
+                              {g.remove?.map((p: any) => {
+                                const confirmed = typeof p.textScore !== "number" || p.textScore >= 0.999;
+                                return (
+                                  <div key={p.sku} className={confirmed ? "text-rose-600" : "text-slate-400"}>
+                                    {confirmed ? "REMOVE" : "KEEP"}: {p.sku} — {p.title?.substring(0, 40)}
+                                    {typeof p.textScore === "number" ? ` (text ${Math.round(p.textScore * 100)}%)` : ""}
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         ))}
