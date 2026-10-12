@@ -456,7 +456,10 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                         "button:has-text('Continue shopping'), input[type='submit'][value*='Continue']"
                     )
                     if btn:
-                        btn.click()
+                        # JS click: Playwright's click() waits for actionability
+                        # and burns the full 30s timeout when the button is
+                        # covered/off-screen (see the thumbnail loop below).
+                        btn.evaluate("e => e.click()")
                         page.wait_for_timeout(2000)
                 except Exception:
                     pass
@@ -485,7 +488,12 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                     try:
                         el = page.query_selector(f"text={link_text}")
                         if el:
-                            el.click()
+                            # JS click, NOT el.click(): both "See more product
+                            # details" and "Product information" fail the
+                            # actionability check and each cost a full 30s
+                            # timeout — 60s of the ~78s this function used to
+                            # take. Same fix as the thumbnail loop below.
+                            el.evaluate("e => e.click()")
                             page.wait_for_timeout(1000)
                             break
                     except Exception:

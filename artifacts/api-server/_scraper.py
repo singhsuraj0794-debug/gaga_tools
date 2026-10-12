@@ -482,7 +482,10 @@ def _try_specs_from_dom(url: str) -> dict | None:
                 try:
                     btn = page.query_selector(f"text={btn_text}")
                     if btn:
-                        btn.click()
+                        # JS click: click() auto-waits for actionability and costs
+                        # a full 30s timeout whenever the button is covered or
+                        # off-screen.
+                        btn.evaluate("e => e.click()")
                         page.wait_for_timeout(2000)
                         break
                 except Exception:
@@ -597,14 +600,17 @@ def _try_description_from_dom(url: str) -> str | None:
                 try:
                     btn = page.query_selector(f"text={btn_text}")
                     if btn:
-                        btn.click()
+                        # JS click — see the note above about the 30s auto-wait.
+                        btn.evaluate("e => e.click()")
                         page.wait_for_timeout(1000)
                 except Exception:
                     continue
             tabs = page.query_selector_all('[tabindex="0"]')
             for t in tabs:
                 try:
-                    t.click()
+                    # JS click: this loop runs over EVERY tab on the page, so a
+                    # plain click() could burn 30s per tab.
+                    t.evaluate("e => e.click()")
                     page.wait_for_timeout(500)
                 except Exception:
                     continue
