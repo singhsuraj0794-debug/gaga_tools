@@ -2,6 +2,11 @@ import axios from "axios";
 
 const LOCAL_SCRAPER_URL = process.env.LOCAL_SCRAPER_URL;
 
+/** True when the local scraper is reached over loopback (no proxy in between). */
+function isLoopbackLocalScraper(): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(LOCAL_SCRAPER_URL || "");
+}
+
 export async function runLocalScraper(url: string, platform: "flipkart" | "amazon"): Promise<any> {
   if (!LOCAL_SCRAPER_URL) return null;
   try {
@@ -44,7 +49,12 @@ export async function runLocalExtractPage(url: string, page: number): Promise<an
     const { data } = await axios.post(
       `${LOCAL_SCRAPER_URL}/extract`,
       { url, page },
-      { timeout: 55000 },  // keep under ngrok's ~60s limit
+      // extract_page() retries 3x and can take ~122s (30s goto + 10s poll per
+      // attempt). Over loopback give it room — measuring a single page took
+      // 55.2s, so the old fixed 55000 aborted mid-flight, returned null, and
+      // three consecutive nulls ended the whole job as "Extraction failed".
+      // Through the ngrok tunnel stay under its ~60s request cap.
+      { timeout: isLoopbackLocalScraper() ? 150000 : 55000 },
     );
     return data;
   } catch { return null; }

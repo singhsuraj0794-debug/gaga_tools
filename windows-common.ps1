@@ -115,6 +115,15 @@ Write-Host "[common] repo=$RepoDir python=$(Get-Python)"
 # returned empty results), so point it at the venv interpreter explicitly.
 $env:PYTHON_BIN = Get-Python
 
+# The API's scraper routes branch on this: when it is unset, hasLocalScraper()
+# is false and Meesho store extraction falls back to a SINGLE python subprocess
+# that walks the whole store (MAX_EXTRACT_PAGES=200, 2.5s sleep/page) and gets
+# killed by callPython's 900s timeout -> job.status="failed" -> "Extraction
+# failed". Pointing at the threaded local server switches on the paginated
+# path instead (per-page chunks with their own error handling). Loopback, so
+# there is no ngrok 60s cap here.
+if (-not $env:LOCAL_SCRAPER_URL) { $env:LOCAL_SCRAPER_URL = "http://localhost:9000" }
+
 # Scraper parallelism. The local server is threaded and the browsers accept
 # several concurrent CDP sessions; 6 mixed-platform workers ran cleanly here.
 if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "6" }

@@ -186,58 +186,73 @@ def _try_playwright(url: str) -> str:
 
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(SCRAPE_CDP_URL)
+            owns_ctx = not browser.contexts
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            # Pause any autoplaying hero video — a playing video keeps the page
-            # busy and can cover the DOM, which stalls scraping on the PDP.
             try:
-                page.evaluate("""() => {
-                    document.querySelectorAll('video').forEach(v => {
-                        try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
-                    });
-                }""")
-            except Exception:
-                pass
-
-                # Amazon (and others) can open a full-screen VIDEO lightbox
-                # ("VIDEOS | IMAGES") over the page, which blocks extraction.
-                # Press Escape and click any close button, then re-pause videos.
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                # Pause any autoplaying hero video — a playing video keeps the page
+                # busy and can cover the DOM, which stalls scraping on the PDP.
                 try:
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(400)
                     page.evaluate("""() => {
-                        const closers = document.querySelectorAll(
-                            '[aria-label*="Close" i], button.a-button-close, .a-modal-close, [data-action="a-popover-close"]');
-                        closers.forEach(b => { try { b.click(); } catch (e) {} });
                         document.querySelectorAll('video').forEach(v => {
                             try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
                         });
                     }""")
                 except Exception:
                     pass
-            # Wait for the page to actually render product data. `__NEXT_DATA__`
-            # alone appears early with a loading state (we saw 90KB pages with no
-            # og:title), so also accept a real title / schema.org Product block.
-            for _ in range(20):
-                time.sleep(2)
+
+                    # Amazon (and others) can open a full-screen VIDEO lightbox
+                    # ("VIDEOS | IMAGES") over the page, which blocks extraction.
+                    # Press Escape and click any close button, then re-pause videos.
+                    try:
+                        page.keyboard.press("Escape")
+                        page.wait_for_timeout(400)
+                        page.evaluate("""() => {
+                            const closers = document.querySelectorAll(
+                                '[aria-label*="Close" i], button.a-button-close, .a-modal-close, [data-action="a-popover-close"]');
+                            closers.forEach(btn => { try { btn.click(); } catch (e) {} });
+                            document.querySelectorAll('video').forEach(v => {
+                                try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                            });
+                        }""")
+                    except Exception:
+                        pass
+                # Wait for the page to actually render product data. `__NEXT_DATA__`
+                # alone appears early with a loading state (we saw 90KB pages with no
+                # og:title), so also accept a real title / schema.org Product block.
+                for _ in range(20):
+                    time.sleep(2)
+                    html = page.content()
+                    if len(html) < 5000:
+                        continue
+                    has_product = (
+                        ("__NEXT_DATA__" in html and 'og:title' in html)
+                        or '"@type":"Product"' in html
+                        or '"@type": "Product"' in html
+                        or "window.__INITIAL_STATE__" in html
+                    )
+                    if has_product:
+                        return html
+                # Fall back to whatever we have (still better than nothing).
                 html = page.content()
-                if len(html) < 5000:
-                    continue
-                has_product = (
-                    ("__NEXT_DATA__" in html and 'og:title' in html)
-                    or '"@type":"Product"' in html
-                    or '"@type": "Product"' in html
-                    or "window.__INITIAL_STATE__" in html
-                )
-                if has_product:
-                    page.close()
+                if len(html) > 20000:
                     return html
-            # Fall back to whatever we have (still better than nothing).
-            html = page.content()
-            page.close()
-            if len(html) > 20000:
-                return html
+            finally:
+                # ALWAYS release the tab, and do it before the driver stops —
+                # the scrape Chrome is shared by every worker, and a tab left
+                # open keeps running JS in it, so each later navigation slows
+                # down, more goto() calls time out and leak a further tab (a
+                # feedback loop; 22 were found open after a single run).
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                if owns_ctx:
+                    try:
+                        ctx.close()
+                    except Exception:
+                        pass
     except Exception:
         pass
     return ""
@@ -918,40 +933,46 @@ def _extract_via_browser(url_clean: str, store_url: str) -> dict:
             browser = p.chromium.connect_over_cdp(EXTRACT_CDP_URL)
             ctx = browser.new_context()
             page = ctx.new_page()
+            try:
 
-            for pg in range(1, MAX_EXTRACT_PAGES + 1):
-                page_url = f"{url_clean}?_ms=3.0.1" if pg == 1 else f"{url_clean}?_ms=3.0.1&page={pg}"
-                try:
-                    page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
-                    _time.sleep(2.5)
-                except Exception:
-                    errors.append(f"Failed to load page {pg}")
-                    break
-
-                if not store_name:
-                    store_name = page.title() or store_name
-
-                links = page.locator("a[href*='/p/']")
-                page_new = 0
-                for i in range(links.count()):
-                    href = links.nth(i).get_attribute("href")
-                    if href and "/p/" in href and href not in seen:
-                        seen.add(href)
-                        product_id = href.rstrip("/").split("/p/")[-1]
-                        products.append({
-                            "id": product_id,
-                            "title": "Untitled",
-                            "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
-                            "status": "pending",
-                            "error": None,
-                        })
-                        page_new += 1
-
-                # Stop when a page has no product links or no new products (reached the end)
-                if links.count() == 0 or page_new == 0:
-                    if pg > 1:
+                for pg in range(1, MAX_EXTRACT_PAGES + 1):
+                    page_url = f"{url_clean}?_ms=3.0.1" if pg == 1 else f"{url_clean}?_ms=3.0.1&page={pg}"
+                    try:
+                        page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+                        _time.sleep(2.5)
+                    except Exception:
+                        errors.append(f"Failed to load page {pg}")
                         break
-            page.close()
+
+                    if not store_name:
+                        store_name = page.title() or store_name
+
+                    links = page.locator("a[href*='/p/']")
+                    page_new = 0
+                    for i in range(links.count()):
+                        href = links.nth(i).get_attribute("href")
+                        if href and "/p/" in href and href not in seen:
+                            seen.add(href)
+                            product_id = href.rstrip("/").split("/p/")[-1]
+                            products.append({
+                                "id": product_id,
+                                "title": "Untitled",
+                                "url": f"https://www.meesho.com{href}" if href.startswith("/") else href,
+                                "status": "pending",
+                                "error": None,
+                            })
+                            page_new += 1
+
+                    # Stop when a page has no product links or no new products (reached the end)
+                    if links.count() == 0 or page_new == 0:
+                        if pg > 1:
+                            break
+            finally:
+                for _obj in (page, ctx):   # ctx is ours (browser.new_context())
+                    try:
+                        _obj.close()
+                    except Exception:
+                        pass
     except Exception as e:
         import traceback
         return {"products": products, "errors": [f"Browser extract failed: {e}"], "store_name": store_name, "total_pages": 0, "total_products": len(products), "total_unique": len(products)}
