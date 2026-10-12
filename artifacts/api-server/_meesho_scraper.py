@@ -803,10 +803,13 @@ def extract_page(store_url: str, page_num: int) -> dict:
     products = []
     seen = set()
     last_error = None
-    # Retry while we have fewer than a full page (20) — a short page is either a
-    # slow/partial load (retry helps) or the genuine last page (we accept whatever
-    # we got). Accumulate unique links across attempts.
+    # Retry while we have fewer than a full page — a short page is either a
+    # slow/partial load (a retry helps) or the genuine last page (retrying is
+    # pure waste). Stop as soon as an attempt adds nothing new: the store's
+    # trailing pages (8 products, then 0) used to burn 3 attempts x ~10s each,
+    # ~120s of the job's runtime.
     for attempt in range(3):
+        before = len(products)
         try:
             with sync_playwright() as p:
                 browser = p.chromium.connect_over_cdp(EXTRACT_CDP_URL)
@@ -814,10 +817,21 @@ def extract_page(store_url: str, page_num: int) -> dict:
                 page = ctx.new_page()
                 page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
 
-                # Poll + scroll for products to load (up to ~10s per attempt)
+                # Poll + scroll for products to load. Give up early once the
+                # count has settled (5 unchanged checks) rather than always
+                # burning the full 10s on a page with nothing more to give.
                 links = page.locator("a[href*='/p/']")
                 deadline = _time.time() + 10
-                while _time.time() < deadline and links.count() < 20:
+                stable = 0
+                last_n = -1
+                while _time.time() < deadline:
+                    n = links.count()
+                    if n >= PAGE_SIZE:
+                        break
+                    stable = stable + 1 if n == last_n else 0
+                    last_n = n
+                    if stable >= 5:
+                        break
                     _time.sleep(0.8)
                     try:
                         page.mouse.wheel(0, 2500)
@@ -830,15 +844,16 @@ def extract_page(store_url: str, page_num: int) -> dict:
                         products.append(item)
                 page.close()
                 ctx.close()
-
-                if len(products) >= 20:
-                    break  # full page loaded
-                # Fewer than 20 → retry (partial load or last page); stop after 3 attempts
-                _time.sleep(1)
         except Exception as e:
             last_error = str(e)
             _time.sleep(1)
             continue
+
+        if len(products) >= PAGE_SIZE:
+            break  # full page loaded
+        if len(products) == before:
+            break  # this attempt added nothing — another one cannot help
+        _time.sleep(1)  # partial page: one more attempt may still fill it
 
     # A page that still has 0 products after retries = end of the store
     has_more = len(products) > 0
