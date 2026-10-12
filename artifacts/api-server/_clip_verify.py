@@ -520,7 +520,7 @@ def dinov2_extract_features(image_sources: List[str]) -> Optional[Any]:
                 # Use CLS token as global image feature
                 features = outputs.last_hidden_state[:, 0, :]
                 features = features / features.norm(dim=-1, keepdim=True)
-                return features.cpu().numpy()
+                return features.cpu().float().numpy()
         return None
     except Exception as e:
         print(f"[DINOv2] Feature extraction failed: {e}", file=sys.stderr)
@@ -569,7 +569,7 @@ def dinov2_clip_classify(
                 outputs = dinov2_model(**inputs)
                 feat = outputs.last_hidden_state[:, 0, :]
                 feat = feat / feat.norm(dim=-1, keepdim=True)
-                dinov2_features_list.append(feat.cpu().numpy())
+                dinov2_features_list.append(feat.cpu().float().numpy())
 
             for lbl in labels:
                 clip_scores[lbl] = clip_scores.get(lbl, 0.0) + clip_probs.get(lbl, 0.0)
@@ -601,7 +601,7 @@ def dinov2_clip_classify(
                 with torch.no_grad():
                     text_features = clip_model.get_text_features(**text_inputs)
                     text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-                    text_features = text_features.cpu().numpy()
+                    text_features = text_features.cpu().float().numpy()
 
                 # DINOv2 features are 384-dim, CLIP text features are 512-dim
                 # Use CLIP text features directly — they're more aligned for classification

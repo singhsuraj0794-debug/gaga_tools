@@ -64,6 +64,7 @@ def _ensure_model():
         if _model is not None:  # another thread won the race
             return True
         try:
+            import torch
             import open_clip
             print(f"[MARQO] Loading {_MODEL_NAME}...", file=sys.stderr)
             t0 = time.time()
@@ -229,14 +230,18 @@ def _encode_labels(candidate_labels: List[str]):
                     feats = _model.encode_text(tokens)
                     feats = feats / feats.norm(dim=-1, keepdim=True)
                 for label, vec in zip(missing, feats):
-                    vec_cpu = vec.detach().cpu()
-                    _label_emb_cache[label] = vec.detach()
+                    vec_cpu = vec.detach().cpu().float()
+                    _label_emb_cache[label] = vec.detach().float()
                     disk[label] = vec_cpu
-                _save_disk_cache()
+                    _save_disk_cache()
             except Exception as e:
                 print(f"[MARQO] label encoding failed: {e}", file=sys.stderr)
                 return None
-        return torch.stack([_label_emb_cache[l] for l in candidate_labels]).to(_device)
+        # fp32 throughout: the disk cache and fresh encodes may disagree on
+        # dtype (bf16 model on CUDA), and torch.stack rejects a mixed batch.
+        return torch.stack(
+            [_label_emb_cache[l].float() for l in candidate_labels]
+        ).to(_device)
 
 
 def classify_features(feature, candidate_labels: List[str], top_k: int = 5) -> List[Tuple[str, float]]:
@@ -250,7 +255,7 @@ def classify_features(feature, candidate_labels: List[str], top_k: int = 5) -> L
         if txt is None:
             return []
         with torch.no_grad():
-            scores = (100.0 * feature @ txt.T).softmax(dim=-1)[0]
+            scores = (100.0 * feature.float() @ txt.float().T).softmax(dim=-1)[0]
         n = min(top_k, len(candidate_labels))
         idx = torch.topk(scores.cpu(), n).indices
         return [(candidate_labels[int(i)], float(scores.cpu()[int(i)])) for i in idx]
@@ -270,7 +275,7 @@ def classify_scores(feature, candidate_labels: List[str]) -> List[Tuple[str, flo
         if txt is None:
             return []
         with torch.no_grad():
-            scores = (100.0 * feature @ txt.T).softmax(dim=-1)[0].cpu()
+            scores = (100.0 * feature.float() @ txt.float().T).softmax(dim=-1)[0].cpu()
         return [(l, float(scores[i])) for i, l in enumerate(candidate_labels)]
     except Exception as e:
         print(f"[MARQO] classify_scores failed: {e}", file=sys.stderr)
@@ -292,7 +297,7 @@ def classify_scores_text(text: str, candidate_labels: List[str]) -> List[Tuple[s
         if txt is None:
             return []
         with torch.no_grad():
-            scores = (100.0 * q_feat @ txt.T).softmax(dim=-1)[0].cpu()
+            scores = (100.0 * q_feat.float() @ txt.float().T).softmax(dim=-1)[0].cpu()
         return [(l, float(scores[i])) for i, l in enumerate(candidate_labels)]
     except Exception as e:
         print(f"[MARQO] classify_scores_text failed: {e}", file=sys.stderr)

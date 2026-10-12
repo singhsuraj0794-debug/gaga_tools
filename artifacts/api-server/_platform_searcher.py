@@ -226,6 +226,7 @@ def _load_dinov2():
     if _dinov2_model is not None:
         return
     try:
+        import torch
         from transformers import AutoImageProcessor, AutoModel
         _dinov2_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
         _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small").to("cuda" if torch.cuda.is_available() else "cpu")
@@ -237,6 +238,7 @@ def _load_clip():
     if _clip_model is not None:
         return
     try:
+        import torch
         from transformers import CLIPProcessor, CLIPModel
         _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
         _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda" if torch.cuda.is_available() else "cpu")
