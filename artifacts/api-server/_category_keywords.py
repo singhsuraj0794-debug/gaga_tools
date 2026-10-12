@@ -83,8 +83,17 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Home & Kitchen > Home & Kitchen Appliances > Home Appliances > Water Purifiers"),
     ("iron", ["iron", "steam iron"],
      "Home & Kitchen > Home & Kitchen Appliances > Home Appliances > Irons"),
-    ("fan", ["ceiling fan", "table fan", "pedestal fan"],
+    ("fan", ["ceiling fan", "table fan", "pedestal fan", "wall fan", "exhaust fan"],
      "Home & Kitchen > Home & Kitchen Appliances > Home Appliances > Fans"),
+    ("air_cooler", ["air cooler", "mist fan", "mist cooler", "personal cooler",
+                    "tower cooler", "desert cooler", "evaporative cooler",
+                    "cooling tower fan"],
+     "Home & Kitchen > Home & Kitchen Appliances > Home Appliances > Air Coolers"),
+    ("cpu_cooler", ["cpu cooler", "cpu fan", "cooler master", "pc cooler",
+                    "computer cooler", "radiator cooling"],
+     "Electronics > Computer - Accessories and Components > Computer Components > Coolers"),
+    ("cooling_pad", ["cooling pad", "laptop cooler fan", "notebook cooling"],
+     "Electronics > Computer - Accessories and Components > Laptop Accessories > Cooling Pad"),
 
     # ── Storage / organisers ───────────────────────────────────────────────
     ("storage_furniture", ["chest of drawers", "chest of drawer", "storage cabinet",
