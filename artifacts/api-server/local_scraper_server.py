@@ -25,6 +25,49 @@ import _meesho_scraper as meesho_scraper
 import _platform_searcher
 
 
+def _sweep_leaked_tabs():
+    """Close browser tabs abandoned by earlier runs.
+
+    stop-all.ps1 deliberately leaves Chrome running across restarts so logins
+    and cookies survive, which also means its tabs do. _try_playwright used to
+    close its tab only on the success path, so every goto() timeout left a
+    product page behind — and those leaked tabs keep running JS, slowing each
+    later navigation until more of them time out and leak in turn (21 Meesho
+    product pages were found open after one run). This runs before we accept
+    any request, so nothing in flight can be using them.
+    """
+    import urllib.request
+    for base in (getattr(meesho_scraper, "SCRAPE_CDP_URL", None),
+                 getattr(meesho_scraper, "EXTRACT_CDP_URL", None)):
+        if not base:
+            continue
+        try:
+            with urllib.request.urlopen(f"{base}/json", timeout=5) as r:
+                targets = json.load(r)
+        except Exception:
+            continue  # Chrome not up yet, or the port isn't ours
+        closed = 0
+        for t in targets:
+            if t.get("type") != "page":
+                continue
+            url = t.get("url") or ""
+            if not url or url.startswith(("chrome://", "about:", "devtools://")):
+                continue  # keep the default blank tab
+            url = f"{base}/json/close/{t.get('id')}"
+            try:
+                urllib.request.urlopen(
+                    urllib.request.Request(url, method="PUT"), timeout=5).read()
+                closed += 1
+            except Exception:
+                try:
+                    urllib.request.urlopen(url, timeout=5).read()  # older Chrome
+                    closed += 1
+                except Exception:
+                    pass
+        if closed:
+            print(f"closed {closed} leaked tab(s) on {base}", flush=True)
+
+
 class ScraperHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/scrape":
@@ -209,6 +252,13 @@ if __name__ == "__main__":
     # other connection — including the /api/* proxy to the compute API — so the
     # validator reported "Not reachable" and scrapes timed out with 000 while the
     # process was still alive. daemon_threads lets the process exit cleanly.
+    # Before serving: drop any tabs earlier runs left behind in the shared
+    # Chrome (it outlives restarts on purpose).
+    try:
+        _sweep_leaked_tabs()
+    except Exception:
+        pass
+
     server = ThreadingHTTPServer(("0.0.0.0", PORT), ScraperHandler)
     server.daemon_threads = True
     print(f"Local scraper server listening on port {PORT} (threaded)", flush=True)
