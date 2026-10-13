@@ -42,12 +42,14 @@ interface MeeshoDetailedProduct {
 interface ScrapeJob {
   id: string;
   type: "scrape" | "extract";
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   total: number;
   completed: number;
   products: MeeshoDetailedProduct[];
   storeName?: string;
   errors?: string[];
+  /** Extract jobs only: how many store pages have been walked so far. */
+  pages?: number;
   createdAt: Date;
 }
 
@@ -101,6 +103,20 @@ async function scrapeProduct(url: string): Promise<MeeshoDetailedProduct> {
         error: null,
       };
     }
+    if (localResult) {
+      // The local server ran the very same scraper and returned a definitive
+      // failure. Falling through would re-run it in a subprocess with a 900s
+      // timeout — the same work paid for twice, which is what let a handful of
+      // slow products stall a whole batch. Report it and move on.
+      return {
+        id: "", title: "Failed to scrape", description: null, meta_description: null,
+        imageUrl: null, images: [], hsn: null, gst: null, dimensions: null, weight: null,
+        specifications: null, variants: null, price: null, url,
+        status: localResult.status || "failed",
+        error: localResult.error || "Scraping failed",
+      };
+    }
+    // localResult === null => the local server was unreachable or timed out.
   }
 
   const result = await callPython("scrape", url).catch(() => null);
@@ -200,6 +216,11 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
         let page = 1;
         let consecutiveEmpty = 0;
         const MAX_PAGES = 300;
+        // Point the job at the SAME array we keep appending to. Previously this
+        // was only assigned after the loop, so the API returned products: [] for
+        // the entire run — a 4k-product store takes ~30 min and the UI showed an
+        // empty list the whole time, which read as "everything was lost".
+        job.products = allProducts;
         while (page <= MAX_PAGES) {
           const chunk = await runLocalExtractPage(storeUrl, page);
           if (!chunk) {
@@ -217,11 +238,13 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
           } else {
             consecutiveEmpty++;
           }
+          // Publish progress every page so the client can show it filling up.
+          job.pages = page;
+          job.total = allProducts.length;
           job.completed = allProducts.length;
           if (consecutiveEmpty >= 3) break;  // end of products
           page++;
         }
-        job.products = allProducts;
         job.storeName = storeName;
         job.errors = job.errors || [];
         job.total = allProducts.length;
@@ -267,6 +290,7 @@ router.get("/extract/:jobId", (req: Request, res: Response): void => {
     storeName: job.storeName || "",
     total: job.total,
     completed: job.completed,
+    pages: job.pages || 0,
     products: job.products,
     errors: job.errors || [],
   });

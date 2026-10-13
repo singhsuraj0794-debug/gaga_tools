@@ -7,7 +7,7 @@ function isLoopbackLocalScraper(): boolean {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(LOCAL_SCRAPER_URL || "");
 }
 
-export async function runLocalScraper(url: string, platform: "flipkart" | "amazon"): Promise<any> {
+export async function runLocalScraper(url: string, platform: "flipkart" | "amazon" | "meesho"): Promise<any> {
   if (!LOCAL_SCRAPER_URL) return null;
   try {
     const { data } = await axios.post(

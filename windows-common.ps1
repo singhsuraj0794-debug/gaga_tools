@@ -126,7 +126,10 @@ if (-not $env:LOCAL_SCRAPER_URL) { $env:LOCAL_SCRAPER_URL = "http://localhost:90
 
 # Scraper parallelism. The local server is threaded and the browsers accept
 # several concurrent CDP sessions; 6 mixed-platform workers ran cleanly here.
-if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "6" }
+# Raised to 8 now that the CDP tab leak is fixed (_try_playwright closes its tab
+# in a finally) — a 4k-product Meesho store is hours of wall-clock at 6. Dial
+# back to 6 if the shared scrape Chrome starts contending.
+if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "8" }
 if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
 
 # ── Model upgrades for the RTX 5060 Ti (17GB VRAM) ──────────────────────────

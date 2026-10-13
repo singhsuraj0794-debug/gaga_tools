@@ -66,6 +66,7 @@ export default function MeeshoScraper() {
   });
   const [isExtracting, setIsExtracting] = useState(false);
   const [extractJobId, setExtractJobId] = useState<string | null>(null);
+  const [extractProgress, setExtractProgress] = useState<{ pages: number; found: number } | null>(null);
   const extractPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isScraping, setIsScraping] = useState(() => !!sessionStorage.getItem("meesho_jobId"));
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(() => sessionStorage.getItem("meesho_jobId"));
@@ -89,17 +90,24 @@ export default function MeeshoScraper() {
       try {
         const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/extract/${extractJobId}`);
         const job = await pollRes.json();
+        if (job.status === "running") {
+          // A large store takes many minutes to walk; show it advancing instead
+          // of leaving the user staring at a spinner wondering what broke.
+          setExtractProgress({ pages: job.pages || 0, found: job.completed || 0 });
+        }
         if (job.status === "completed") {
           setProducts(job.products || []);
           setFilteredProducts(job.products || []);
           setSelectedUrls(new Set((job.products || []).map((p: MeeshoDetailedProduct) => p.url)));
           const count = (job.products || []).length;
           setRange([1, count || 1]);
-          setStoreName(job.store_name || "");
+          setStoreName(job.storeName || "");
+          setExtractProgress(null);
           setIsExtracting(false);
           setExtractJobId(null);
         } else if (job.status === "failed") {
-          setExtractError(job.error || "Extraction failed");
+          setExtractError(job.error || (job.errors || [])[0] || "Extraction failed");
+          setExtractProgress(null);
           setIsExtracting(false);
           setExtractJobId(null);
         }
@@ -151,6 +159,7 @@ export default function MeeshoScraper() {
 
     setIsExtracting(true);
     setExtractError("");
+    setExtractProgress(null);
     setProducts([]);
     setFilteredProducts([]);
     setSelectedUrls(new Set());
@@ -420,6 +429,15 @@ export default function MeeshoScraper() {
               <div className="flex items-center gap-2 p-4 bg-orange-100 text-orange-800 rounded-lg">
                 <Store className="w-5 h-5 shrink-0" />
                 <span>Store: <strong>{storeName}</strong> &mdash; {products.length} products found</span>
+              </div>
+            )}
+
+            {isExtracting && extractProgress && (
+              <div className="flex items-center gap-2 p-4 bg-orange-50 text-orange-800 rounded-lg">
+                <div className="w-4 h-4 animate-spin rounded-full border-2 border-orange-600 border-t-transparent shrink-0" />
+                <span>
+                  Extracting&hellip; page {extractProgress.pages} &mdash; {extractProgress.found} products found
+                </span>
               </div>
             )}
 
