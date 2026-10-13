@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { logger } from "../../lib/logger.js";
 import ExcelJS from "exceljs";
 import { execFile } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -42,7 +43,7 @@ interface MeeshoDetailedProduct {
 interface ScrapeJob {
   id: string;
   type: "scrape" | "extract";
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
   total: number;
   completed: number;
   products: MeeshoDetailedProduct[];
@@ -50,10 +51,78 @@ interface ScrapeJob {
   errors?: string[];
   /** Extract jobs only: how many store pages have been walked so far. */
   pages?: number;
+  /** Extract jobs: the store being walked, so an interrupted run can resume. */
+  storeUrl?: string;
+  /** Extract jobs: next page to fetch per sort order — the resume point. */
+  progress?: Record<string, number>;
+  /** Scrape jobs: the full URL list, so an interrupted run can finish the rest. */
+  urls?: string[];
   createdAt: Date;
 }
 
 const jobs = new Map<string, ScrapeJob>();
+
+// ── persistence ────────────────────────────────────────────────────────────
+// Jobs used to live only in memory, so any restart (a deploy, or a stack
+// restart) silently threw away a run the user had waited 20+ minutes for — the
+// "I only got 1600 of 4280" report. Persist each job as JSON next to the build
+// output (dist/ is rebuilt, so keep the dir beside it) and reload at startup.
+const JOBS_DIR = process.env.MEESHO_JOBS_DIR || path.resolve(__dirname, "..", "meesho_jobs");
+try {
+  fs.mkdirSync(JOBS_DIR, { recursive: true });
+} catch {
+  // best effort — persistence is a safety net, not a hard dependency
+}
+
+function _writeJob(job: ScrapeJob): void {
+  try {
+    fs.writeFileSync(path.join(JOBS_DIR, `${job.id}.json`), JSON.stringify(job));
+  } catch (err: any) {
+    logger.warn({ id: job.id, err: err.message }, "failed to persist Meesho job");
+  }
+}
+
+const _dirty = new Set<string>();
+let _flushTimer: NodeJS.Timeout | null = null;
+
+/** Persist a job. Writes are coalesced (one per 5s) because a 4k-product job is
+ *  a few MB and it is touched on every page; terminal states pass
+ *  immediate=true so a stop can never lose the finished result. */
+function persistJob(job: ScrapeJob, immediate = false): void {
+  if (immediate) {
+    _dirty.delete(job.id);
+    _writeJob(job);
+    return;
+  }
+  _dirty.add(job.id);
+  if (_flushTimer) return;
+  _flushTimer = setTimeout(() => {
+    _flushTimer = null;
+    for (const id of _dirty) {
+      const j = jobs.get(id);
+      if (j) _writeJob(j);
+    }
+    _dirty.clear();
+  }, 5000);
+}
+
+function loadJobs(): void {
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(JOBS_DIR);
+  } catch {
+    return;
+  }
+  for (const f of files) {
+    if (!f.endsWith(".json")) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8")) as ScrapeJob;
+      if (raw && raw.id) jobs.set(raw.id, raw);
+    } catch (err: any) {
+      logger.warn({ file: f, err: err.message }, "skipping unreadable Meesho job file");
+    }
+  }
+}
 
 function generateJobId(): string {
   return crypto.randomBytes(8).toString("hex");
@@ -150,6 +219,130 @@ async function scrapeProduct(url: string): Promise<MeeshoDetailedProduct> {
   };
 }
 
+const EXTRACT_SORTS = ["", "popularity", "price_low_to_high"];
+const EXTRACT_MAX_PAGES = 300;
+
+/** Map a raw extracted link to the detailed product shape. */
+function mapExtractProduct(p: any): MeeshoDetailedProduct {
+  return {
+    id: p.id || "",
+    title: p.title || "Untitled",
+    description: p.description || null,
+    meta_description: p.meta_description || null,
+    imageUrl: (p.images || [])[0] || p.imageUrl || null,
+    images: p.images || [],
+    hsn: p.hsn || null,
+    gst: p.gst || null,
+    dimensions: p.dimensions || null,
+    weight: p.weight || null,
+    specifications: p.specifications || null,
+    variants: p.variants || null,
+    price: p.price || null,
+    url: p.url || "",
+    status: "success",
+    error: null,
+  };
+}
+
+/** Walk every ordering of a store, unioning links into job.products.
+ *
+ *  Meesho caps store pagination at ~200 pages AND repeats products across them,
+ *  so one ordering exposes only part of a large catalogue (measured: 218 pages
+ *  -> 3490 unique of 4280). Different sort orders walk different windows, so we
+ *  walk each and union. They run concurrently — sequentially a full store took
+ *  ~55 min. Resumable: job.progress holds the next page per ordering, so a
+ *  restart continues instead of re-walking from page 1. Node is single
+ *  threaded, so the shared seen/allProducts merges are atomic.
+ */
+async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
+  const allProducts = job.products;
+  const seen = new Set(allProducts.map((p) => p.url));
+  const progress = job.progress || (job.progress = {});
+  await Promise.all(EXTRACT_SORTS.map(async (sort) => {
+    let page = progress[sort] || 1;
+    let consecutiveEmpty = 0;
+    while (page <= EXTRACT_MAX_PAGES) {
+      const chunk = await runLocalExtractPage(storeUrl, page, sort);
+      if (!chunk) {
+        job.errors = job.errors || [];
+        job.errors.push(`Failed to reach local scraper on page ${page}${sort ? ` (sort=${sort})` : ""}`);
+        consecutiveEmpty++;
+      } else if (chunk.products && chunk.products.length > 0) {
+        consecutiveEmpty = 0;
+        for (const p of chunk.products) {
+          const url = p.url || "";
+          if (!url || seen.has(url)) continue;
+          seen.add(url);
+          allProducts.push(mapExtractProduct(p));
+        }
+      } else {
+        consecutiveEmpty++;
+      }
+      progress[sort] = page + 1;   // the resume point for this ordering
+      job.pages = (job.pages || 0) + 1;
+      job.total = allProducts.length;
+      job.completed = allProducts.length;
+      persistJob(job);
+      if (consecutiveEmpty >= 3) break;  // end of this ordering
+      page++;
+    }
+  }));
+}
+
+/** Scrape every URL that does not already have a product in the job. Skipping
+ *  the finished ones is what makes an interrupted run cheap to resume. */
+async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
+  const done = new Set(job.products.map((p) => p.url));
+  const pending = urls.filter((u) => !done.has(u));
+  await runBatched(pending, async (url) => {
+    const product = await scrapeProduct(url);
+    job.products.push(product);
+    job.completed = job.products.length;
+    persistJob(job);
+    return product;
+  });
+  job.status = "completed";
+  job.completed = job.products.length;
+  persistJob(job, true);
+}
+
+// ── resume work that was mid-flight when the process last stopped ───────────
+// A job persisted as "running" cannot still be running — this process just
+// started — so pick it back up rather than throwing the work away.
+loadJobs();
+for (const job of jobs.values()) {
+  if (job.status !== "running" && job.status !== "pending") continue;
+  if (job.type === "extract" && job.storeUrl && hasLocalScraper()) {
+    logger.info({ jobId: job.id, found: job.products.length }, "resuming interrupted Meesho extract job");
+    walkStore(job, job.storeUrl)
+      .then(() => {
+        job.status = "completed";
+        job.total = job.products.length;
+        job.completed = job.products.length;
+        persistJob(job, true);
+        logger.info({ jobId: job.id, total: job.products.length }, "resumed Meesho extract job completed");
+      })
+      .catch((err: any) => {
+        job.status = "failed";
+        job.errors = [err.message];
+        persistJob(job, true);
+      });
+  } else if (job.type === "scrape" && job.urls && hasLocalScraper()) {
+    logger.info(
+      { jobId: job.id, done: job.products.length, total: job.urls.length },
+      "resuming interrupted Meesho scrape job",
+    );
+    runScrapeJob(job, job.urls).catch((err: any) => {
+      job.status = "failed";
+      job.errors = [err.message];
+      persistJob(job, true);
+    });
+  } else {
+    job.status = "interrupted";
+    persistJob(job, true);
+  }
+}
+
 router.post("/extract", async (req: Request, res: Response): Promise<void> => {
   try {
     const { url } = req.body;
@@ -175,114 +368,47 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
       id: jobId,
       type: "extract",
       status: "pending",
-      total: 1,
+      total: 0,
       completed: 0,
       products: [],
       storeName: "",
       errors: [],
+      storeUrl,
+      progress: {},
       createdAt: new Date(),
     };
     jobs.set(jobId, job);
+    persistJob(job, true);
 
     (async () => {
       job.status = "running";
-
-      // Map a raw product to the detailed product shape
-      const mapProduct = (p: any): MeeshoDetailedProduct => ({
-        id: p.id || "",
-        title: p.title || "Untitled",
-        description: p.description || null,
-        meta_description: p.meta_description || null,
-        imageUrl: (p.images || [])[0] || p.imageUrl || null,
-        images: p.images || [],
-        hsn: p.hsn || null,
-        gst: p.gst || null,
-        dimensions: p.dimensions || null,
-        weight: p.weight || null,
-        specifications: p.specifications || null,
-        variants: p.variants || null,
-        price: p.price || null,
-        url: p.url || "",
-        status: "success",
-        error: null,
-      });
-
-      const seen = new Set<string>();
-      const allProducts: MeeshoDetailedProduct[] = [];
-      let storeName = "";
+      persistJob(job, true);
 
       if (hasLocalScraper()) {
-        // Meesho caps store pagination at ~200 pages AND repeats products across
-        // them, so a single ordering exposes only ~3.4k of this store's 4.3k
-        // products (measured: 218 pages -> 3490 unique). Different sort orders
-        // walk different windows — page 1 of 'popularity' shares NOTHING with
-        // page 1 of the default order — so walk each and union the links
-        // (measured: 3 orders over 15 pages/sort already reached 300 unique vs
-        // 235 for the default alone, i.e. the full catalogue at 218 pages/sort).
-        const SORTS = ["", "popularity", "price_low_to_high"];
-        const MAX_PAGES = 300;
-        // Point the job at the SAME array we keep appending to, so the client can
-        // watch it fill up instead of seeing an empty list until the very end.
-        job.products = allProducts;
-        // Walk the orderings CONCURRENTLY. Each one covers its own ~218-page
-        // window (Meesho never returns empty pages, it repeats products, so the
-        // "3 empty pages" stop only fires at the end of the window) — run them
-        // in sequence and a full store takes ~55 min. Three tabs at once gives
-        // the same union in about a third of the time. Node is single-threaded,
-        // so each merge block below is atomic and needs no locking.
-        await Promise.all(SORTS.map(async (sort) => {
-          let page = 1;
-          let consecutiveEmpty = 0;
-          while (page <= MAX_PAGES) {
-            const chunk = await runLocalExtractPage(storeUrl, page, sort);
-            if (!chunk) {
-              job.errors = job.errors || [];
-              job.errors.push(`Failed to reach local scraper on page ${page}${sort ? ` (sort=${sort})` : ""}`);
-              consecutiveEmpty++;
-            } else if (chunk.products && chunk.products.length > 0) {
-              consecutiveEmpty = 0;
-              for (const p of chunk.products) {
-                const url = p.url || "";
-                if (!url || seen.has(url)) continue;
-                seen.add(url);
-                allProducts.push(mapProduct(p));
-              }
-            } else {
-              consecutiveEmpty++;
-            }
-            // Publish progress every page so the client can show it filling up.
-            job.pages = (job.pages || 0) + 1;
-            job.total = allProducts.length;
-            job.completed = allProducts.length;
-            if (consecutiveEmpty >= 3) break;  // end of this ordering
-            page++;
-          }
-        }));
-        job.storeName = storeName;
-        job.errors = job.errors || [];
-        job.total = allProducts.length;
-        job.completed = allProducts.length;
+        await walkStore(job, storeUrl);
         job.status = "completed";
       } else {
         // No local scraper — try Render's Python (best-effort)
         const result = await callPython("extract", storeUrl).catch((e) => ({ status: "failed", error: e.message }));
         if (result && result.status !== "failed") {
-          job.products = (result.products || []).map(mapProduct);
+          job.products = (result.products || []).map(mapExtractProduct);
           job.storeName = result.store_name || "";
           job.errors = result.errors || [];
-          job.completed = job.products.length;
-          job.total = job.products.length;
           job.status = "completed";
         } else {
           job.status = "failed";
           job.errors = [result?.error || "Failed to extract products (no Chrome CDP available)"];
         }
       }
+      job.total = job.products.length;
+      job.completed = job.products.length;
+      persistJob(job, true);
       logger.info({ jobId, total: job.products.length }, "Meesho extract job completed");
     })().catch((err: any) => {
       logger.error({ jobId, err: err.message }, "Meesho extract job failed");
       job.status = "failed";
       job.errors = [err.message];
+      persistJob(job, true);
     });
 
     res.json({ jobId, status: "pending" });
@@ -334,27 +460,24 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
       total: urls.length,
       completed: 0,
       products: [],
+      urls,
       createdAt: new Date(),
     };
     jobs.set(jobId, job);
+    persistJob(job, true);
 
     logger.info({ jobId, total: urls.length }, "Starting background scrape job");
 
-    (async () => {
-      job.status = "running";
-      // Bounded concurrency (SCRAPE_CONCURRENCY, default 4) — was hardcoded 2.
-      await runBatched(urls, async (url) => {
-        const product = await scrapeProduct(url);
-        job.products.push(product);
-        job.completed++;
-        return product;
+    runScrapeJob(job, urls)
+      .then(() => {
+        logger.info({ jobId, completed: job.completed, total: job.total }, "Scrape job completed");
+      })
+      .catch((err: any) => {
+        logger.error({ jobId, err: err.message }, "Background scrape job failed");
+        job.status = "failed";
+        job.errors = [err.message];
+        persistJob(job, true);
       });
-      job.status = "completed";
-      logger.info({ jobId, completed: job.completed, total: job.total }, "Scrape job completed");
-    })().catch((err: any) => {
-      logger.error({ jobId, err: err.message }, "Background scrape job failed");
-      job.status = "failed";
-    });
 
     res.json({ jobId, total: urls.length });
   } catch (err: any) {

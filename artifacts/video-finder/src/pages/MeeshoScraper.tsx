@@ -105,11 +105,16 @@ export default function MeeshoScraper() {
           setExtractProgress(null);
           setIsExtracting(false);
           setExtractJobId(null);
-        } else if (job.status === "failed") {
-          setExtractError(job.error || (job.errors || [])[0] || "Extraction failed");
+          sessionStorage.removeItem("meesho_extract_jobId");
+        } else if (job.status === "failed" || job.status === "interrupted") {
+          setExtractError(
+            job.error || (job.errors || [])[0] ||
+            `Extraction ${job.status} — ${(job.products || []).length} products were found before it stopped`,
+          );
           setExtractProgress(null);
           setIsExtracting(false);
           setExtractJobId(null);
+          sessionStorage.removeItem("meesho_extract_jobId");
         }
       } catch {
         // keep polling
@@ -119,6 +124,16 @@ export default function MeeshoScraper() {
       if (extractPollRef.current) clearInterval(extractPollRef.current);
     };
   }, [extractJobId]);
+  // Re-attach to an extract job started before a refresh. The API persists jobs
+  // to disk and resumes interrupted ones, so the id is still valid.
+  useEffect(() => {
+    const jid = sessionStorage.getItem("meesho_extract_jobId");
+    if (jid) {
+      setExtractJobId(jid);
+      setIsExtracting(true);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const jobId = sessionStorage.getItem("meesho_jobId");
     if (jobId && isScraping) {
@@ -184,6 +199,7 @@ export default function MeeshoScraper() {
 
       // If async — got a jobId, start polling
       if (data.jobId) {
+        sessionStorage.setItem("meesho_extract_jobId", data.jobId);
         setExtractJobId(data.jobId);
         return;
       }
