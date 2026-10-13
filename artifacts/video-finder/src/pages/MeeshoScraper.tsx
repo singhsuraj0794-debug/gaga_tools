@@ -77,6 +77,13 @@ export default function MeeshoScraper() {
   const [searchQuery, setSearchQuery] = useState("");
   const [range, setRange] = useState<[number, number]>([1, 1]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // How many products we already hold, so each poll asks only for the new ones.
+  // The UI reaches the API through the ngrok tunnel; fetching the whole list
+  // every 3s meant a growing job shipped megabytes per poll until the request
+  // failed and the run looked like it had stopped after a few products.
+  const extractCursorRef = useRef(0);
+  const scrapeCursorRef = useRef(0);
+  const pollFailsRef = useRef(0);
 
   // Persist scrapedProducts across page reloads
   useEffect(() => {
@@ -88,20 +95,24 @@ export default function MeeshoScraper() {
     if (!extractJobId) return;
     extractPollRef.current = setInterval(async () => {
       try {
-        const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/extract/${extractJobId}`);
+        const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/extract/${extractJobId}?since=${extractCursorRef.current}`);
         const job = await pollRes.json();
+        if (typeof job.count === "number") extractCursorRef.current = job.count;
         if (job.status === "running") {
           // A large store takes many minutes to walk; show it advancing instead
           // of leaving the user staring at a spinner wondering what broke.
           setExtractProgress({ pages: job.pages || 0, found: job.completed || 0 });
         }
         if (job.status === "completed") {
-          setProducts(job.products || []);
-          setFilteredProducts(job.products || []);
-          setSelectedUrls(new Set((job.products || []).map((p: MeeshoDetailedProduct) => p.url)));
-          const count = (job.products || []).length;
-          setRange([1, count || 1]);
-          setStoreName(job.storeName || "");
+          // Incremental polls only carried the new tail, so pull the whole list
+          // once now that it has stopped growing.
+          const full = await fetch(`${API_BASE}/api/scraper/meesho/extract/${extractJobId}?since=0`).then((r) => r.json());
+          const all = (full.products || []) as MeeshoDetailedProduct[];
+          setProducts(all);
+          setFilteredProducts(all);
+          setSelectedUrls(new Set(all.map((p) => p.url)));
+          setRange([1, all.length || 1]);
+          setStoreName(full.storeName || job.storeName || "");
           setExtractProgress(null);
           setIsExtracting(false);
           setExtractJobId(null);
@@ -109,7 +120,7 @@ export default function MeeshoScraper() {
         } else if (job.status === "failed" || job.status === "interrupted") {
           setExtractError(
             job.error || (job.errors || [])[0] ||
-            `Extraction ${job.status} — ${(job.products || []).length} products were found before it stopped`,
+            `Extraction ${job.status} — ${job.count || 0} products were found before it stopped`,
           );
           setExtractProgress(null);
           setIsExtracting(false);
@@ -117,7 +128,7 @@ export default function MeeshoScraper() {
           sessionStorage.removeItem("meesho_extract_jobId");
         }
       } catch {
-        // keep polling
+        // keep polling — a transient tunnel error must not look like a stop
       }
     }, 3000);
     return () => {
@@ -175,6 +186,7 @@ export default function MeeshoScraper() {
     setIsExtracting(true);
     setExtractError("");
     setExtractProgress(null);
+    extractCursorRef.current = 0;
     setProducts([]);
     setFilteredProducts([]);
     setSelectedUrls(new Set());
@@ -283,12 +295,16 @@ export default function MeeshoScraper() {
 
       sessionStorage.setItem("meesho_jobId", jobId);
       setScrapeJobId(jobId);
+      scrapeCursorRef.current = 0;
+      pollFailsRef.current = 0;
 
       // Poll for results
       pollRef.current = setInterval(async () => {
         try {
-          const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/scrape/${jobId}`);
+          const pollRes = await fetch(`${API_BASE}/api/scraper/meesho/scrape/${jobId}?since=${scrapeCursorRef.current}`);
           const job = await pollRes.json();
+          pollFailsRef.current = 0;
+          if (typeof job.count === "number") scrapeCursorRef.current = job.count;
           if (job.products) {
             setScrapedProducts(prev => {
               const existing = new Map(prev.map(p => [p.url, p]));
@@ -296,7 +312,7 @@ export default function MeeshoScraper() {
               return Array.from(existing.values());
             });
           }
-          if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+          if (job.status === "completed" || job.status === "failed" || job.status === "cancelled" || job.status === "interrupted") {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
             setIsScraping(false);
@@ -304,10 +320,17 @@ export default function MeeshoScraper() {
             sessionStorage.removeItem("meesho_jobId");
           }
         } catch {
-          if (pollRef.current) clearInterval(pollRef.current);
-          pollRef.current = null;
-          setIsScraping(false);
-          sessionStorage.removeItem("meesho_jobId");
+          // Do NOT tear the run down on one transient error — the job keeps
+          // going server-side, so dropping the poll here is exactly the "stops
+          // after a few products, click start again" symptom. Only give up if
+          // the tunnel stays unreachable.
+          pollFailsRef.current += 1;
+          if (pollFailsRef.current >= 10) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            pollRef.current = null;
+            setIsScraping(false);
+            sessionStorage.removeItem("meesho_jobId");
+          }
         }
       }, 3000);
     } catch (error) {

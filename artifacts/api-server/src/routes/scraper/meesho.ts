@@ -262,12 +262,22 @@ async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
     let page = progress[sort] || 1;
     let consecutiveEmpty = 0;
     while (page <= EXTRACT_MAX_PAGES) {
-      const chunk = await runLocalExtractPage(storeUrl, page, sort);
+      let chunk = await runLocalExtractPage(storeUrl, page, sort);
+      // An unreachable local scraper is NOT "end of store". This also runs at
+      // boot to resume a persisted job, and the API starts before the scraper,
+      // so the first calls legitimately fail — retry the SAME page instead of
+      // counting three nulls as three empty pages, which ended a resumed job
+      // after three pages and marked it completed at 550 of 4280.
+      for (let tries = 0; !chunk && tries < 20; tries++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        chunk = await runLocalExtractPage(storeUrl, page, sort);
+      }
       if (!chunk) {
         job.errors = job.errors || [];
-        job.errors.push(`Failed to reach local scraper on page ${page}${sort ? ` (sort=${sort})` : ""}`);
-        consecutiveEmpty++;
-      } else if (chunk.products && chunk.products.length > 0) {
+        job.errors.push(`Local scraper unreachable at page ${page}${sort ? ` (sort=${sort})` : ""}`);
+        throw new Error("local scraper unreachable");
+      }
+      if (chunk.products && chunk.products.length > 0) {
         consecutiveEmpty = 0;
         for (const p of chunk.products) {
           const url = p.url || "";
@@ -323,9 +333,11 @@ for (const job of jobs.values()) {
         logger.info({ jobId: job.id, total: job.products.length }, "resumed Meesho extract job completed");
       })
       .catch((err: any) => {
-        job.status = "failed";
+        // Stopped, not finished — keep the products found so far and say so.
+        job.status = "interrupted";
         job.errors = [err.message];
         persistJob(job, true);
+        logger.warn({ jobId: job.id, found: job.products.length }, "resumed Meesho extract job stopped");
       });
   } else if (job.type === "scrape" && job.urls && hasLocalScraper()) {
     logger.info(
@@ -430,7 +442,9 @@ router.get("/extract/:jobId", (req: Request, res: Response): void => {
     total: job.total,
     completed: job.completed,
     pages: job.pages || 0,
-    products: job.products,
+    count: job.products.length,
+    // Incremental: `since` is how many the client already has (see /scrape/:jobId).
+    products: job.products.slice(Math.max(0, Number(req.query.since ?? 0) || 0)),
     errors: job.errors || [],
   });
 });
@@ -489,14 +503,20 @@ router.post("/scrape", async (req: Request, res: Response): Promise<void> => {
 router.get("/scrape/:jobId", (req: Request, res: Response): void => {
   const job = jobs.get(req.params.jobId as string);
   if (!job) {
-    res.json({ status: "failed", total: 0, completed: 0, products: [], error: "Job not found" });
+    res.json({ status: "failed", total: 0, completed: 0, count: 0, products: [], error: "Job not found" });
     return;
   }
+  // Incremental polling: the client passes how many products it already holds so
+  // each poll ships only the new ones. Returning the whole list every 3s meant a
+  // 4k-product job pushed ~5 MB per poll through the ngrok tunnel until the
+  // request failed — which read as "scraping stopped after a few products".
+  const since = Math.max(0, Number(req.query.since ?? 0) || 0);
   res.json({
     status: job.status,
     total: job.total,
     completed: job.completed,
-    products: job.products,
+    count: job.products.length,
+    products: job.products.slice(since),
   });
 });
 
