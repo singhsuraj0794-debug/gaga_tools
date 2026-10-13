@@ -224,7 +224,13 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
         // Point the job at the SAME array we keep appending to, so the client can
         // watch it fill up instead of seeing an empty list until the very end.
         job.products = allProducts;
-        for (const sort of SORTS) {
+        // Walk the orderings CONCURRENTLY. Each one covers its own ~218-page
+        // window (Meesho never returns empty pages, it repeats products, so the
+        // "3 empty pages" stop only fires at the end of the window) — run them
+        // in sequence and a full store takes ~55 min. Three tabs at once gives
+        // the same union in about a third of the time. Node is single-threaded,
+        // so each merge block below is atomic and needs no locking.
+        await Promise.all(SORTS.map(async (sort) => {
           let page = 1;
           let consecutiveEmpty = 0;
           while (page <= MAX_PAGES) {
@@ -251,7 +257,7 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
             if (consecutiveEmpty >= 3) break;  // end of this ordering
             page++;
           }
-        }
+        }));
         job.storeName = storeName;
         job.errors = job.errors || [];
         job.total = allProducts.length;
