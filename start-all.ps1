@@ -6,6 +6,21 @@
 . "$PSScriptRoot\windows-common.ps1"
 Import-DotEnv
 
+# Rebuild the API bundle first. dist/ is gitignored and start-prelisting-tunnel.ps1
+# runs dist/index.mjs, so a git pull that changes TypeScript is NOT live until this
+# runs — a "deployed" fix silently did nothing because this step was missing.
+if (Test-Path (Join-Path $ApiDir "build.mjs")) {
+    Write-Host "[build] api-server bundle ..."
+    Push-Location $ApiDir
+    try {
+        npm run build 2>&1 | Select-Object -Last 8 | ForEach-Object { Write-Host "  $_" }
+    } catch {
+        Write-Warning "api-server build failed: $_"
+    } finally {
+        Pop-Location
+    }
+}
+
 & "$PSScriptRoot\start-prelisting-tunnel.ps1"
 & "$PSScriptRoot\start-scraper-tunnel.ps1"
 & "$PSScriptRoot\start-chrome-extract.ps1"
