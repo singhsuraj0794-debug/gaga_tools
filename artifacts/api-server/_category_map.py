@@ -423,6 +423,15 @@ class CategoryMapper:
         # core set, so no sheet is ever attribute-less.
         ids = self.taxonomy.get("ids") or {}
         self._coarse: list[str] = sorted(ids, key=lambda p: -p.count(" > "))
+        # How many taxonomy paths each token appears in — tells a distinctive
+        # product noun ('mop' 2 paths, 'napkin' 2) from a category-generic one
+        # ('bag' 46, 'storage' 52, 'kitchen' 839). A breadcrumb match carried
+        # only by generic tokens is not evidence (see _best_by_overlap).
+        self._tok_freq: dict[str, int] = {}
+        for _p in ids:
+            for _t in _significant(_p):
+                self._tok_freq[_t] = self._tok_freq.get(_t, 0) + 1
+        self._specific_cutoff = max(8, int(0.015 * max(1, len(ids))))
         # Deepest path for each name — used for the title-leaf pass.
         prefixes: set[str] = set()
         for p in ids:
@@ -553,6 +562,22 @@ class CategoryMapper:
             if not score:
                 continue
             leaf_toks = _significant(cand.split(" > ")[-1])
+            # The match must rest on the PRODUCT NOUN, and on a token that is
+            # actually distinctive. 'Home & Kitchen > Storage > Saree Bags' used
+            # to land in '… > Home Organizers & Storage > Grocery Bag': only
+            # 'bag' matched the noun, the distinctive 'saree' matched nothing,
+            # and 'storage' from a parent crumb padded the score to 2. Compare
+            # 'Mop Sticks' -> 'Mops & Cleaning Wipes', a good match carried by
+            # 'mop'. Both share exactly one noun token; the difference is that
+            # 'bag' sits in 46 taxonomy paths and 'mop' in 2. So accept when the
+            # noun is wholly present, or the candidate leaf is wholly described
+            # by the noun, or a shared noun token is rare enough to be evidence.
+            noun_hit = last & ptoks
+            if not (last <= ptoks
+                    or leaf_toks <= last
+                    or any(self._tok_freq.get(t, 0) <= self._specific_cutoff
+                           for t in noun_hit)):
+                continue
             # How precisely the candidate's OWN leaf names the product noun.
             # 'Candles' and 'Candle Mould' both contain 'candl', but only the
             # first is nothing else — so between two equally-evidenced
