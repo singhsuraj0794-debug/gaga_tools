@@ -212,38 +212,45 @@ router.post("/extract", async (req: Request, res: Response): Promise<void> => {
       let storeName = "";
 
       if (hasLocalScraper()) {
-        // Paginate via the local Chrome-CDP scraper in sub-60s chunks (ngrok limit)
-        let page = 1;
-        let consecutiveEmpty = 0;
+        // Meesho caps store pagination at ~200 pages AND repeats products across
+        // them, so a single ordering exposes only ~3.4k of this store's 4.3k
+        // products (measured: 218 pages -> 3490 unique). Different sort orders
+        // walk different windows — page 1 of 'popularity' shares NOTHING with
+        // page 1 of the default order — so walk each and union the links
+        // (measured: 3 orders over 15 pages/sort already reached 300 unique vs
+        // 235 for the default alone, i.e. the full catalogue at 218 pages/sort).
+        const SORTS = ["", "popularity", "price_low_to_high"];
         const MAX_PAGES = 300;
-        // Point the job at the SAME array we keep appending to. Previously this
-        // was only assigned after the loop, so the API returned products: [] for
-        // the entire run — a 4k-product store takes ~30 min and the UI showed an
-        // empty list the whole time, which read as "everything was lost".
+        // Point the job at the SAME array we keep appending to, so the client can
+        // watch it fill up instead of seeing an empty list until the very end.
         job.products = allProducts;
-        while (page <= MAX_PAGES) {
-          const chunk = await runLocalExtractPage(storeUrl, page);
-          if (!chunk) {
-            job.errors = job.errors || [];
-            job.errors.push(`Failed to reach local scraper on page ${page}`);
-            consecutiveEmpty++;
-          } else if (chunk.products && chunk.products.length > 0) {
-            consecutiveEmpty = 0;
-            for (const p of chunk.products) {
-              const url = p.url || "";
-              if (!url || seen.has(url)) continue;
-              seen.add(url);
-              allProducts.push(mapProduct(p));
+        for (const sort of SORTS) {
+          let page = 1;
+          let consecutiveEmpty = 0;
+          while (page <= MAX_PAGES) {
+            const chunk = await runLocalExtractPage(storeUrl, page, sort);
+            if (!chunk) {
+              job.errors = job.errors || [];
+              job.errors.push(`Failed to reach local scraper on page ${page}${sort ? ` (sort=${sort})` : ""}`);
+              consecutiveEmpty++;
+            } else if (chunk.products && chunk.products.length > 0) {
+              consecutiveEmpty = 0;
+              for (const p of chunk.products) {
+                const url = p.url || "";
+                if (!url || seen.has(url)) continue;
+                seen.add(url);
+                allProducts.push(mapProduct(p));
+              }
+            } else {
+              consecutiveEmpty++;
             }
-          } else {
-            consecutiveEmpty++;
+            // Publish progress every page so the client can show it filling up.
+            job.pages = (job.pages || 0) + 1;
+            job.total = allProducts.length;
+            job.completed = allProducts.length;
+            if (consecutiveEmpty >= 3) break;  // end of this ordering
+            page++;
           }
-          // Publish progress every page so the client can show it filling up.
-          job.pages = page;
-          job.total = allProducts.length;
-          job.completed = allProducts.length;
-          if (consecutiveEmpty >= 3) break;  // end of products
-          page++;
         }
         job.storeName = storeName;
         job.errors = job.errors || [];

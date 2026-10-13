@@ -166,8 +166,9 @@ class ScraperHandler(BaseHTTPRequestHandler):
 
             if page_num > 0:
                 # Single-page chunk (fits under ngrok's ~60s limit)
-                print(f"[EXTRACT] meesho page {page_num}: {url}", flush=True)
-                result = meesho_scraper.extract_page(url, page_num)
+                sort = str(body.get("sort") or "")
+                print(f"[EXTRACT] meesho page {page_num}{' sort=' + sort if sort else ''}: {url}", flush=True)
+                result = meesho_scraper.extract_page(url, page_num, sort)
                 self._json(200, result)
                 return
 

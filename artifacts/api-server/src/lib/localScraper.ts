@@ -43,12 +43,12 @@ export async function runLocalExtract(url: string): Promise<any> {
   } catch { return null; }
 }
 
-export async function runLocalExtractPage(url: string, page: number): Promise<any> {
+export async function runLocalExtractPage(url: string, page: number, sort: string = ""): Promise<any> {
   if (!LOCAL_SCRAPER_URL) return null;
   try {
     const { data } = await axios.post(
       `${LOCAL_SCRAPER_URL}/extract`,
-      { url, page },
+      { url, page, sort },
       // extract_page() retries 3x and can take ~122s (30s goto + 10s poll per
       // attempt). Over loopback give it room — measuring a single page took
       // 55.2s, so the old fixed 55000 aborted mid-flight, returned null, and

@@ -781,19 +781,29 @@ def _grab_product_links(page) -> list:
     return products
 
 
-def extract_page(store_url: str, page_num: int) -> dict:
+def extract_page(store_url: str, page_num: int, sort: str = "") -> dict:
     """Extract product links from a single paginated page of a Meesho store (Chrome CDP).
 
     Waits for products to load (up to 20 per page) and retries the page a few
-    times if it loads fewer than expected — Webshare rotates IPs so a retry often
-    succeeds. Kept under ngrok's ~60s limit per call.
+    times if it loads fewer than expected. Kept under ngrok's ~60s limit per call.
+
+    `sort` walks a different ordering of the same store. Meesho caps store
+    pagination at ~200 pages and repeats products across them, so one ordering
+    only exposes part of a large catalogue; a different sort starts from a
+    disjoint set (page 1 of 'popularity' shares nothing with page 1 of the
+    default order), so callers union several sorts to reach the whole store.
     """
     import time as _time
     import urllib.request
     from playwright.sync_api import sync_playwright
 
     url_clean = store_url.split("?")[0].rstrip("/")
-    page_url = f"{url_clean}?_ms=3.0.1" if page_num <= 1 else f"{url_clean}?_ms=3.0.1&page={page_num}"
+    query = ["_ms=3.0.1"]
+    if sort:
+        query.insert(0, f"sort={sort}")
+    if page_num > 1:
+        query.append(f"page={page_num}")
+    page_url = f"{url_clean}?{'&'.join(query)}"
 
     try:
         urllib.request.urlopen(f"{EXTRACT_CDP_URL}/json/version", timeout=5)
