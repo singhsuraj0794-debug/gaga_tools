@@ -204,8 +204,15 @@ def _try_playwright(url: str) -> str:
 
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(SCRAPE_CDP_URL)
-            owns_ctx = not browser.contexts
-            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            # ALWAYS a fresh context. The shared default context on the scrape
+            # Chrome accumulates state from earlier requests and then serves
+            # Meesho's ~2 KB block page for EVERY navigation — measured 0/4
+            # navigations blocked with contexts[0] vs 4/4 with a new context on
+            # the SAME port, and 6/6 even simultaneously once each request had
+            # its own. This was the real cause of "Blocked by Meesho": a long
+            # lived shared context, not the proxy, not rate limiting.
+            ctx = browser.new_context()
+            owns_ctx = True
             page = ctx.new_page()
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)

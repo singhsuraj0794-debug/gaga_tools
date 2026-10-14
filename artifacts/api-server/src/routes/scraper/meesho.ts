@@ -301,15 +301,6 @@ async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
 
 const SCRAPE_MAX_ROUNDS = 3;
 
-// Meesho rate-limits product pages: a burst comes back as a ~2 KB block page
-// ("Blocked by Meesho"), but requests spaced ~8s apart all succeed — measured
-// 6/6 at an 8s gap vs 1/6 at 2s, and 5/5 at 20s. The old 8-way concurrency
-// meant ~80% of a fresh batch came back blocked. So this scraper deliberately
-// runs ONE request at a time with a gap. Slow but it actually finishes; raise
-// MEESHO_SCRAPE_CONCURRENCY only if Meesho stops throttling.
-const MEESHO_CONCURRENCY = Math.max(1, Number(process.env.MEESHO_SCRAPE_CONCURRENCY ?? 1) || 1);
-const MEESHO_DELAY_MS = Math.max(0, Number(process.env.MEESHO_SCRAPE_DELAY_MS ?? 8000) || 0);
-
 /** A product that came back blocked/failed, or with no images, is worth another
  *  attempt: Meesho's block is intermittent (a fresh request usually succeeds),
  *  so retrying recovers most of them. Amazon does the same. */
@@ -335,7 +326,7 @@ async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
       job.completed = job.products.length;
       persistJob(job);
       return product;
-    }, MEESHO_CONCURRENCY, MEESHO_DELAY_MS);
+    });
     pending = roundUrls.filter((u) => needsRetry(results.get(u)));
     if (pending.length && round < SCRAPE_MAX_ROUNDS - 1) {
       logger.info({ jobId: job.id, retry: pending.length, round: round + 2 }, "retrying blocked Meesho products");
