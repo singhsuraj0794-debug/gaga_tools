@@ -118,9 +118,14 @@ export default function MeeshoScraper() {
           setExtractJobId(null);
           sessionStorage.removeItem("meesho_extract_jobId");
         } else if (job.status === "failed" || job.status === "interrupted") {
+          const raw = job.error || (job.errors || [])[0] || "";
+          // A stale id (e.g. from a session before a restart) is not a real
+          // extraction failure — say so instead of showing "Job not found".
+          const stale = /job not found/i.test(raw);
           setExtractError(
-            job.error || (job.errors || [])[0] ||
-            `Extraction ${job.status} — ${job.count || 0} products were found before it stopped`,
+            stale
+              ? "That extraction job is no longer on the server (it may predate a restart). Please extract again."
+              : raw || `Extraction ${job.status} — ${job.count || 0} products were found before it stopped`,
           );
           setExtractProgress(null);
           setIsExtracting(false);

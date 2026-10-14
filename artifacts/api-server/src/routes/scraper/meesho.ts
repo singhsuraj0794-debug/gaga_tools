@@ -262,20 +262,25 @@ async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
     let page = progress[sort] || 1;
     let consecutiveEmpty = 0;
     while (page <= EXTRACT_MAX_PAGES) {
+      // An unreachable local scraper — or a DEAD extraction Chrome, which comes
+      // back as a 200 with {"error": "Chrome CDP not available"} rather than a
+      // transport failure — is NOT "end of store". Treating it as an empty page
+      // made the job silently "complete" with 0 products (and the client show an
+      // empty list), which is exactly what a crashed Chrome looked like.
+      const unreachable = (c: any) =>
+        !c || (typeof c.error === "string" && c.error.includes("Chrome CDP not available"));
       let chunk = await runLocalExtractPage(storeUrl, page, sort);
-      // An unreachable local scraper is NOT "end of store". This also runs at
-      // boot to resume a persisted job, and the API starts before the scraper,
-      // so the first calls legitimately fail — retry the SAME page instead of
-      // counting three nulls as three empty pages, which ended a resumed job
-      // after three pages and marked it completed at 550 of 4280.
-      for (let tries = 0; !chunk && tries < 20; tries++) {
+      for (let tries = 0; unreachable(chunk) && tries < 20; tries++) {
         await new Promise((r) => setTimeout(r, 5000));
         chunk = await runLocalExtractPage(storeUrl, page, sort);
       }
-      if (!chunk) {
+      if (unreachable(chunk)) {
         job.errors = job.errors || [];
-        job.errors.push(`Local scraper unreachable at page ${page}${sort ? ` (sort=${sort})` : ""}`);
-        throw new Error("local scraper unreachable");
+        job.errors.push(
+          `Extraction Chrome (CDP ${process.env.EXTRACT_CDP_URL || "9225"}) is not reachable at page ${page}` +
+          `${sort ? ` (sort=${sort})` : ""} — restart the stack; stopping instead of reporting an empty store`,
+        );
+        throw new Error("extraction Chrome (CDP) not reachable");
       }
       if (chunk.products && chunk.products.length > 0) {
         consecutiveEmpty = 0;
