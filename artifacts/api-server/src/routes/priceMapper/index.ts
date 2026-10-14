@@ -83,6 +83,56 @@ async function callSearch(title: string, imageUrl: string, gajabPrice: string = 
   }
 }
 
+// ── in-memory cache ─────────────────────────────────────────────────────────
+// The products table is ~30k rows. Querying Supabase per request meant a COUNT
+// plus a sorted page every time (~1-4s measured) — and the mapped/unmapped
+// filter was impossible to express in SQL, because 18k+ mapped ids is far too
+// many for a not-in list (which is why `filter=unmapped` was silently ignored).
+// Load the three small tables once, hold them for 60s, answer from memory.
+interface PmCache {
+  products: any[];
+  mappedIds: Set<string>;
+  dupIds: Set<string>;
+  ts: number;
+  loading: Promise<PmCache> | null;
+}
+let _cache: PmCache = { products: [], mappedIds: new Set(), dupIds: new Set(), ts: 0, loading: null };
+
+const CACHE_TTL_MS = 60_000;
+const PRODUCT_PAGES = 35;   // 35k-row ceiling
+const MAPPING_PAGES = 25;   // 25k
+const DUP_PAGES = 10;
+
+async function loadCaches(): Promise<PmCache> {
+  if (Date.now() - _cache.ts < CACHE_TTL_MS && _cache.products.length > 0) return _cache;
+  if (_cache.loading) return _cache.loading;
+  _cache.loading = (async () => {
+    const supabase = getSupabase()!;
+    const pages = (n: number) => Array.from({ length: n }, (_, i) => i);
+    const [prodPages, mapPages, dupPages] = await Promise.all([
+      Promise.all(pages(PRODUCT_PAGES).map((p) =>
+        supabase.from("products").select("id,name,price,image_url,url,category").order("name").range(p * 1000, p * 1000 + 999))),
+      Promise.all(pages(MAPPING_PAGES).map((p) =>
+        supabase.from("price_mappings").select("gajab_product_id").range(p * 1000, p * 1000 + 999))),
+      Promise.all(pages(DUP_PAGES).map((p) =>
+        supabase.from("product_duplicates").select("product_id").range(p * 1000, p * 1000 + 999))),
+    ]);
+    const products: any[] = [];
+    for (const r of prodPages) if (r.data) products.push(...r.data);
+    const mappedIds = new Set<string>();
+    for (const r of mapPages) if (r.data) for (const m of r.data) mappedIds.add(m.gajab_product_id);
+    const dupIds = new Set<string>();
+    for (const r of dupPages) if (r.data) for (const d of r.data) dupIds.add(d.product_id);
+    _cache = { products, mappedIds, dupIds, ts: Date.now(), loading: null };
+    logger.info(
+      { products: products.length, mapped: mappedIds.size, duplicates: dupIds.size },
+      "price-mapper cache loaded",
+    );
+    return _cache;
+  })();
+  return _cache.loading;
+}
+
 // GET /api/price-mapper/products — list Gajab.com products from Supabase (paginated)
 router.get("/products", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -94,34 +144,27 @@ router.get("/products", async (req: Request, res: Response): Promise<void> => {
 
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize as string, 10) || 25));
-    const search = (req.query.search as string || "").trim();
+    const search = (req.query.search as string || "").trim().toLowerCase();
+    const filter = ((req.query.filter as string) || "all").toLowerCase();
     const fromIdx = parseInt(req.query.from as string, 10) || 0;
     const toIdx = parseInt(req.query.to as string, 10) || 0;
 
+    // Serve from the in-memory cache (see loadCaches) — a page is now a slice,
+    // not two Supabase round trips.
+    const c = await loadCaches();
+    let list = c.products;
+    if (search) list = list.filter((p) => (p.name || "").toLowerCase().includes(search));
+    if (filter === "mapped") list = list.filter((p) => c.mappedIds.has(p.id));
+    else if (filter === "unmapped") list = list.filter((p) => !c.mappedIds.has(p.id) && !c.dupIds.has(p.id));
+    else if (filter === "duplicates") list = list.filter((p) => c.dupIds.has(p.id));
+
+    const total = list.length;
     const from = fromIdx > 0 ? fromIdx - 1 : (page - 1) * pageSize;
-    const to = toIdx > fromIdx ? toIdx : from + pageSize - 1;
-
-    let countQuery = supabase.from("products").select("id", { count: "exact", head: true });
-    if (search) {
-      countQuery = countQuery.ilike("name", `%${search}%`);
-    }
-    const { count } = await countQuery;
-
-    let dataQuery = supabase
-      .from("products")
-      .select("id, name, price, image_url, url, category")
-      .order("name")
-      .range(from, to);
-    if (search) {
-      dataQuery = dataQuery.ilike("name", `%${search}%`);
-    }
-    const { data, error } = await dataQuery;
-
-    if (error) throw error;
+    const to = toIdx > fromIdx ? toIdx : from + pageSize;
 
     res.json({
-      products: data || [],
-      total: count ?? (data || []).length,
+      products: list.slice(from, to),
+      total,
       page,
       pageSize,
     });
@@ -191,6 +234,10 @@ router.post("/compare", async (req: Request, res: Response): Promise<void> => {
       const { error: dbErr } = await supabase.from("price_mappings").upsert(mapping, { onConflict: "gajab_product_id" });
       if (dbErr) {
         logger.warn({ err: dbErr.message, code: dbErr.code }, "Failed to save price mapping");
+      } else {
+        // Keep the cache's mapped set current so the unmapped filter drops this
+        // product immediately, without paying for a full reload.
+        _cache.mappedIds.add(product.id);
       }
     } catch (dbErr: any) {
       logger.warn({ err: dbErr.message }, "Failed to save price mapping (table may not exist)");

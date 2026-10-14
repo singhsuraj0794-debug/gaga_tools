@@ -275,10 +275,17 @@ export default function PriceMapper() {
     setBatchProgress({ current: 0, total: 0 });
     try {
       // Fetch ALL unmapped products (server 'unmapped' filter excludes mapped + duplicates)
-      const params = new URLSearchParams({ page: "1", pageSize: "100000", filter: "unmapped" });
-      const res = await fetch(`${API_BASE}/api/price-mapper/products?${params}`);
-      const data = await res.json();
-      const prods: GajabProduct[] = data.products || [];
+      // Fetch EVERY unmapped product. This used to ask for pageSize=100000,
+      // which the API caps at 200 — so "search all unmapped" silently only ever
+      // processed the first 200 rows. Page through instead.
+      const prods: GajabProduct[] = [];
+      for (let p = 1; p <= 200; p++) {
+        const res = await fetch(`${API_BASE}/api/price-mapper/products?page=${p}&pageSize=200&filter=unmapped`);
+        const d = await res.json();
+        const batch: GajabProduct[] = d.products || [];
+        prods.push(...batch);
+        if (batch.length < 200) break;
+      }
 
       setBatchProgress({ current: 0, total: prods.length });
       const CONCURRENCY = 3;
