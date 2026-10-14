@@ -115,6 +115,12 @@ Write-Host "[common] repo=$RepoDir python=$(Get-Python)"
 # returned empty results), so point it at the venv interpreter explicitly.
 $env:PYTHON_BIN = Get-Python
 
+# Python's stdio defaults to the Windows locale encoding (cp1252), so a script
+# printing product data that contains a non-ASCII character (a '✅' in a
+# description, an em dash) crashed with UnicodeEncodeError — that broke the
+# Gajab export. Force UTF-8 for every python subprocess we spawn.
+$env:PYTHONIOENCODING = "utf-8"
+
 # The API's scraper routes branch on this: when it is unset, hasLocalScraper()
 # is false and Meesho store extraction falls back to a SINGLE python subprocess
 # that walks the whole store (MAX_EXTRACT_PAGES=200, 2.5s sleep/page) and gets

@@ -69,6 +69,9 @@ export default function MeeshoScraper() {
   const [extractProgress, setExtractProgress] = useState<{ pages: number; found: number } | null>(null);
   const extractPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [isScraping, setIsScraping] = useState(() => !!sessionStorage.getItem("meesho_jobId"));
+  // Meesho scrapes one product at a time (~10s each), so a store takes minutes
+  // to hours — without a counter it looks like the run has hung.
+  const [scrapeProgress, setScrapeProgress] = useState<{ done: number; total: number } | null>(null);
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(() => sessionStorage.getItem("meesho_jobId"));
   const [isExporting, setIsExporting] = useState(false);
   const catSummary = useCategorySummary("meesho", scrapedProducts);
@@ -284,6 +287,7 @@ export default function MeeshoScraper() {
     if (urlsToScrape.length === 0) return;
 
     setIsScraping(true);
+    setScrapeProgress({ done: 0, total: urlsToScrape.length });
     try {
       const response = await fetch(`${API_BASE}/api/scraper/meesho/scrape`, {
         method: "POST",
@@ -310,6 +314,7 @@ export default function MeeshoScraper() {
           const job = await pollRes.json();
           pollFailsRef.current = 0;
           if (typeof job.count === "number") scrapeCursorRef.current = job.count;
+          setScrapeProgress({ done: job.completed ?? job.count ?? 0, total: job.total || urlsToScrape.length });
           if (job.products) {
             setScrapedProducts(prev => {
               const existing = new Map(prev.map(p => [p.url, p]));
@@ -321,6 +326,7 @@ export default function MeeshoScraper() {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
             setIsScraping(false);
+            setScrapeProgress(null);
             setScrapeJobId(null);
             sessionStorage.removeItem("meesho_jobId");
           }
@@ -334,6 +340,7 @@ export default function MeeshoScraper() {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
             setIsScraping(false);
+            setScrapeProgress(null);
             sessionStorage.removeItem("meesho_jobId");
           }
         }
@@ -775,7 +782,11 @@ export default function MeeshoScraper() {
             {isScraping && (
               <div className="flex items-center gap-2 p-4 bg-blue-50 text-blue-800 rounded-lg">
                 <div className="w-4 h-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
-                <span>Scraping {selectedUrls.size} products...</span>
+                <span>
+                  {scrapeProgress
+                    ? `Scraping ${scrapeProgress.done}/${scrapeProgress.total} products… (Meesho is rate-limited, so this runs one at a time)`
+                    : `Scraping ${selectedUrls.size} products…`}
+                </span>
               </div>
             )}
 

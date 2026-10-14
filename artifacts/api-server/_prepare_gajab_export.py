@@ -31,6 +31,16 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
+# Product data carries non-ASCII (e.g. a '✅' in a description) and this script
+# prints it with ensure_ascii=False. Windows stdio defaults to cp1252, so that
+# raised UnicodeEncodeError and failed the whole export. Emit UTF-8 regardless
+# of how we were launched (windows-common.ps1 also sets PYTHONIOENCODING).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
