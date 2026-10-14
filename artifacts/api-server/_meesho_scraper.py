@@ -239,10 +239,17 @@ def _try_playwright(url: str) -> str:
                 # Wait for the page to actually render product data. `__NEXT_DATA__`
                 # alone appears early with a loading state (we saw 90KB pages with no
                 # og:title), so also accept a real title / schema.org Product block.
+                # Bail out FAST on a block/error page. Meesho intermittently
+                # serves a ~2-3 KB non-product page (rate limit / bot check) —
+                # a real PDP is hundreds of KB. The old loop `continue`d on a
+                # small page and polled all 20 times (40s) before giving up, so
+                # every blocked product cost ~43s and the whole run crawled.
                 for _ in range(20):
                     time.sleep(2)
                     html = page.content()
                     if len(html) < 5000:
+                        if _ > 0:      # ~4s is plenty to tell a block page apart
+                            return ""
                         continue
                     has_product = (
                         ("__NEXT_DATA__" in html and 'og:title' in html)

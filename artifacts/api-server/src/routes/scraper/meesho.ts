@@ -299,18 +299,40 @@ async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
   }));
 }
 
-/** Scrape every URL that does not already have a product in the job. Skipping
- *  the finished ones is what makes an interrupted run cheap to resume. */
+const SCRAPE_MAX_ROUNDS = 3;
+
+/** A product that came back blocked/failed, or with no images, is worth another
+ *  attempt: Meesho's block is intermittent (a fresh request usually succeeds),
+ *  so retrying recovers most of them. Amazon does the same. */
+function needsRetry(p: MeeshoDetailedProduct | undefined): boolean {
+  return !p || p.status !== "success" || !(p.images || []).length;
+}
+
+/** Scrape every URL that does not already have a product in the job, then retry
+ *  the stragglers for a few rounds. Skipping the finished ones is what makes an
+ *  interrupted run cheap to resume. */
 async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
   const done = new Set(job.products.map((p) => p.url));
-  const pending = urls.filter((u) => !done.has(u));
-  await runBatched(pending, async (url) => {
-    const product = await scrapeProduct(url);
-    job.products.push(product);
-    job.completed = job.products.length;
-    persistJob(job);
-    return product;
-  });
+  let pending = urls.filter((u) => !done.has(u));
+  for (let round = 0; round < SCRAPE_MAX_ROUNDS && pending.length; round++) {
+    const roundUrls = pending;
+    const results = new Map<string, MeeshoDetailedProduct>();
+    await runBatched(roundUrls, async (url) => {
+      const product = await scrapeProduct(url);
+      results.set(url, product);
+      const i = job.products.findIndex((p) => p.url === url);
+      if (i >= 0) job.products[i] = product;
+      else job.products.push(product);
+      job.completed = job.products.length;
+      persistJob(job);
+      return product;
+    });
+    pending = roundUrls.filter((u) => needsRetry(results.get(u)));
+    if (pending.length && round < SCRAPE_MAX_ROUNDS - 1) {
+      logger.info({ jobId: job.id, retry: pending.length, round: round + 2 }, "retrying blocked Meesho products");
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
   job.status = "completed";
   job.completed = job.products.length;
   persistJob(job, true);
