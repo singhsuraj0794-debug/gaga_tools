@@ -11,6 +11,8 @@ import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
 import { runBatched } from "../../lib/scrapeBatch";
+import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
+import crypto from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +20,96 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRAPER_SCRIPT = path.resolve(__dirname, "_amazon_scraper.py");
 
 const router = Router();
+
+// ── Amazon scrape jobs (persisted, incremental) ─────────────────────────────
+// The old route was one synchronous request per batch of 12 with a 300s abort,
+// so a slow batch lost its results and an API restart lost the whole run.
+const amazonJobs = new JobStore<AmazonDetailedProduct>(
+  "amazon_jobs", "amazon", "AMAZON_JOBS_DIR",
+);
+
+async function runAmazonJob(job: ScrapeJob<AmazonDetailedProduct>, urls: string[]): Promise<void> {
+  const done = new Set(job.products.map((p) => (p as any).url));
+  const pending = urls.filter((u) => !done.has(u));
+  await runBatched(pending, async (url) => {
+    const product = await scrapeAmazonProduct(url);
+    job.products.push(product);
+    job.completed = job.products.length;
+    amazonJobs.persist(job);
+    return product;
+  });
+  job.status = "completed";
+  job.completed = job.products.length;
+  amazonJobs.persist(job, true);
+}
+
+amazonJobs.load();
+for (const job of amazonJobs.jobs.values()) {
+  if (job.status !== "running" && job.status !== "pending") continue;
+  const urls = (job.urls as string[]) || [];
+  if (urls.length) {
+    logger.info({ jobId: job.id, done: job.products.length, total: urls.length },
+      "resuming interrupted Amazon scrape job");
+    runAmazonJob(job, urls).catch((err: any) => {
+      job.status = "interrupted";
+      job.errors = [err.message];
+      amazonJobs.persist(job, true);
+    });
+  } else {
+    job.status = "interrupted";
+    amazonJobs.persist(job, true);
+  }
+}
+
+router.post("/scrape/job", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { urls } = req.body;
+    if (!urls || !Array.isArray(urls) || urls.length === 0) {
+      res.status(400).json({ error: "Invalid request, 'urls' array required" });
+      return;
+    }
+    const job: ScrapeJob<AmazonDetailedProduct> = {
+      id: crypto.randomBytes(8).toString("hex"),
+      type: "scrape",
+      status: "pending",
+      total: urls.length,
+      completed: 0,
+      products: [],
+      urls,
+      createdAt: new Date(),
+    };
+    amazonJobs.jobs.set(job.id, job);
+    amazonJobs.persist(job, true);
+
+    runAmazonJob(job, urls).catch((err: any) => {
+      logger.error({ jobId: job.id, err: err.message }, "Amazon scrape job failed");
+      job.status = "failed";
+      job.errors = [err.message];
+      amazonJobs.persist(job, true);
+    });
+
+    res.json({ jobId: job.id, total: urls.length });
+  } catch (err: any) {
+    logger.error({ err }, "Amazon scrape job submit failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/scrape/job/:jobId", (req: Request, res: Response): void => {
+  const job = amazonJobs.jobs.get(req.params.jobId as string);
+  if (!job) {
+    res.json({ status: "failed", total: 0, completed: 0, count: 0, products: [], error: "Job not found" });
+    return;
+  }
+  res.json({
+    status: job.status,
+    total: job.total,
+    completed: job.completed,
+    count: job.products.length,
+    products: amazonJobs.slice(job, req.query.since),
+    errors: job.errors || [],
+  });
+});
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });

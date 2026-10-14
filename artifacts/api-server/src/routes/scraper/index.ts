@@ -19,6 +19,8 @@ import type { EcommerceProduct } from "@workspace/api-zod";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
 import { runBatched } from "../../lib/scrapeBatch";
+import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
+import crypto from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +29,100 @@ const SCRAPER_SCRIPT = path.resolve(__dirname, "_scraper.py");
 
 const router = Router();
 const RAPID_API_KEY = process.env.RAPIDAPI_KEY;
+
+// ── Flipkart scrape jobs (persisted, incremental) ──────────────────────────
+// The old route was one synchronous request per batch of 12 with a 300s abort,
+// so a slow batch lost its results and an API restart lost the whole run.
+const flipkartJobs = new JobStore<FlipkartDetailedProduct>(
+  "flipkart_jobs", "flipkart", "FLIPKART_JOBS_DIR",
+);
+
+function newJobId(): string {
+  return crypto.randomBytes(8).toString("hex");
+}
+
+async function runFlipkartJob(job: ScrapeJob<FlipkartDetailedProduct>, urls: string[]): Promise<void> {
+  const done = new Set(job.products.map((p) => (p as any).url));
+  const pending = urls.filter((u) => !done.has(u));
+  await runBatched(pending, async (url) => {
+    const product = await scrapeFlipkartProduct(url);
+    job.products.push(product);
+    job.completed = job.products.length;
+    flipkartJobs.persist(job);
+    return product;
+  });
+  job.status = "completed";
+  job.completed = job.products.length;
+  flipkartJobs.persist(job, true);
+}
+
+flipkartJobs.load();
+for (const job of flipkartJobs.jobs.values()) {
+  if (job.status !== "running" && job.status !== "pending") continue;
+  const urls = (job.urls as string[]) || [];
+  if (urls.length) {
+    logger.info({ jobId: job.id, done: job.products.length, total: urls.length },
+      "resuming interrupted Flipkart scrape job");
+    runFlipkartJob(job, urls).catch((err: any) => {
+      job.status = "interrupted";
+      job.errors = [err.message];
+      flipkartJobs.persist(job, true);
+    });
+  } else {
+    job.status = "interrupted";
+    flipkartJobs.persist(job, true);
+  }
+}
+
+router.post("/flipkart/scrape/job", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { urls } = req.body;
+    if (!urls || !Array.isArray(urls) || urls.length === 0) {
+      res.status(400).json({ error: "Invalid request, 'urls' array required" });
+      return;
+    }
+    const job: ScrapeJob<FlipkartDetailedProduct> = {
+      id: newJobId(),
+      type: "scrape",
+      status: "pending",
+      total: urls.length,
+      completed: 0,
+      products: [],
+      urls,
+      createdAt: new Date(),
+    };
+    flipkartJobs.jobs.set(job.id, job);
+    flipkartJobs.persist(job, true);
+
+    runFlipkartJob(job, urls).catch((err: any) => {
+      logger.error({ jobId: job.id, err: err.message }, "Flipkart scrape job failed");
+      job.status = "failed";
+      job.errors = [err.message];
+      flipkartJobs.persist(job, true);
+    });
+
+    res.json({ jobId: job.id, total: urls.length });
+  } catch (err: any) {
+    logger.error({ err }, "Flipkart scrape job submit failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/flipkart/scrape/job/:jobId", (req: Request, res: Response): void => {
+  const job = flipkartJobs.jobs.get(req.params.jobId as string);
+  if (!job) {
+    res.json({ status: "failed", total: 0, completed: 0, count: 0, products: [], error: "Job not found" });
+    return;
+  }
+  res.json({
+    status: job.status,
+    total: job.total,
+    completed: job.completed,
+    count: job.products.length,
+    products: flipkartJobs.slice(job, req.query.since),
+    errors: job.errors || [],
+  });
+});
 
 /** Find the column index that contains the most URL-like values. */
 function _findUrlColumn(rows: any[][]): number {

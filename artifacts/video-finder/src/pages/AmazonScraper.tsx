@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -342,74 +342,114 @@ export default function AmazonScraper() {
     }
   };
 
-  // Bigger batches keep the server-side pool (SCRAPE_CONCURRENCY) busy: with
-// BATCH_SIZE 5 only 5 of 6 workers ran, and batches were awaited one after
-// another. 12 = 2 waves of 6.
-  const BATCH_SIZE = 12;
-  // Amazon datacenter scrapes intermittently come back blocked/failed (or the
-  // whole batch 5xx/times out). Previously there was NO retry, so those rows
-  // silently kept the single extract image and the sheet looked like "PDP has
-  // only 1-2 images". Retry the stragglers in smaller batches with a pause.
-  const RETRY_BATCH_SIZE = 6;
+  // Amazon datacenter scrapes intermittently come back blocked/failed. Retry
+  // the stragglers in follow-up job rounds with a pause (batch sizing is the
+  // server's job now — SCRAPE_CONCURRENCY).
   const MAX_SCRAPE_ROUNDS = 3;
 
   const needsRescrape = (p: AmazonDetailedProduct) =>
     p.status === "blocked" || p.status === "failed" || !p.images || p.images.length < 2;
+
+  // Scraping is a server-side job now (see /amazon/scrape/job). The old design
+  // was one synchronous request per batch of 12 with a 300s abort: a slow batch
+  // lost its results and an API restart lost the whole run — "stops after a few
+  // products, click start again".
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cursorRef = useRef(0);
+  const failsRef = useRef(0);
+  const doneRef = useRef(0);
+
+  /** Submit a scrape job and follow it to the end, merging products into state.
+   *  Returns the products produced by this round (used to decide what to retry),
+   *  or null if the job could not be submitted. */
+  const runScrapeJob = (urls: string[], overallTotal: number): Promise<{ products: AmazonDetailedProduct[] } | null> =>
+    (async () => {
+      cursorRef.current = 0;
+      failsRef.current = 0;
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/api/scraper/amazon/scrape/job`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls }),
+        });
+      } catch (e: any) {
+        alert(`Failed to submit scrape job: ${e?.message || "Network error"}`);
+        return null;
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        alert(`Failed to submit scrape job: ${data.error || response.status}`);
+        return null;
+      }
+      const { jobId } = data;
+      sessionStorage.setItem("amazon_jobId", jobId);
+
+      const roundProducts: AmazonDetailedProduct[] = [];
+      return await new Promise<{ products: AmazonDetailedProduct[] }>((resolve) => {
+        pollRef.current = setInterval(async () => {
+          try {
+            const r = await fetch(`${API_BASE}/api/scraper/amazon/scrape/job/${jobId}?since=${cursorRef.current}`);
+            const job = await r.json();
+            failsRef.current = 0;
+            if (typeof job.count === "number") cursorRef.current = job.count;
+            if (job.products?.length) {
+              roundProducts.push(...job.products);
+              setProducts(prev => {
+                const existing = new Map(prev.map(p => [p.url, p]));
+                for (const p of job.products) existing.set(p.url, p);
+                return Array.from(existing.values());
+              });
+            }
+            setBatchProgress({ current: doneRef.current + (job.completed || 0), total: overallTotal });
+            if (["completed", "failed", "cancelled", "interrupted"].includes(job.status)) {
+              if (pollRef.current) clearInterval(pollRef.current);
+              pollRef.current = null;
+              sessionStorage.removeItem("amazon_jobId");
+              resolve({ products: roundProducts });
+            }
+          } catch {
+            // The job keeps running server-side; don't abandon on one blip.
+            failsRef.current += 1;
+            if (failsRef.current >= 10) {
+              if (pollRef.current) clearInterval(pollRef.current);
+              pollRef.current = null;
+              resolve({ products: roundProducts });
+            }
+          }
+        }, 3000);
+      });
+    })();
 
   const handleScrape = async () => {
     const urlsToScrape = Array.from(selectedUrls);
     if (urlsToScrape.length === 0) return;
 
     setIsScraping(true);
+    doneRef.current = 0;
 
     let remaining = urlsToScrape;
-    let done = 0;
 
     for (let round = 0; round < MAX_SCRAPE_ROUNDS && remaining.length; round++) {
-      const size = round === 0 ? BATCH_SIZE : RETRY_BATCH_SIZE;
-      const totalBatches = Math.ceil(remaining.length / size);
-      const next: string[] = [];
-      setBatchProgress({ current: 0, total: remaining.length });
+      setBatchProgress({ current: doneRef.current, total: urlsToScrape.length });
+      const roundUrls = remaining;
 
-      for (let batch = 0; batch < totalBatches; batch++) {
-        const batchUrls = remaining.slice(batch * size, (batch + 1) * size);
-
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 300000);
-          const response = await fetch(`${API_BASE}/api/scraper/amazon/scrape`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ urls: batchUrls }),
-            signal: controller.signal,
-          });
-          clearTimeout(timeoutId);
-          const data = await response.json();
-          if (response.ok) {
-            const byUrl = new Map<string, AmazonDetailedProduct>();
-            for (const p of data.products) byUrl.set(p.url, p);
-            setProducts(prev => {
-              const existing = new Map(prev.map(p => [p.url, p]));
-              for (const p of data.products) existing.set(p.url, p);
-              return Array.from(existing.values());
-            });
-            for (const u of batchUrls) {
-              const p = byUrl.get(u);
-              if (!p || needsRescrape(p)) next.push(u);
-            }
-          } else {
-            console.warn(`Batch ${batch + 1}/${totalBatches} failed: ${data.error || "Unknown error"}`);
-            next.push(...batchUrls);
-          }
-        } catch (error: any) {
-          console.error("Scrape error:", error);
-          next.push(...batchUrls);
-        }
-
-        done = Math.min(done + batchUrls.length, urlsToScrape.length);
-        setBatchProgress({ current: done, total: urlsToScrape.length });
+      const outcome = await runScrapeJob(roundUrls, urlsToScrape.length);
+      if (!outcome) {
+        setIsScraping(false);
+        setBatchProgress(null);
+        return;
       }
 
+      doneRef.current = Math.min(doneRef.current + roundUrls.length, urlsToScrape.length);
+      setBatchProgress({ current: doneRef.current, total: urlsToScrape.length });
+
+      const byUrl = new Map(outcome.products.map(p => [p.url, p]));
+      const next: string[] = [];
+      for (const u of roundUrls) {
+        const p = byUrl.get(u);
+        if (!p || needsRescrape(p)) next.push(u);
+      }
       remaining = Array.from(new Set(next));
       if (remaining.length && round < MAX_SCRAPE_ROUNDS - 1) {
         console.log(`Retrying ${remaining.length} product(s) — round ${round + 2}/${MAX_SCRAPE_ROUNDS}`);

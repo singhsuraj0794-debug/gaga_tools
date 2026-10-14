@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -93,6 +93,21 @@ export default function FlipkartScraper() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
   const [range, setRange] = useState<[number, number]>([1, 1]);
+
+  // The scrape runs as a server-side job now (persisted, resumable); the UI just
+  // follows it. The cursor keeps each poll small — the API is reached through
+  // the ngrok tunnel and returning the whole list every 3s made large runs fail.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cursorRef = useRef(0);
+  const failsRef = useRef(0);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = null;
+    setIsScraping(false);
+    setBatchProgress(null);
+    sessionStorage.removeItem("flipkart_jobId");
+  }, []);
 
   const CACHE_KEY = "flipkart-scraper";
 
@@ -247,9 +262,9 @@ export default function FlipkartScraper() {
   };
 
   // Bigger batches keep the server-side pool (SCRAPE_CONCURRENCY) busy: with
-// BATCH_SIZE 5 only 5 of 6 workers ran, and batches were awaited one after
-// another. 12 = 2 waves of 6.
-  const BATCH_SIZE = 12;
+  // Scraping is a server-side job now (see /flipkart/scrape/job). The old
+  // per-batch requests lost a whole batch to a 300s abort and could not survive
+  // a restart, which is what "stops after a few products" was.
 
   const handleScrape = async () => {
     const urlsToScrape = Array.from(selectedUrls);
@@ -257,48 +272,56 @@ export default function FlipkartScraper() {
 
     setIsScraping(true);
     setBatchProgress({ current: 0, total: urlsToScrape.length });
+    cursorRef.current = 0;
+    failsRef.current = 0;
 
-    const totalBatches = Math.ceil(urlsToScrape.length / BATCH_SIZE);
-
-    for (let batch = 0; batch < totalBatches; batch++) {
-      const batchUrls = urlsToScrape.slice(batch * BATCH_SIZE, (batch + 1) * BATCH_SIZE);
-      setBatchProgress({ current: Math.min(batch * BATCH_SIZE, urlsToScrape.length), total: urlsToScrape.length });
-
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000);
-        const response = await fetchRetry(`${API_BASE}/api/scraper/flipkart/scrape`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ urls: batchUrls }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        const data = await response.json();
-        if (response.ok) {
-          setProducts(prev => {
-            const existing = new Map(prev.map(p => [p.url, p]));
-            for (const p of data.products) existing.set(p.url, p);
-            return Array.from(existing.values());
-          });
-        } else {
-          const errMsg = data.error || "Unknown error";
-          alert(`Batch ${batch + 1}/${totalBatches} failed: ${errMsg}`);
-        }
-      } catch (error: any) {
-        console.error("Scrape error:", error);
-        if (error?.name === "AbortError") {
-          alert(`Batch ${batch + 1}/${totalBatches} timed out. Partial results are available for export.`);
-        } else {
-          alert(`Batch ${batch + 1}/${totalBatches} failed: ${error?.message || "Network error"}. Partial results are available for export.`);
-        }
+    try {
+      const response = await fetchRetry(`${API_BASE}/api/scraper/flipkart/scrape/job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls: urlsToScrape }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        alert(`Failed to submit scrape job: ${data.error || response.status}`);
+        setIsScraping(false);
+        setBatchProgress(null);
+        return;
       }
 
-      setBatchProgress({ current: Math.min((batch + 1) * BATCH_SIZE, urlsToScrape.length), total: urlsToScrape.length });
-    }
+      const { jobId } = data;
+      sessionStorage.setItem("flipkart_jobId", jobId);
 
-    setIsScraping(false);
-    setBatchProgress(null);
+      pollRef.current = setInterval(async () => {
+        try {
+          const r = await fetchRetry(`${API_BASE}/api/scraper/flipkart/scrape/job/${jobId}?since=${cursorRef.current}`);
+          const job = await r.json();
+          failsRef.current = 0;
+          if (typeof job.count === "number") cursorRef.current = job.count;
+          if (job.products?.length) {
+            setProducts(prev => {
+              const existing = new Map(prev.map(p => [p.url, p]));
+              for (const p of job.products) existing.set(p.url, p);
+              return Array.from(existing.values());
+            });
+          }
+          setBatchProgress({ current: job.completed || 0, total: job.total || urlsToScrape.length });
+          if (["completed", "failed", "cancelled", "interrupted"].includes(job.status)) {
+            stopPolling();
+          }
+        } catch {
+          // The job keeps running server-side — a single transient tunnel error
+          // must not tear the UI down.
+          failsRef.current += 1;
+          if (failsRef.current >= 10) stopPolling();
+        }
+      }, 3000);
+    } catch (error: any) {
+      console.error("Scrape submit error:", error);
+      alert(`Failed to submit scrape job: ${error?.message || "Network error"}`);
+      setIsScraping(false);
+      setBatchProgress(null);
+    }
   };
 
   const handleExport = async () => {
