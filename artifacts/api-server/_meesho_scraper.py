@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import threading
 import traceback
 
 PROXY = os.environ.get("MEESHO_PROXY", "") or os.environ.get("SCRAPER_PROXY", "")
@@ -34,6 +35,9 @@ CACHE_FILE = os.path.join(os.path.dirname(__file__), ".product_cache.json")
 # code that no longer exists (this hid the source_category_path fix completely).
 CACHE_VERSION = "v3-category"
 _cache = {}  # url_hash -> product dict
+# The local scraper server is a ThreadingHTTPServer: several product scrapes run
+# at once (SCRAPE_CONCURRENCY) and each success mutates _cache and saves it.
+_cache_lock = threading.Lock()
 
 
 def _load_cache():
@@ -52,8 +56,22 @@ def _load_cache():
 
 
 def _save_cache():
-    with open(CACHE_FILE, "w") as f:
-        json.dump({"__version__": CACHE_VERSION, "entries": _cache}, f)
+    # Snapshot under the lock, then write atomically. Concurrently iterating a
+    # dict that another thread is growing raised
+    # `RuntimeError: dictionary changed size during iteration`, which failed
+    # scrapes mid-run; concurrent writes to the same file also corrupt it.
+    with _cache_lock:
+        snapshot = dict(_cache)
+    tmp = CACHE_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"__version__": CACHE_VERSION, "entries": snapshot}, f)
+        os.replace(tmp, CACHE_FILE)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
 
 
 def _cache_key(url: str) -> str:
@@ -504,8 +522,9 @@ def extract_products(html: str, store_url: str) -> dict:
 def scrape_product(url: str, html: str = "") -> dict:
     """Extract full product details from a Meesho product page HTML."""
     k = _cache_key(url)
-    if k in _cache:
-        return _cache[k]
+    with _cache_lock:
+        if k in _cache:
+            return _cache[k]
     if not html:
         url = _normalize_url(url)
         html = _fetch_product_page(url)
@@ -639,7 +658,8 @@ def scrape_product(url: str, html: str = "") -> dict:
         "url": canonical_url,
         "error": None,
     }
-    _cache[_cache_key(url)] = result
+    with _cache_lock:
+        _cache[_cache_key(url)] = result
     _save_cache()
     return result
 
@@ -694,7 +714,8 @@ def _fallback_scrape(html: str, url: str) -> dict:
         "url": url,
         "error": None,
     }
-    _cache[_cache_key(url)] = result
+    with _cache_lock:
+        _cache[_cache_key(url)] = result
     _save_cache()
     return result
 
@@ -1042,7 +1063,8 @@ if __name__ == "__main__":
             result = scrape_product(url, html)
             print(json.dumps(result))
         elif action == "clear-cache":
-            _cache.clear()
+            with _cache_lock:
+                _cache.clear()
             _save_cache()
             print(json.dumps({"status": "success", "message": "Cache cleared"}))
         else:
