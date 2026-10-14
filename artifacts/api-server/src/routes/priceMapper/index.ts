@@ -7,7 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runLocalSearch, hasLocalScraper } from "../../lib/localScraper.js";
+import { runBatched } from "../../lib/scrapeBatch.js";
+import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
 import { pythonBin } from "../../lib/py";
+import crypto from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 
@@ -174,62 +177,53 @@ router.get("/products", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-// POST /api/price-mapper/compare — find a Gajab product on Meesho
-router.post("/compare", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const supabase = getSupabase();
-    if (!supabase) {
-      res.status(500).json({ error: "Supabase not configured" });
-      return;
-    }
-    const { product } = req.body as { product: { id: string; name: string; image_url?: string; imageUrl?: string; price?: string; url?: string } };
-    if (!product || !product.id || !product.name) {
-      res.status(400).json({ error: "Product with id and name required" });
-      return;
-    }
+interface PmProduct {
+  id: string; name: string; image_url?: string; imageUrl?: string; price?: string; url?: string;
+}
 
-    const productImageUrl = product.image_url || product.imageUrl || "";
-    logger.info({ productId: product.id, name: product.name }, "Comparing prices across platforms");
+/** Search every platform for one Gajab product and upsert the mapping.
+ *  Shared by POST /compare and the bulk map-all job. */
+async function compareProduct(product: PmProduct): Promise<Record<string, any>> {
+  const supabase = getSupabase();
+  const productImageUrl = product.image_url || product.imageUrl || "";
+  const searchResult = await callSearch(product.name, productImageUrl, product.price || "", product.url || "");
 
-    // Search all platforms
-    const searchResult = await callSearch(product.name, productImageUrl, product.price || "", product.url || "");
+  const amz = platformMapping("amazon", searchResult.amazon);
+  const ms = platformMapping("meesho", searchResult.meesho);
+  const fk = platformMapping("flipkart", searchResult.flipkart);
 
-    const amz = platformMapping("amazon", searchResult.amazon);
-    const ms = platformMapping("meesho", searchResult.meesho);
-    const fk = platformMapping("flipkart", searchResult.flipkart);
+  const mapping: Record<string, any> = {
+    gajab_product_id: product.id,
+    gajab_title: product.name,
+    gajab_image_url: productImageUrl || null,
+    gajab_price: product.price || null,
+    gajab_url: product.url || null,
+    amazon_url: amz.url,
+    amazon_price: amz.price,
+    amazon_match_score: amz.match_score,
+    amazon_dinov2: amz.dinov2_sim,
+    amazon_clip: amz.clip_sim,
+    amazon_match_tag: amz.match_tag,
+    amazon_unavailable: amz.unavailable,
+    meesho_url: ms.url,
+    meesho_price: ms.price,
+    meesho_match_score: ms.match_score,
+    flipkart_url: fk.url,
+    flipkart_price: fk.price,
+    flipkart_match_score: fk.match_score,
+    flipkart_dinov2: fk.dinov2_sim,
+    flipkart_clip: fk.clip_sim,
+    flipkart_match_tag: fk.match_tag,
+    flipkart_unavailable: fk.unavailable,
+    last_checked: new Date().toISOString(),
+    search_error: {
+      amazon: searchResult.amazon?.status !== "success" ? (searchResult.amazon?.error || searchResult.amazon?.status) : null,
+      meesho: searchResult.meesho?.status !== "success" ? (searchResult.meesho?.error || searchResult.meesho?.status) : null,
+      flipkart: searchResult.flipkart?.status !== "success" ? (searchResult.flipkart?.error || searchResult.flipkart?.status) : null,
+    },
+  };
 
-    const mapping: Record<string, any> = {
-      gajab_product_id: product.id,
-      gajab_title: product.name,
-      gajab_image_url: productImageUrl || null,
-      gajab_price: product.price || null,
-      gajab_url: product.url || null,
-      amazon_url: amz.url,
-      amazon_price: amz.price,
-      amazon_match_score: amz.match_score,
-      amazon_dinov2: amz.dinov2_sim,
-      amazon_clip: amz.clip_sim,
-      amazon_match_tag: amz.match_tag,
-      amazon_unavailable: amz.unavailable,
-      meesho_url: ms.url,
-      meesho_price: ms.price,
-      meesho_match_score: ms.match_score,
-      flipkart_url: fk.url,
-      flipkart_price: fk.price,
-      flipkart_match_score: fk.match_score,
-      flipkart_dinov2: fk.dinov2_sim,
-      flipkart_clip: fk.clip_sim,
-      flipkart_match_tag: fk.match_tag,
-      flipkart_unavailable: fk.unavailable,
-      last_checked: new Date().toISOString(),
-      search_error: {
-        amazon: searchResult.amazon?.status !== "success" ? (searchResult.amazon?.error || searchResult.amazon?.status) : null,
-        meesho: searchResult.meesho?.status !== "success" ? (searchResult.meesho?.error || searchResult.meesho?.status) : null,
-        flipkart: searchResult.flipkart?.status !== "success" ? (searchResult.flipkart?.error || searchResult.flipkart?.status) : null,
-      },
-    };
-
-    // Save to Supabase
+  if (supabase) {
     try {
       const { error: dbErr } = await supabase.from("price_mappings").upsert(mapping, { onConflict: "gajab_product_id" });
       if (dbErr) {
@@ -242,8 +236,27 @@ router.post("/compare", async (req: Request, res: Response): Promise<void> => {
     } catch (dbErr: any) {
       logger.warn({ err: dbErr.message }, "Failed to save price mapping (table may not exist)");
     }
+  }
+  return mapping;
+}
 
-    res.json({ mapping, search_errors: mapping.search_errors });
+// POST /api/price-mapper/compare — find a Gajab product on Meesho
+router.post("/compare", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      res.status(500).json({ error: "Supabase not configured" });
+      return;
+    }
+    const { product } = req.body as { product: PmProduct };
+    if (!product || !product.id || !product.name) {
+      res.status(400).json({ error: "Product with id and name required" });
+      return;
+    }
+
+    logger.info({ productId: product.id, name: product.name }, "Comparing prices across platforms");
+    const mapping = await compareProduct(product);
+    res.json({ mapping, search_errors: mapping.search_error });
   } catch (err: any) {
     logger.error({ err: err.message }, "Price comparison failed");
     res.status(500).json({ error: err.message });
@@ -427,6 +440,125 @@ router.get("/duplicates", async (_req: Request, res: Response): Promise<void> =>
     res.json({ duplicates: [] });
   }
 });
+
+// ── bulk "map every unmapped product" job (persisted, resumable) ────────────
+// A compare takes ~30s, so mapping ~12k products is tens of hours — far too long
+// for a browser loop that dies on a refresh. Run it as a persisted background job
+// (the same store the scrapers use): progress survives a restart and the client
+// can watch it advance.
+const mapJobs = new JobStore<Record<string, any>>(
+  "price_mapper_jobs", "price-mapper", "PRICE_MAPPER_JOBS_DIR",
+);
+
+const MAP_CONCURRENCY = Math.max(1, Number(process.env.PRICE_MAPPER_CONCURRENCY ?? 3) || 3);
+
+async function runMapJob(job: ScrapeJob<Record<string, any>>, queue: PmProduct[]): Promise<void> {
+  job.status = "running";
+  mapJobs.persist(job, true);
+  const done = new Set(job.products.map((p) => p.gajab_product_id));
+  const pending = queue.filter((p) => !done.has(p.id));
+  await runBatched(
+    pending,
+    async (product) => {
+      if (job.status === "cancelled") return null;
+      const mapping = await compareProduct(product);
+      job.products.push(mapping);
+      job.completed = job.products.length;
+      mapJobs.persist(job);
+      return mapping;
+    },
+    MAP_CONCURRENCY,
+    0,
+  );
+  if (job.status !== "cancelled") job.status = "completed";
+  job.completed = job.products.length;
+  mapJobs.persist(job, true);
+}
+
+// POST /api/price-mapper/map-all — start a background job over every unmapped product
+router.post("/map-all", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      res.status(500).json({ error: "Supabase not configured" });
+      return;
+    }
+    const c = await loadCaches();
+    const limit = Math.max(0, Number((req.body || {}).limit ?? 0) || 0);
+    let queue = c.products.filter((p) => !c.mappedIds.has(p.id) && !c.dupIds.has(p.id));
+    if (limit > 0) queue = queue.slice(0, limit);
+
+    const job: ScrapeJob<Record<string, any>> = {
+      id: crypto.randomBytes(8).toString("hex"),
+      type: "price-map",
+      status: "pending",
+      total: queue.length,
+      completed: 0,
+      products: [],
+      queue,
+      errors: [],
+      createdAt: new Date(),
+    };
+    mapJobs.jobs.set(job.id, job);
+    mapJobs.persist(job, true);
+    logger.info({ jobId: job.id, total: queue.length, concurrency: MAP_CONCURRENCY }, "Starting price-map job");
+
+    runMapJob(job, queue).catch((err: any) => {
+      logger.error({ jobId: job.id, err: err.message }, "price-map job failed");
+      job.status = "failed";
+      job.errors = [err.message];
+      mapJobs.persist(job, true);
+    });
+
+    res.json({ jobId: job.id, total: queue.length });
+  } catch (err: any) {
+    logger.error({ err: err.message }, "price-map submit failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/map-all/:jobId", (req: Request, res: Response): void => {
+  const job = mapJobs.jobs.get(req.params.jobId as string);
+  if (!job) {
+    res.json({ status: "failed", total: 0, completed: 0, count: 0, products: [], error: "Job not found" });
+    return;
+  }
+  res.json({
+    status: job.status,
+    total: job.total,
+    completed: job.completed,
+    count: job.products.length,
+    products: mapJobs.slice(job, req.query.since),
+    errors: job.errors || [],
+  });
+});
+
+router.post("/map-all/:jobId/cancel", (req: Request, res: Response): void => {
+  const job = mapJobs.jobs.get(req.params.jobId as string);
+  if (job) {
+    job.status = "cancelled";
+    mapJobs.persist(job, true);
+  }
+  res.json({ status: "cancelled" });
+});
+
+// Resume a price-map job that was running when the process last stopped.
+mapJobs.load();
+for (const job of mapJobs.jobs.values()) {
+  if (job.status !== "running" && job.status !== "pending") continue;
+  const queue = (job.queue as PmProduct[]) || [];
+  if (queue.length) {
+    logger.info({ jobId: job.id, done: job.products.length, total: queue.length }, "resuming price-map job");
+    runMapJob(job, queue).catch((err: any) => {
+      job.status = "interrupted";
+      job.errors = [err.message];
+      mapJobs.persist(job, true);
+    });
+  } else {
+    job.status = "interrupted";
+    mapJobs.persist(job, true);
+  }
+}
 
 // POST /api/price-mapper/export — export mappings to Excel
 router.post("/export", async (req: Request, res: Response): Promise<void> => {

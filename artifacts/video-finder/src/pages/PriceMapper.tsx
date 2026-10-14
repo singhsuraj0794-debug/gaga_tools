@@ -130,6 +130,7 @@ export default function PriceMapper() {
   const [researchMode, setResearchMode] = useState(false);
   const [skipAttempted, setSkipAttempted] = useState(true);
   const batchAbortRef = useRef(false);
+  const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // O(1) lookups
@@ -270,42 +271,57 @@ export default function PriceMapper() {
   }
 
   async function searchAllUnmapped() {
-    batchAbortRef.current = false;
     setBatchSearching(true);
     setBatchProgress({ current: 0, total: 0 });
     try {
-      // Fetch ALL unmapped products (server 'unmapped' filter excludes mapped + duplicates)
-      // Fetch EVERY unmapped product. This used to ask for pageSize=100000,
-      // which the API caps at 200 — so "search all unmapped" silently only ever
-      // processed the first 200 rows. Page through instead.
-      const prods: GajabProduct[] = [];
-      for (let p = 1; p <= 200; p++) {
-        const res = await fetch(`${API_BASE}/api/price-mapper/products?page=${p}&pageSize=200&filter=unmapped`);
-        const d = await res.json();
-        const batch: GajabProduct[] = d.products || [];
-        prods.push(...batch);
-        if (batch.length < 200) break;
+      // This runs SERVER-SIDE as a persisted job now. A compare takes ~30s, so
+      // mapping ~12k products is tens of hours — a browser loop died on refresh
+      // and lost everything. The job survives restarts and can be cancelled.
+      const res = await fetch(`${API_BASE}/api/price-mapper/map-all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const start = await res.json();
+      if (!res.ok || !start.jobId) {
+        setError(start.error || "Failed to start the mapping job");
+        setBatchSearching(false);
+        return;
       }
 
-      setBatchProgress({ current: 0, total: prods.length });
-      const CONCURRENCY = 3;
-      let completed = 0;
-      for (let i = 0; i < prods.length && !batchAbortRef.current; i += CONCURRENCY) {
-        const batch = prods.slice(i, i + CONCURRENCY);
-        await Promise.all(batch.map(async (product) => {
-          if (batchAbortRef.current) return;
-          await searchPlatforms(product, true);
-          completed++;
-          setBatchProgress({ current: completed, total: prods.length });
-        }));
-      }
+      const jobId: string = start.jobId;
+      sessionStorage.setItem("priceMapJobId", jobId);
+      setBatchProgress({ current: 0, total: start.total || 0 });
+      let cursor = 0;
 
-      fetchMappedCount();
-      setSuccessMsg(`Batch search complete: ${completed}/${prods.length} unmapped product(s) processed`);
-      setTimeout(() => setSuccessMsg(""), 3000);
+      batchPollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/price-mapper/map-all/${jobId}?since=${cursor}`);
+          const job = await r.json();
+          if (typeof job.count === "number") cursor = job.count;
+          if (job.products?.length) {
+            setMappingsMap(prev => {
+              const next = new Map(prev);
+              for (const m of job.products) next.set(m.gajab_product_id, m);
+              return next;
+            });
+          }
+          setBatchProgress({ current: job.completed || 0, total: job.total || 0 });
+          if (["completed", "failed", "cancelled", "interrupted"].includes(job.status)) {
+            if (batchPollRef.current) clearInterval(batchPollRef.current);
+            batchPollRef.current = null;
+            sessionStorage.removeItem("priceMapJobId");
+            setBatchSearching(false);
+            fetchMappedCount();
+            setSuccessMsg(`Mapping job ${job.status}: ${job.completed}/${job.total} processed`);
+            setTimeout(() => setSuccessMsg(""), 5000);
+          }
+        } catch {
+          // Keep polling — the job runs server-side; a blip must not stop it.
+        }
+      }, 5000);
     } catch {
-      setError("Batch search failed");
-    } finally {
+      setError("Failed to start the mapping job");
       setBatchSearching(false);
     }
   }
@@ -357,6 +373,14 @@ export default function PriceMapper() {
 
   function abortBatchSearch() {
     batchAbortRef.current = true;
+    // The bulk mapping runs server-side, so also cancel the job there.
+    const jobId = sessionStorage.getItem("priceMapJobId");
+    if (jobId) {
+      fetch(`${API_BASE}/api/price-mapper/map-all/${jobId}/cancel`, { method: "POST" }).catch(() => {});
+      sessionStorage.removeItem("priceMapJobId");
+    }
+    if (batchPollRef.current) clearInterval(batchPollRef.current);
+    batchPollRef.current = null;
     setBatchSearching(false);
   }
 
