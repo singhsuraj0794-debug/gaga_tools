@@ -192,109 +192,76 @@ def _try_curl_cffi(url: str, impersonate: str = "safari15_5") -> str:
     return ""
 
 
-# ── Private headless Chrome, behind the rotating residential proxy ───────────
-# Deliberately launch() a private browser per request instead of attaching to the
-# shared scrape Chrome over CDP. Two hard-won reasons:
-#   * connect_over_cdp() to that shared profile repeatedly HANGS — the CDP
-#     handshake times out after 180s even though /json/version answers promptly.
-#     That is the same failure _scraper.py documents for Flipkart, and it is what
-#     masqueraded as "Blocked by Meesho" and stretched a 4k store to 100+ hours.
-#   * routing the browser through the local Webshare forwarder (localhost:9224)
-#     gives every request a DIFFERENT residential exit IP, so Meesho's per-IP
-#     rate limit never accumulates (measured: 11/12 real pages via the proxy,
-#     while the direct IP got throttled into ~4% success).
-PROXY_SERVER = os.environ.get("MEESHO_PROXY_SERVER", "http://localhost:9224")
+# ── Shared Chrome over CDP (proxied first, then direct) ──────────────────────
+# We attach to the shared Chromes instead of launch()ing our own. A fresh browser
+# is served Meesho's edge "Access Denied" page (measured 0/5 real pages with a
+# clean profile AND with a persistent one), while the shared profile gets real
+# pages — so the profile/trust is what Meesho keys on.
+#
+# The catch: connect_over_cdp can HANG for its full 180s default timeout on a
+# stuck profile. That is what produced days of phantom "Blocked by Meesho" (the
+# page never loaded, so the product looked blocked). So every attempt uses a
+# short connect timeout, and we try the PROXIED Chrome first — it rotates
+# residential IPs, so Meesho's per-IP rate limit never accumulates — then fall
+# back to the direct one.
+_CDP_ORDER = [c for c in (SCRAPE_CDP_URL, EXTRACT_CDP_URL) if c]
+CDP_CONNECT_TIMEOUT_MS = int(os.environ.get("MEESHO_CDP_CONNECT_TIMEOUT_MS", "8000"))
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch a product page with a private headless Chrome behind the proxy."""
+    """Fetch a product page via a shared Chrome over CDP (proxied, then direct)."""
     try:
         import time
         from playwright.sync_api import sync_playwright
 
-        launch_kwargs: dict = dict(
-            headless=True,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled",
-                  "--disable-dev-shm-usage"],
-        )
-        if PROXY_SERVER:
-            launch_kwargs["proxy"] = {"server": PROXY_SERVER}
-        try:
-            from _chrome_path import chrome_executable
-            _exe = chrome_executable()
-            if _exe:
-                launch_kwargs["executable_path"] = _exe
-        except Exception:
-            pass
-
-        with sync_playwright() as p:
-            browser = p.chromium.launch(**launch_kwargs)
-            ctx = browser.new_context(locale="en-IN")
-            page = ctx.new_page()
+        for cdp in _CDP_ORDER:
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                # Pause any autoplaying hero video — a playing video keeps the page
-                # busy and can cover the DOM, which stalls scraping on the PDP.
-                try:
-                    page.evaluate("""() => {
-                        document.querySelectorAll('video').forEach(v => {
-                            try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
-                        });
-                    }""")
-                except Exception:
-                    pass
-
-                    # Amazon (and others) can open a full-screen VIDEO lightbox
-                    # ("VIDEOS | IMAGES") over the page, which blocks extraction.
-                    # Press Escape and click any close button, then re-pause videos.
+                with sync_playwright() as p:
+                    browser = p.chromium.connect_over_cdp(cdp, timeout=CDP_CONNECT_TIMEOUT_MS)
+                    # Fresh context: the shared default context accumulates state
+                    # and starts serving block pages for every navigation.
+                    ctx = browser.new_context()
+                    page = ctx.new_page()
                     try:
-                        page.keyboard.press("Escape")
-                        page.wait_for_timeout(400)
-                        page.evaluate("""() => {
-                            const closers = document.querySelectorAll(
-                                '[aria-label*="Close" i], button.a-button-close, .a-modal-close, [data-action="a-popover-close"]');
-                            closers.forEach(btn => { try { btn.click(); } catch (e) {} });
-                            document.querySelectorAll('video').forEach(v => {
-                                try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
-                            });
-                        }""")
-                    except Exception:
-                        pass
-                # Wait for the page to actually render product data. `__NEXT_DATA__`
-                # alone appears early with a loading state (we saw 90KB pages with no
-                # og:title), so also accept a real title / schema.org Product block.
-                # Bail out FAST on a block/error page. Meesho intermittently
-                # serves a ~2-3 KB non-product page (rate limit / bot check) —
-                # a real PDP is hundreds of KB. The old loop `continue`d on a
-                # small page and polled all 20 times (40s) before giving up, so
-                # every blocked product cost ~43s and the whole run crawled.
-                for _ in range(20):
-                    time.sleep(2)
-                    html = page.content()
-                    if len(html) < 5000:
-                        if _ > 0:      # ~4s is plenty to tell a block page apart
-                            return ""
-                        continue
-                    has_product = (
-                        ("__NEXT_DATA__" in html and 'og:title' in html)
-                        or '"@type":"Product"' in html
-                        or '"@type": "Product"' in html
-                        or "window.__INITIAL_STATE__" in html
-                    )
-                    if has_product:
-                        return html
-                # Fall back to whatever we have (still better than nothing).
-                html = page.content()
-                if len(html) > 20000:
-                    return html
-            finally:
-                # Tear the whole private browser down — it exists only for this
-                # request, so there is no shared tab to leak.
-                for _obj in (page, ctx, browser):
-                    try:
-                        _obj.close()
-                    except Exception:
-                        pass
+                        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        # Pause any autoplaying hero video — a playing video keeps
+                        # the page busy and can cover the DOM.
+                        try:
+                            page.evaluate("""() => {
+                                document.querySelectorAll('video').forEach(v => {
+                                    try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                                });
+                            }""")
+                        except Exception:
+                            pass
+                        # Bail out fast on a block/error page (Meesho's is a few KB;
+                        # a real PDP is hundreds of KB) instead of polling 20x2s.
+                        for _ in range(20):
+                            time.sleep(2)
+                            html = page.content()
+                            if len(html) < 5000:
+                                if _ > 0:
+                                    break          # block page -> try the next Chrome
+                                continue
+                            has_product = (
+                                ("__NEXT_DATA__" in html and 'og:title' in html)
+                                or '"@type":"Product"' in html
+                                or '"@type": "Product"' in html
+                                or "window.__INITIAL_STATE__" in html
+                            )
+                            if has_product:
+                                return html
+                        html = page.content()
+                        if len(html) > 20000:
+                            return html
+                    finally:
+                        for _obj in (page, ctx):
+                            try:
+                                _obj.close()
+                            except Exception:
+                                pass
+            except Exception:
+                continue
     except Exception:
         pass
     return ""
