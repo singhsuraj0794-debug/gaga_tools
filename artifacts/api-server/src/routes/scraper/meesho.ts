@@ -306,6 +306,12 @@ async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
 
 const SCRAPE_MAX_ROUNDS = 3;
 
+// Meesho is the only platform that throttles, and it does so hard: at the shared
+// SCRAPE_CONCURRENCY (8) the block rate climbs until almost everything comes
+// back blocked (measured: success fell 73% -> 2% mid-run). 3 keeps the unproxied
+// Chrome fast while staying under Meesho's rate limit.
+const MEESHO_CONCURRENCY = Math.max(1, Number(process.env.MEESHO_SCRAPE_CONCURRENCY ?? 3) || 3);
+
 /** A product that came back blocked/failed, or with no images, is worth another
  *  attempt: Meesho's block is intermittent (a fresh request usually succeeds),
  *  so retrying recovers most of them. Amazon does the same. */
@@ -331,7 +337,7 @@ async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
       job.completed = job.products.length;
       persistJob(job);
       return product;
-    });
+    }, MEESHO_CONCURRENCY, 0);
     pending = roundUrls.filter((u) => needsRetry(results.get(u)));
     if (pending.length && round < SCRAPE_MAX_ROUNDS - 1) {
       logger.info({ jobId: job.id, retry: pending.length, round: round + 2 }, "retrying blocked Meesho products");
