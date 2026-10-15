@@ -192,31 +192,44 @@ def _try_curl_cffi(url: str, impersonate: str = "safari15_5") -> str:
     return ""
 
 
-# ── Real Chrome session (CDP) ────────────────────────────────────────────────
-# Product pages must go through the UNPROXIED Chrome. The Webshare-proxied one
-# (SCRAPE_CDP_URL) is blocked by Meesho for product pages — measured on the same
-# URLs at concurrency 6: EXTRACT_CDP_URL (unproxied) 17/18 OK in 13s, while
-# SCRAPE_CDP_URL (proxied) was 0/18 in 541s. That is what turned a 3-4 hour store
-# into a 100+ hour one and reported "Blocked by Meesho" on most products.
+# ── Private headless Chrome, behind the rotating residential proxy ───────────
+# Deliberately launch() a private browser per request instead of attaching to the
+# shared scrape Chrome over CDP. Two hard-won reasons:
+#   * connect_over_cdp() to that shared profile repeatedly HANGS — the CDP
+#     handshake times out after 180s even though /json/version answers promptly.
+#     That is the same failure _scraper.py documents for Flipkart, and it is what
+#     masqueraded as "Blocked by Meesho" and stretched a 4k store to 100+ hours.
+#   * routing the browser through the local Webshare forwarder (localhost:9224)
+#     gives every request a DIFFERENT residential exit IP, so Meesho's per-IP
+#     rate limit never accumulates (measured: 11/12 real pages via the proxy,
+#     while the direct IP got throttled into ~4% success).
+PROXY_SERVER = os.environ.get("MEESHO_PROXY_SERVER", "http://localhost:9224")
+
+
 def _try_playwright(url: str) -> str:
-    """Fetch a product page via a real Chrome over CDP (the unproxied one)."""
+    """Fetch a product page with a private headless Chrome behind the proxy."""
     try:
-        import time, urllib.request
+        import time
         from playwright.sync_api import sync_playwright
 
-        urllib.request.urlopen(f"{EXTRACT_CDP_URL}/json/version", timeout=5)
+        launch_kwargs: dict = dict(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled",
+                  "--disable-dev-shm-usage"],
+        )
+        if PROXY_SERVER:
+            launch_kwargs["proxy"] = {"server": PROXY_SERVER}
+        try:
+            from _chrome_path import chrome_executable
+            _exe = chrome_executable()
+            if _exe:
+                launch_kwargs["executable_path"] = _exe
+        except Exception:
+            pass
 
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(EXTRACT_CDP_URL)
-            # ALWAYS a fresh context. The shared default context on the scrape
-            # Chrome accumulates state from earlier requests and then serves
-            # Meesho's ~2 KB block page for EVERY navigation — measured 0/4
-            # navigations blocked with contexts[0] vs 4/4 with a new context on
-            # the SAME port, and 6/6 even simultaneously once each request had
-            # its own. This was the real cause of "Blocked by Meesho": a long
-            # lived shared context, not the proxy, not rate limiting.
-            ctx = browser.new_context()
-            owns_ctx = True
+            browser = p.chromium.launch(**launch_kwargs)
+            ctx = browser.new_context(locale="en-IN")
             page = ctx.new_page()
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -275,18 +288,11 @@ def _try_playwright(url: str) -> str:
                 if len(html) > 20000:
                     return html
             finally:
-                # ALWAYS release the tab, and do it before the driver stops —
-                # the scrape Chrome is shared by every worker, and a tab left
-                # open keeps running JS in it, so each later navigation slows
-                # down, more goto() calls time out and leak a further tab (a
-                # feedback loop; 22 were found open after a single run).
-                try:
-                    page.close()
-                except Exception:
-                    pass
-                if owns_ctx:
+                # Tear the whole private browser down — it exists only for this
+                # request, so there is no shared tab to leak.
+                for _obj in (page, ctx, browser):
                     try:
-                        ctx.close()
+                        _obj.close()
                     except Exception:
                         pass
     except Exception:
