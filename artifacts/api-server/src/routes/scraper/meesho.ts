@@ -347,7 +347,15 @@ async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
   job.status = "running";
   persistJob(job, true);
 
-  const done = new Set(job.products.map((p) => p.url));
+  // "done" means SUCCESSFULLY scraped. Counting blocked/failed rows as done was
+  // a bug: they were then skipped on resume, so a job could never recover the
+  // products that Meesho throttled earlier — which is exactly what happened
+  // (742 blocked rows that a plain re-scrape now fetches fine).
+  const done = new Set(
+    job.products
+      .filter((p) => p.status === "success" && (p.images || []).length > 0)
+      .map((p) => p.url),
+  );
   let pending = urls.filter((u) => !done.has(u));
 
   for (let round = 0; round < SCRAPE_MAX_ROUNDS && pending.length; round++) {
