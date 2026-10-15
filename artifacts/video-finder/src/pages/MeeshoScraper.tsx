@@ -72,6 +72,7 @@ export default function MeeshoScraper() {
   // Meesho scrapes one product at a time (~10s each), so a store takes minutes
   // to hours — without a counter it looks like the run has hung.
   const [scrapeProgress, setScrapeProgress] = useState<{ done: number; total: number } | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(() => sessionStorage.getItem("meesho_jobId"));
   const [isExporting, setIsExporting] = useState(false);
   const catSummary = useCategorySummary("meesho", scrapedProducts);
@@ -322,10 +323,18 @@ export default function MeeshoScraper() {
               return Array.from(existing.values());
             });
           }
+          if (job.status === "paused") {
+            // Non-terminal: the job is alive and resumable, so keep the poll
+            // running and just reflect the paused state.
+            setIsPaused(true);
+            setScrapeProgress({ done: job.completed ?? job.count ?? 0, total: job.total || urlsToScrape.length });
+            return;
+          }
           if (job.status === "completed" || job.status === "failed" || job.status === "cancelled" || job.status === "interrupted") {
             if (pollRef.current) clearInterval(pollRef.current);
             pollRef.current = null;
             setIsScraping(false);
+            setIsPaused(false);
             setScrapeProgress(null);
             setScrapeJobId(null);
             sessionStorage.removeItem("meesho_jobId");
@@ -377,8 +386,29 @@ export default function MeeshoScraper() {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
     setIsScraping(false);
+    setIsPaused(false);
     setScrapeJobId(null);
     sessionStorage.removeItem("meesho_jobId");
+  };
+
+  // Pause stops cleanly and KEEPS the job, so resuming continues from where it
+  // stopped instead of re-walking the list.
+  const handlePauseScrape = async () => {
+    if (!scrapeJobId) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/scraper/meesho/scrape/${scrapeJobId}/pause`, { method: "POST" });
+      const d = await r.json();
+      setIsPaused(d.status === "paused");
+    } catch {}
+  };
+
+  const handleResumeScrape = async () => {
+    if (!scrapeJobId) return;
+    try {
+      await fetch(`${API_BASE}/api/scraper/meesho/scrape/${scrapeJobId}/resume`, { method: "POST" });
+      setIsPaused(false);
+      setIsScraping(true);
+    } catch {}
   };
 
   const handleExportURLs = () => {
@@ -747,6 +777,25 @@ export default function MeeshoScraper() {
                       </>
                     )}
                   </Button>
+                  {isScraping && !isPaused && (
+                    <Button
+                      onClick={handlePauseScrape}
+                      variant="outline"
+                      size="lg"
+                      className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                    >
+                      Pause
+                    </Button>
+                  )}
+                  {isPaused && (
+                    <Button
+                      onClick={handleResumeScrape}
+                      size="lg"
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      Resume
+                    </Button>
+                  )}
                   {isScraping && (
                     <Button
                       onClick={handleCancelScrape}
@@ -780,12 +829,16 @@ export default function MeeshoScraper() {
             )}
 
             {isScraping && (
-              <div className="flex items-center gap-2 p-4 bg-blue-50 text-blue-800 rounded-lg">
-                <div className="w-4 h-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+              <div className={`flex items-center gap-2 p-4 rounded-lg ${isPaused ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-800"}`}>
+                {!isPaused && (
+                  <div className="w-4 h-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+                )}
                 <span>
-                  {scrapeProgress
-                    ? `Scraping ${scrapeProgress.done}/${scrapeProgress.total} products… (Meesho is rate-limited, so this runs one at a time)`
-                    : `Scraping ${selectedUrls.size} products…`}
+                  {isPaused
+                    ? `Paused at ${scrapeProgress?.done ?? 0}/${scrapeProgress?.total ?? selectedUrls.size} — press Resume to continue`
+                    : scrapeProgress
+                      ? `Scraping ${scrapeProgress.done}/${scrapeProgress.total} products…`
+                      : `Scraping ${selectedUrls.size} products…`}
                 </span>
               </div>
             )}

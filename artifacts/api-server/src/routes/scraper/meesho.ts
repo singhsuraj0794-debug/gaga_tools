@@ -43,7 +43,7 @@ interface MeeshoDetailedProduct {
 interface ScrapeJob {
   id: string;
   type: "scrape" | "extract";
-  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | "paused";
   total: number;
   completed: number;
   products: MeeshoDetailedProduct[];
@@ -319,29 +319,48 @@ function needsRetry(p: MeeshoDetailedProduct | undefined): boolean {
   return !p || p.status !== "success" || !(p.images || []).length;
 }
 
-/** Scrape every URL that does not already have a product in the job, then retry
- *  the stragglers for a few rounds. Skipping the finished ones is what makes an
- *  interrupted run cheap to resume. */
-async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
-  const done = new Set(job.products.map((p) => p.url));
-  let pending = urls.filter((u) => !done.has(u));
-  for (let round = 0; round < SCRAPE_MAX_ROUNDS && pending.length; round++) {
-    const roundUrls = pending;
-    const results = new Map<string, MeeshoDetailedProduct>();
-    await runBatched(roundUrls, async (url) => {
+/** One pass over `urls` at bounded concurrency, stopping cleanly on pause.
+ *  Returns false if it stopped early (paused/cancelled), true if it finished. */
+async function scrapePass(job: ScrapeJob, urls: string[]): Promise<boolean> {
+  for (let i = 0; i < urls.length; i += MEESHO_CONCURRENCY) {
+    // Checked between chunks, so a pause takes effect within a few products
+    // instead of cancelling the job (which cannot then be resumed).
+    if (job.status === "paused" || job.status === "cancelled") return false;
+    const chunk = urls.slice(i, i + MEESHO_CONCURRENCY);
+    await Promise.all(chunk.map(async (url) => {
       const product = await scrapeProduct(url);
-      results.set(url, product);
-      const i = job.products.findIndex((p) => p.url === url);
-      if (i >= 0) job.products[i] = product;
+      const idx = job.products.findIndex((p) => p.url === url);
+      if (idx >= 0) job.products[idx] = product;
       else job.products.push(product);
       job.completed = job.products.length;
       persistJob(job);
-      return product;
-    }, MEESHO_CONCURRENCY, 0);
-    pending = roundUrls.filter((u) => needsRetry(results.get(u)));
+    }));
+  }
+  return true;
+}
+
+/** Scrape every URL that does not already have a product in the job, then retry
+ *  the stragglers for a few rounds. Skipping the finished ones is what makes a
+ *  pause/resume cheap: resuming re-runs this and every done URL is skipped. */
+async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
+  if (job.status === "paused") return;   // resuming is an explicit action
+  job.status = "running";
+  persistJob(job, true);
+
+  const done = new Set(job.products.map((p) => p.url));
+  let pending = urls.filter((u) => !done.has(u));
+
+  for (let round = 0; round < SCRAPE_MAX_ROUNDS && pending.length; round++) {
+    const roundUrls = pending;
+    const ok = await scrapePass(job, roundUrls);
+    if (!ok) return;   // paused/cancelled — leave the status as the user set it
+
+    const byUrl = new Map(job.products.map((p) => [p.url, p]));
+    pending = roundUrls.filter((u) => needsRetry(byUrl.get(u)));
     if (pending.length && round < SCRAPE_MAX_ROUNDS - 1) {
       logger.info({ jobId: job.id, retry: pending.length, round: round + 2 }, "retrying blocked Meesho products");
       await new Promise((r) => setTimeout(r, 3000));
+      if (job.status === "paused" || job.status === "cancelled") return;
     }
   }
   job.status = "completed";
@@ -557,8 +576,51 @@ router.post("/cancel/:jobId", (req: Request, res: Response): void => {
   const job = jobs.get(req.params.jobId as string);
   if (job) {
     job.status = "cancelled";
+    persistJob(job, true);
   }
   res.json({ status: "cancelled" });
+});
+
+// POST /api/scraper/meesho/scrape/:jobId/pause — stop cleanly, keep the job.
+// Unlike /cancel this is resumable: the runner notices between chunks, leaves
+// the products already scraped in place, and the counter does not reset.
+router.post("/scrape/:jobId/pause", (req: Request, res: Response): void => {
+  const job = jobs.get(req.params.jobId as string);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  if (job.status === "running" || job.status === "pending") {
+    job.status = "paused";
+    persistJob(job, true);
+    logger.info({ jobId: job.id, completed: job.completed, total: job.total }, "Meesho scrape job paused");
+  }
+  res.json({ status: job.status, completed: job.completed, total: job.total });
+});
+
+// POST /api/scraper/meesho/scrape/:jobId/resume — continue the SAME job.
+// runScrapeJob skips every URL that already has a product, so resuming picks up
+// where it stopped without re-walking or re-scraping what is done.
+router.post("/scrape/:jobId/resume", (req: Request, res: Response): void => {
+  const job = jobs.get(req.params.jobId as string);
+  if (!job) {
+    res.status(404).json({ error: "Job not found" });
+    return;
+  }
+  if (job.status !== "paused") {
+    res.json({ status: job.status, completed: job.completed, total: job.total });
+    return;
+  }
+  const urls = (job.urls as string[]) || [];
+  job.status = "running";
+  persistJob(job, true);
+  logger.info({ jobId: job.id, completed: job.completed, total: job.total }, "Meesho scrape job resumed");
+  runScrapeJob(job, urls).catch((err: any) => {
+    job.status = "failed";
+    job.errors = [err.message];
+    persistJob(job, true);
+  });
+  res.json({ status: "running", completed: job.completed, total: job.total });
 });
 
 router.post("/category-summary", async (req: Request, res: Response): Promise<void> => {
