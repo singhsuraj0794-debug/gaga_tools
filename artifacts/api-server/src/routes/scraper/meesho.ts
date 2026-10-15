@@ -306,14 +306,6 @@ async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
 
 const SCRAPE_MAX_ROUNDS = 3;
 
-// Meesho throttles parallel product fetches: at the default 8-way concurrency
-// ~24% of a store came back blocked, but the SAME urls fetched one at a time
-// with a small gap succeeded 10/10. So Meesho runs one request at a time.
-// (Separately, _try_playwright must use a fresh context per scrape — see the
-// note in _meesho_scraper.py; that was the larger bug.)
-const MEESHO_CONCURRENCY = Math.max(1, Number(process.env.MEESHO_SCRAPE_CONCURRENCY ?? 1) || 1);
-const MEESHO_DELAY_MS = Math.max(0, Number(process.env.MEESHO_SCRAPE_DELAY_MS ?? 2000) || 0);
-
 /** A product that came back blocked/failed, or with no images, is worth another
  *  attempt: Meesho's block is intermittent (a fresh request usually succeeds),
  *  so retrying recovers most of them. Amazon does the same. */
@@ -339,7 +331,7 @@ async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
       job.completed = job.products.length;
       persistJob(job);
       return product;
-    }, MEESHO_CONCURRENCY, MEESHO_DELAY_MS);
+    });
     pending = roundUrls.filter((u) => needsRetry(results.get(u)));
     if (pending.length && round < SCRAPE_MAX_ROUNDS - 1) {
       logger.info({ jobId: job.id, retry: pending.length, round: round + 2 }, "retrying blocked Meesho products");

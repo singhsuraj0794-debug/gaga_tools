@@ -192,18 +192,22 @@ def _try_curl_cffi(url: str, impersonate: str = "safari15_5") -> str:
     return ""
 
 
-# ── Real Chrome session (CDP) — uses your own browser, no automation detection ──
+# ── Real Chrome session (CDP) ────────────────────────────────────────────────
+# Product pages must go through the UNPROXIED Chrome. The Webshare-proxied one
+# (SCRAPE_CDP_URL) is blocked by Meesho for product pages — measured on the same
+# URLs at concurrency 6: EXTRACT_CDP_URL (unproxied) 17/18 OK in 13s, while
+# SCRAPE_CDP_URL (proxied) was 0/18 in 541s. That is what turned a 3-4 hour store
+# into a 100+ hour one and reported "Blocked by Meesho" on most products.
 def _try_playwright(url: str) -> str:
-    """Fetch via YOUR real Chrome (CDP, port 9223) — the working path when
-    Meesho blocks direct/curl_cffi requests (403)."""
+    """Fetch a product page via a real Chrome over CDP (the unproxied one)."""
     try:
         import time, urllib.request
         from playwright.sync_api import sync_playwright
 
-        urllib.request.urlopen(f"{SCRAPE_CDP_URL}/json/version", timeout=5)
+        urllib.request.urlopen(f"{EXTRACT_CDP_URL}/json/version", timeout=5)
 
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(SCRAPE_CDP_URL)
+            browser = p.chromium.connect_over_cdp(EXTRACT_CDP_URL)
             # ALWAYS a fresh context. The shared default context on the scrape
             # Chrome accumulates state from earlier requests and then serves
             # Meesho's ~2 KB block page for EVERY navigation — measured 0/4
