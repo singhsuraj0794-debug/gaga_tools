@@ -111,7 +111,10 @@ def _collect_urls(products: List[dict]) -> List[str]:
     urls = []
     seen = set()
     for p in products:
-        for url in p.get("images", [])[:10]:
+        # `p.get("images", [])` returns None when the sheet has "images": null —
+        # the default only applies to a MISSING key — and None[:10] crashed the
+        # whole detector ("detector exited with code 1").
+        for url in (p.get("images") or [])[:10]:
             if url and url not in seen:
                 seen.add(url)
                 urls.append(url)
@@ -201,7 +204,7 @@ def _unpack_hash_entry(entry):
 
 def _compute_product_hashes(product: dict) -> List[Tuple[str, object]]:
     hashes = []
-    for url in product.get("images", [])[:10]:
+    for url in (product.get("images") or [])[:10]:
         path = _fetch_one(url)
         if path is None:
             continue
