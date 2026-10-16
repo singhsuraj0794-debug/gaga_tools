@@ -142,6 +142,11 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Beauty & Health Care > Health & Beauty > Face Care > Makeup Headband"),
     ("headband", ["headband", "hairband", "hair band", "alice band"],
      "Beauty & Health Care > Health & Beauty > Hair Care > Hair Accessories"),
+    # Meesho sometimes returns no category at all for these; the title is the
+    # only signal ("Rose Mary Water Spray For Hair Growth & Thickness").
+    ("hair_growth_spray", ["rosemary water", "rose mary water", "rosemary spray",
+                           "hair growth spray", "hair growth water", "rosemary hair"],
+     "Beauty & Health Care > Health & Beauty > Hair Care > Hair Treatment"),
 
     # ── Home furnishing / textiles ─────────────────────────────────────────
     ("bedsheet", ["bedsheet", "bed sheet", "bed cover"],

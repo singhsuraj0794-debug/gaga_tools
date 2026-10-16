@@ -466,6 +466,20 @@ class CategoryMapper:
         t = (title or "").lower()
         if not t:
             return None
+        # The curated keyword map (81 high-precision product nouns, also used by
+        # the scrapers' anchor) is the real title signal — _TITLE_KEYWORDS below
+        # is a tiny legacy list. Without this the export left e.g. "Rose Mary
+        # Water Spray For Hair Growth" unmapped when a platform returned no
+        # category at all. Imported lazily to avoid a circular import.
+        try:
+            from _category_keywords import match_target
+            hit = match_target(title)
+            if hit:
+                _name, path = hit
+                if path in self._by_full:
+                    return self._result_for(path, "title-keyword", 0.6)
+        except Exception:
+            pass
         for rx, path in _TITLE_KEYWORDS:
             if path not in self._by_full:
                 continue  # stale target — ignore rather than mis-file
