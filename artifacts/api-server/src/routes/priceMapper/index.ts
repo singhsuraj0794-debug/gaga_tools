@@ -122,9 +122,15 @@ async function loadCaches(): Promise<PmCache> {
           // server filtered these out and the UI badge requires a url too, so
           // without this the Mapped tab and its count disagreed with the rows.
           .or("amazon_url.not.is.null,flipkart_url.not.is.null,meesho_url.not.is.null")
+          // ORDER before range: without a stable order, offset pagination is
+          // non-deterministic and silently skips rows (this was dropping
+          // recently-mapped products from the Mapped set entirely).
+          .order("gajab_product_id")
           .range(p * 1000, p * 1000 + 999))),
       Promise.all(pages(DUP_PAGES).map((p) =>
-        supabase.from("product_duplicates").select("product_id").range(p * 1000, p * 1000 + 999))),
+        supabase.from("product_duplicates").select("product_id")
+          .order("product_id")
+          .range(p * 1000, p * 1000 + 999))),
     ]);
     const products: any[] = [];
     for (const r of prodPages) if (r.data) products.push(...r.data);
