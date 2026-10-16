@@ -116,7 +116,13 @@ async function loadCaches(): Promise<PmCache> {
       Promise.all(pages(PRODUCT_PAGES).map((p) =>
         supabase.from("products").select("id,name,price,image_url,url,category").order("name").range(p * 1000, p * 1000 + 999))),
       Promise.all(pages(MAPPING_PAGES).map((p) =>
-        supabase.from("price_mappings").select("gajab_product_id").range(p * 1000, p * 1000 + 999))),
+        supabase.from("price_mappings").select("gajab_product_id")
+          // "Mapped" means the product actually got a price source. Rows where
+          // every platform failed carry no url and are not mapped — the old
+          // server filtered these out and the UI badge requires a url too, so
+          // without this the Mapped tab and its count disagreed with the rows.
+          .or("amazon_url.not.is.null,flipkart_url.not.is.null,meesho_url.not.is.null")
+          .range(p * 1000, p * 1000 + 999))),
       Promise.all(pages(DUP_PAGES).map((p) =>
         supabase.from("product_duplicates").select("product_id").range(p * 1000, p * 1000 + 999))),
     ]);
@@ -410,7 +416,9 @@ router.get("/mappings-count", async (_req: Request, res: Response): Promise<void
     }
     const { count, error } = await supabase
       .from("price_mappings")
-      .select("gajab_product_id", { count: "exact", head: true });
+      .select("gajab_product_id", { count: "exact", head: true })
+      // Same definition of "mapped" as the filter/cache: needs a price source.
+      .or("amazon_url.not.is.null,flipkart_url.not.is.null,meesho_url.not.is.null");
     if (error) {
       res.json({ count: 0 });
       return;

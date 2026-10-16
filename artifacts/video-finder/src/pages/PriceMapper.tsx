@@ -462,15 +462,12 @@ export default function PriceMapper() {
   }
   const isAttempted = (productId: string) => !!getMapping(productId);
 
-  const filtered = products.filter((p) => {
-    const mapping = getMapping(p.id);
-    const isMapped = mapping && !!(mapping.amazon_url || mapping.flipkart_url || mapping.meesho_url);
-    const isDup = isDuplicate(p.id);
-    if (mappingFilter === "mapped" && !isMapped) return false;
-    if (mappingFilter === "unmapped" && (isMapped || isDup)) return false;
-    if (mappingFilter === "duplicates" && !isDup) return false;
-    return true;
-  });
+  // The server already applied mappingFilter (mapped / unmapped / duplicates)
+  // over the FULL mapping set. Re-filtering here used mappingsMap, which only
+  // covers the current page and is fetched asynchronously (with a silent catch),
+  // so the Mapped tab emptied itself: rows were dropped before their mappings
+  // arrived, and stayed dropped if that fetch ever failed. Trust the server.
+  const filtered = products;
 
   const totalPages = Math.ceil(totalProducts / pageSize);
   const paginated = filtered.slice(0, pageSize);
