@@ -11,22 +11,22 @@
 
 Write-Host "[run-stack] stack started; staying alive to keep children alive."
 
-# Self-heal the Chromes. They are the fragile part — they crash under load — and
+# Self-heal the Chromes. They are the fragile part - they crash under load - and
 # start-all only launches them at boot, so a dead CDP port silently turned every
 # extract/scrape into "Chrome CDP not available" (which surfaced as a job
 # completing with 0 products). Re-check every minute and bring them back.
 while ($true) {
     Start-Sleep -Seconds 60
     if (-not (Test-PortOpen $ChromeExtractPort)) {
-        Write-Host "[run-stack] extraction Chrome ($ChromeExtractPort) is down — restarting"
+        Write-Host "[run-stack] extraction Chrome ($ChromeExtractPort) is down - restarting"
         & "$PSScriptRoot\start-chrome-extract.ps1"
     }
     if (-not (Test-PortOpen $ChromeScraperPort)) {
-        Write-Host "[run-stack] scraping Chrome ($ChromeScraperPort) is down — restarting"
+        Write-Host "[run-stack] scraping Chrome ($ChromeScraperPort) is down - restarting"
         & "$PSScriptRoot\start-chrome-scraper.ps1"
     }
     if (-not (Test-PortOpen $MonitorChromePort)) {
-        Write-Host "[run-stack] Lens Chrome ($MonitorChromePort) is down — restarting"
+        Write-Host "[run-stack] Lens Chrome ($MonitorChromePort) is down - restarting"
         & "$PSScriptRoot\start-chrome-monitor.ps1"
     }
 }

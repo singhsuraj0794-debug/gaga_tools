@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # start-chrome-monitor.ps1 - Chrome on 9222, used by _lens_browser.py for the
 # Price Mapper's FREE Google Lens reverse-image search (no SearchAPI credits).
-# Uses the local IP (no proxy) — Lens is a public Google page.
+# Uses the local IP (no proxy) - Lens is a public Google page.
 . "$PSScriptRoot\windows-common.ps1"
 Import-DotEnv
 

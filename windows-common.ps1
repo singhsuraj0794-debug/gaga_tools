@@ -117,13 +117,13 @@ Write-Host "[common] repo=$RepoDir python=$(Get-Python)"
 $env:PYTHON_BIN = Get-Python
 
 # Python's stdio defaults to the Windows locale encoding (cp1252), so a script
-# printing product data that contains a non-ASCII character (a '✅' in a
-# description, an em dash) crashed with UnicodeEncodeError — that broke the
+# printing product data that contains a non-ASCII character (a '?' in a
+# description, an em dash) crashed with UnicodeEncodeError - that broke the
 # Gajab export. Force UTF-8 for every python subprocess we spawn.
 $env:PYTHONIOENCODING = "utf-8"
 
 # PYTHONIOENCODING only covers stdio. open() uses the locale encoding too, and
-# several detectors read JSON the API wrote as UTF-8 — that produced
+# several detectors read JSON the API wrote as UTF-8 - that produced
 #   UnicodeDecodeError: 'charmap' codec can't decode byte 0x8d
 # (the duplicate check failed with "detector exited with code 1"). UTF-8 mode
 # makes open() default to UTF-8 everywhere.
@@ -141,12 +141,12 @@ if (-not $env:LOCAL_SCRAPER_URL) { $env:LOCAL_SCRAPER_URL = "http://localhost:90
 # Scraper parallelism. The local server is threaded and the browsers accept
 # several concurrent CDP sessions; 6 mixed-platform workers ran cleanly here.
 # Raised to 8 now that the CDP tab leak is fixed (_try_playwright closes its tab
-# in a finally) — a 4k-product Meesho store is hours of wall-clock at 6. Dial
+# in a finally) - a 4k-product Meesho store is hours of wall-clock at 6. Dial
 # back to 6 if the shared scrape Chrome starts contending.
 if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "8" }
 if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
 
-# ── Model upgrades for the RTX 5060 Ti (17GB VRAM) ──────────────────────────
+# ?? Model upgrades for the RTX 5060 Ti (17GB VRAM) ??????????????????????????
 # Vision model for the image rules (overlay/moderation). The thresholds are
 # calibrated for CLIP (a "BESTSELLER" badge scores 0.82, clean shots 0.53-0.75).
 # SigLIP variants use a different score distribution and over-flag with these
@@ -155,7 +155,7 @@ if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
 if (-not $env:CLIP_MODEL) { $env:CLIP_MODEL = "openai/clip-vit-base-patch32" }
 # VL model. Qwen2.5-VL-7B (4-bit, ~6GB) is the fastest good option here.
 # Qwen3-VL-8B is newer/stronger but ~3.5x slower on this GPU (measured), so it is
-# NOT the default — enable it with: $env:QWEN_MODEL="Qwen/Qwen3-VL-8B-Instruct"
+# NOT the default - enable it with: $env:QWEN_MODEL="Qwen/Qwen3-VL-8B-Instruct"
 # (needs transformers >= 4.57; Qwen3-VL-4B is the likely faster sweet spot).
 if (-not $env:QWEN_MODEL) { $env:QWEN_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct" }
 if (-not $env:QWEN_LOAD_IN_4BIT) { $env:QWEN_LOAD_IN_4BIT = "1" }
