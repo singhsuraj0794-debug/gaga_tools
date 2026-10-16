@@ -727,7 +727,10 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
 def main():
     input_path = sys.argv[1] if len(sys.argv) > 1 else "/dev/stdin"
     threshold = int(sys.argv[2]) if len(sys.argv) > 2 else 6
-    with open(input_path) as f:
+    # The API writes this file as UTF-8; open() would otherwise use the Windows
+    # locale encoding (cp1252) and die on any non-ASCII product name:
+    #   UnicodeDecodeError: 'charmap' codec can't decode byte 0x8d
+    with open(input_path, encoding="utf-8") as f:
         products = json.load(f)
     result = find_sheet_duplicates(products, threshold=threshold)
     json.dump(result, sys.stdout, indent=2)

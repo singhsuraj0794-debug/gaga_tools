@@ -121,6 +121,13 @@ $env:PYTHON_BIN = Get-Python
 # Gajab export. Force UTF-8 for every python subprocess we spawn.
 $env:PYTHONIOENCODING = "utf-8"
 
+# PYTHONIOENCODING only covers stdio. open() uses the locale encoding too, and
+# several detectors read JSON the API wrote as UTF-8 — that produced
+#   UnicodeDecodeError: 'charmap' codec can't decode byte 0x8d
+# (the duplicate check failed with "detector exited with code 1"). UTF-8 mode
+# makes open() default to UTF-8 everywhere.
+$env:PYTHONUTF8 = "1"
+
 # The API's scraper routes branch on this: when it is unset, hasLocalScraper()
 # is false and Meesho store extraction falls back to a SINGLE python subprocess
 # that walks the whole store (MAX_EXTRACT_PAGES=200, 2.5s sleep/page) and gets
