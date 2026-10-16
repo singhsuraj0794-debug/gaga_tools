@@ -211,6 +211,14 @@ def _compute_product_hashes(product: dict) -> List[Tuple[str, object]]:
         try:
             with Image.open(path) as img:
                 img = img.convert("RGB")
+                # Work on a small copy. Source sheets often carry full-resolution
+                # marketplace images (Amazon _SL1500_ = 1500x1500), and both pHash
+                # and especially compute_color_sig convert the WHOLE image to
+                # HSV/LAB before downscaling — that dominated the run (5.6k
+                # CPU-seconds, still unfinished after 12 min on 8.4k products).
+                # pHash only needs 32x32 and the colour signature 64x64, so
+                # shrinking first is equivalent and ~25x cheaper at this size.
+                img.thumbnail((256, 256))
                 h = compute_phash(img)
                 sig = compute_color_sig(img)
             hashes.append((url, h, sig))
