@@ -492,6 +492,12 @@ def _reverse_image_search(image_url: str) -> dict:
             # Also try home directory
             if not os.path.exists(lens_path):
                 lens_path = os.path.expanduser("~/.local/ws/_lens_browser.py")
+            # ...and next to this script, where the repo actually ships it
+            # (dist/ when built). Without this the free fallback never loaded on
+            # Windows: the only copies are api-server/_lens_browser.py and
+            # dist/_lens_browser.py, neither of which is under .local/ws.
+            if not os.path.exists(lens_path):
+                lens_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_lens_browser.py")
             if os.path.exists(lens_path):
                 spec = importlib.util.spec_from_file_location("_lens_browser", lens_path)
                 lens_mod = importlib.util.module_from_spec(spec)

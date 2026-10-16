@@ -22,6 +22,7 @@ $AnalysisPort     = 8003
 $ChromeScraperPort = 9223   # product scraping, via the Webshare proxy
 $LocalProxyPort    = 9224   # local auth-forwarding proxy for Webshare
 $ChromeExtractPort = 9225   # link extraction, no proxy
+$MonitorChromePort = 9222   # Google Lens reverse search (Price Mapper), no proxy
 $AppiumPort        = 4723
 
 # --- Tunnels -----------------------------------------------------------------

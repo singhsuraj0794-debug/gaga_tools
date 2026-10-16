@@ -25,6 +25,7 @@ if (Test-Path (Join-Path $ApiDir "build.mjs")) {
 & "$PSScriptRoot\start-scraper-tunnel.ps1"
 & "$PSScriptRoot\start-chrome-extract.ps1"
 & "$PSScriptRoot\start-chrome-scraper.ps1"
+& "$PSScriptRoot\start-chrome-monitor.ps1"
 
 Write-Host ""
 Write-Host "=== STATUS ==="

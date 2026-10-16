@@ -25,4 +25,8 @@ while ($true) {
         Write-Host "[run-stack] scraping Chrome ($ChromeScraperPort) is down — restarting"
         & "$PSScriptRoot\start-chrome-scraper.ps1"
     }
+    if (-not (Test-PortOpen $MonitorChromePort)) {
+        Write-Host "[run-stack] Lens Chrome ($MonitorChromePort) is down — restarting"
+        & "$PSScriptRoot\start-chrome-monitor.ps1"
+    }
 }
