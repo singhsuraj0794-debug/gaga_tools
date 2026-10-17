@@ -7,6 +7,7 @@ import concurrent.futures
 import hashlib
 import html as html_mod
 import io
+import html
 import json
 import os
 import re
@@ -1120,6 +1121,12 @@ def _search_meesho(title: str, image_url: str = "", gajab_price: str = "", gajab
 
 def search_all(title: str, image_url: str = "", gajab_price: str = "", gajab_url: str = "") -> dict:
     """Search all platforms for a product."""
+    # Supabase image_urls are imported from the storefront sitemap and arrive
+    # HTML-escaped (e.g. "&amp;" inside a filename). The escaped form 404s at
+    # resize.gajab.com, which silently killed the reverse search for those
+    # products - decode once here so every matcher sees the real URL.
+    if image_url:
+        image_url = html.unescape(image_url)
     result = {
         "title": title,
         "amazon": {"status": "skipped"},

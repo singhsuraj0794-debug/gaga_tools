@@ -189,6 +189,18 @@ router.get("/products", async (req: Request, res: Response): Promise<void> => {
   }
 });
 
+/** Supabase image_urls come from the storefront sitemap and are HTML-escaped
+ *  (e.g. "&amp;" in a filename). The escaped URL 404s at resize.gajab.com and
+ *  silently killed the reverse search, so decode before searching or storing. */
+function decodeImageUrl(url: string | null | undefined): string {
+  if (!url) return "";
+  return url
+    .replace(/&amp;/g, "&")
+    .replace(/&#0?38;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'");
+}
+
 interface PmProduct {
   id: string; name: string; image_url?: string; imageUrl?: string; price?: string; url?: string;
 }
@@ -197,7 +209,7 @@ interface PmProduct {
  *  Shared by POST /compare and the bulk map-all job. */
 async function compareProduct(product: PmProduct): Promise<Record<string, any>> {
   const supabase = getSupabase();
-  const productImageUrl = product.image_url || product.imageUrl || "";
+  const productImageUrl = decodeImageUrl(product.image_url || product.imageUrl);
   const searchResult = await callSearch(product.name, productImageUrl, product.price || "", product.url || "");
 
   const amz = platformMapping("amazon", searchResult.amazon);
