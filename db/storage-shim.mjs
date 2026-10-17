@@ -178,7 +178,13 @@ async function handleRemove(req, res, bucket) {
 // ---- proxy to PostgREST -----------------------------------------------------
 
 function proxy(req, res) {
-  const target = new URL(req.url, POSTGREST);
+  // Strip Supabase's /rest/v1 prefix: PostgREST serves the API at its ROOT
+  // (/products), and /rest/v1 is the Kong routing convention in front of it.
+  // Forwarding it verbatim gives PGRST125 "Invalid path specified in request URL".
+  let pathname = new URL(req.url, "http://localhost").pathname;
+  if (pathname === "/rest/v1" || pathname === "/rest/v1/") pathname = "/";
+  else if (pathname.startsWith("/rest/v1/")) pathname = pathname.slice("/rest/v1".length);
+  const target = new URL(pathname + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""), POSTGREST);
   const headers = { ...req.headers, host: target.host };
   const preq = http.request(
     { hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers },
