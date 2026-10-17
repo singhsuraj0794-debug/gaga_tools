@@ -13,7 +13,13 @@ $patterns = @(
     "_clip_verify_server.py",
     "_analysis_server.py",
     "local_proxy.py",
-    "llama-server"
+    "llama-server",
+    # Option A database stack. Postgres itself is deliberately left running: it is
+    # a detached daemon holding the data, and start-db.ps1 is idempotent. These
+    # two are foreground processes that MUST be restarted to pick up new code -
+    # the shim kept serving an old proxy path because its port stayed open.
+    "storage-shim.mjs",
+    "postgrest.exe"
 )
 
 foreach ($pat in $patterns) {
