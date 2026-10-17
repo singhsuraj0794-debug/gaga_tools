@@ -368,7 +368,10 @@ async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
     if (pending.length && round < SCRAPE_MAX_ROUNDS - 1) {
       logger.info({ jobId: job.id, retry: pending.length, round: round + 2 }, "retrying blocked Meesho products");
       await new Promise((r) => setTimeout(r, 3000));
-      if (job.status === "paused" || job.status === "cancelled") return;
+      // job.status is mutated by the pause/cancel routes while this runs, so the
+      // narrowing TS applies after `job.status = "running"` is wrong here.
+      const statusNow: string = job.status;
+      if (statusNow === "paused" || statusNow === "cancelled") return;
     }
   }
   job.status = "completed";
