@@ -62,6 +62,51 @@ function Test-PortOpen {
     } catch { return $false }
 }
 
+# PIDs of the Chrome instances launched with a given remote-debugging port.
+# Matched on the command line because the port is the only thing that
+# distinguishes the three profiles.
+function Get-ChromePidOnPort {
+    param([int]$Port)
+    $pat = "*--remote-debugging-port=$Port*"
+    @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq "chrome.exe" -and $_.CommandLine -like $pat } |
+        Select-Object -ExpandProperty ProcessId)
+}
+
+# Kill the Chrome on a port and wait for the port to actually close, so the
+# caller can start a fresh one (start-chrome-*.ps1 refuses to start when the
+# port is still open).
+function Stop-ChromeOnPort {
+    param([int]$Port)
+    foreach ($procId in Get-ChromePidOnPort -Port $Port) {
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+    }
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 500
+        if (-not (Test-PortOpen $Port)) { return $true }
+    }
+    return $false
+}
+
+# Deep health check for a CDP Chrome. A wedged browser still accepts TCP and
+# still answers /json/version, but Playwright cannot attach to it - and that is
+# exactly how it fails for the scrapers ("BrowserType.connect_over_cdp:
+# Connection closed while reading from the driver"). So ask the venv's Playwright
+# to attach, which is the real contract. One process per port so a driver crash
+# on a bad browser cannot poison the verdict for the healthy ones.
+function Test-CdpHealthy {
+    param([int]$Port)
+    $probe = Join-Path $PSScriptRoot "check-cdp.py"
+    if (-not (Test-Path $probe)) { return $true }
+    try {
+        $out = & (Get-Python) $probe $Port 2>$null
+    } catch { return $true }
+    $verdict = "$out".Trim()
+    if ($verdict -eq "ok") { return $true }
+    if ($verdict -eq "fail") { return $false }
+    return $true   # unknown (python failed) -> leave the browser alone
+}
+
 # Resolve the Python interpreter for the local ML stack.
 # Prefers a dedicated venv, then GAJAB_PYTHON, then the py launcher.
 function Get-Python {
