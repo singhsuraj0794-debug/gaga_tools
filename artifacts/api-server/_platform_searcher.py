@@ -431,10 +431,12 @@ def _make_query(title: str, gajab_url: str = "") -> str:
     return query or ' '.join(tokens[:3])
 
 
-SEARCHAPI_KEY = "w9PQpaqQSghYun6uoUN4SLRG"
-
 def _reverse_image_search(image_url: str) -> dict:
-    """Use SearchAPI Google Lens to find platform product URLs."""
+    """Find platform product URLs with Google Lens (free, via the user's Chrome).
+
+    SearchAPI was abandoned — it is a paid, quota-limited service and we no
+    longer use it — so Lens is the only reverse-search path.
+    """
     result = {"amazon": [], "flipkart": [], "meesho": []}
     if not image_url:
         return result
@@ -443,7 +445,7 @@ def _reverse_image_search(image_url: str) -> dict:
     if ck in _reverse_cache:
         return _reverse_cache[ck]
 
-    # Verify image is accessible before calling SearchAPI (use GET — some CDNs reject HEAD)
+    # Verify the image is reachable first (some CDNs reject HEAD, so use GET)
     try:
         img_check = requests.get(image_url, timeout=10, stream=True,
                                   headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"})
@@ -455,59 +457,25 @@ def _reverse_image_search(image_url: str) -> dict:
         _reverse_cache[ck] = result
         return result
 
-    import time as _time
-    combined = {"amazon": [], "flipkart": [], "meesho": []}
-    for attempt in range(2):
-        if attempt > 0:
-            _time.sleep(1)
-        try:
-            resp = requests.get(
-                "https://www.searchapi.io/api/v1/search",
-                params={"engine": "google_lens", "url": image_url, "api_key": SEARCHAPI_KEY, "gl": "in", "hl": "en"},
-                timeout=30,
-            )
-            data = resp.json()
-            for item in data.get("visual_matches", []):
-                link = (item.get("link") or "").split("?")[0].split("#")[0]
-                if "amazon.in" in link and "/dp/" in link:
-                    combined["amazon"].append(link)
-                elif "flipkart.com" in link and ("/p/" in link or "/product/" in link):
-                    combined["flipkart"].append(link)
-                elif "meesho.com" in link and "/p/" in link:
-                    combined["meesho"].append(link)
-            # Stop retrying if we found results
-            if combined["amazon"] or combined["flipkart"] or combined["meesho"]:
-                break
-        except Exception:
-            pass
-    result = {"amazon": [], "flipkart": [], "meesho": []}
-    for k in result:
-        result[k] = list(dict.fromkeys(combined[k]))[:3]
-    
-    # Fallback: if SearchAPI found nothing, try user's Chrome Lens (free, no API credits)
-    if not (result["amazon"] or result["flipkart"] or result["meesho"]):
-        try:
-            import importlib.util, os
-            lens_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".local", "ws", "_lens_browser.py")
-            # Also try home directory
-            if not os.path.exists(lens_path):
-                lens_path = os.path.expanduser("~/.local/ws/_lens_browser.py")
-            # ...and next to this script, where the repo actually ships it
-            # (dist/ when built). Without this the free fallback never loaded on
-            # Windows: the only copies are api-server/_lens_browser.py and
-            # dist/_lens_browser.py, neither of which is under .local/ws.
-            if not os.path.exists(lens_path):
-                lens_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_lens_browser.py")
-            if os.path.exists(lens_path):
-                spec = importlib.util.spec_from_file_location("_lens_browser", lens_path)
-                lens_mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(lens_mod)
-                lens_result = lens_mod._search_lens(image_url)
-                if lens_result.get("amazon") or lens_result.get("flipkart") or lens_result.get("meesho"):
-                    result = lens_result
-        except Exception:
-            pass
-    
+    try:
+        import importlib.util, os
+        lens_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".local", "ws", "_lens_browser.py")
+        if not os.path.exists(lens_path):
+            lens_path = os.path.expanduser("~/.local/ws/_lens_browser.py")
+        # ...and next to this script, where the repo actually ships it
+        # (dist/ when built).
+        if not os.path.exists(lens_path):
+            lens_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_lens_browser.py")
+        if os.path.exists(lens_path):
+            spec = importlib.util.spec_from_file_location("_lens_browser", lens_path)
+            lens_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(lens_mod)
+            lens_result = lens_mod._search_lens(image_url)
+            if lens_result.get("amazon") or lens_result.get("flipkart") or lens_result.get("meesho"):
+                result = lens_result
+    except Exception:
+        pass
+
     _reverse_cache[ck] = result
     return result
 
