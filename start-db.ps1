@@ -55,3 +55,38 @@ if (Test-PortOpen $PostgrestPort) {
     if (Test-PortOpen $PostgrestPort) { Write-Host "[db] OK: PostgREST up" }
     else { Write-Warning "[db] FAILED: PostgREST did not come up (see postgrest.err)" }
 }
+
+# --- storage shim (+ /rest/v1 proxy) -----------------------------------------
+# supabase-js wants ONE origin serving both /rest/v1 and /storage/v1. PostgREST
+# owns /rest/v1; the shim serves /storage/v1 from a local folder and forwards the
+# rest, so client code only needs its base URL changed.
+if (Test-PortOpen $ShimPort) {
+    Write-Host "[db] storage shim already listening on $ShimPort"
+} else {
+    $shim = Join-Path $PSScriptRoot "db\storage-shim.mjs"
+    if (-not (Test-Path $shim)) {
+        Write-Warning "[db] $shim missing"
+        return
+    }
+    Write-Host "[db] starting storage shim on $ShimPort"
+    $keys = ""
+    if (Test-Path $SECRETS) {
+        $sec = Get-Content $SECRETS -Raw | ConvertFrom-Json
+        # -join, not Join-String: that cmdlet is PowerShell 7+ and this runs on 5.1
+        $keys = (@($sec.anon_jwt, $sec.service_jwt) | Where-Object { $_ }) -join ","
+    }
+    $env:STORAGE_ROOT = Join-Path $DbRoot "storage"
+    $env:STORAGE_PORT = "$ShimPort"
+    $env:POSTGREST_URL = "http://127.0.0.1:$PostgrestPort"
+    $env:SHIM_KEYS = $keys
+    Start-Process -FilePath "node" -ArgumentList $shim `
+        -RedirectStandardOutput (Join-Path $DbRoot "shim.log") `
+        -RedirectStandardError (Join-Path $DbRoot "shim.err") `
+        -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 500
+        if (Test-PortOpen $ShimPort) { break }
+    }
+    if (Test-PortOpen $ShimPort) { Write-Host "[db] OK: storage shim up" }
+    else { Write-Warning "[db] FAILED: storage shim did not come up (see shim.err)" }
+}

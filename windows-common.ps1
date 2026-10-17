@@ -31,6 +31,7 @@ $PgRoot        = "C:\gajab\pg"       # Postgres portable binaries
 $PgData        = "C:\gajab\pgdata"
 $PgPort        = 5432
 $PostgrestPort = 3000
+$ShimPort      = 3001   # storage shim + /rest/v1 proxy - the single origin clients use
 
 # --- Tunnels -----------------------------------------------------------------
 $NgrokDomain = if ($env:GAJAB_NGROK_DOMAIN) { $env:GAJAB_NGROK_DOMAIN } else { "headphone-shudder-lavender.ngrok-free.dev" }
