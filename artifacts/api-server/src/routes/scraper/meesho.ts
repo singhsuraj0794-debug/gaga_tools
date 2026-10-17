@@ -35,6 +35,7 @@ interface MeeshoDetailedProduct {
   source_catalog_name?: string | null;
   variants: string | null;
   price: string | null;
+  mrp?: string | null;
   url: string;
   status: string;
   error: string | null;
@@ -241,6 +242,7 @@ function mapExtractProduct(p: any): MeeshoDetailedProduct {
     specifications: p.specifications || null,
     variants: p.variants || null,
     price: p.price || null,
+    mrp: p.mrp || null,
     url: p.url || "",
     status: "success",
     error: null,

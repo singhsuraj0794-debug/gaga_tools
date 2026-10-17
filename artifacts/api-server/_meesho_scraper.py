@@ -495,6 +495,7 @@ def extract_products(html: str, store_url: str) -> dict:
             "specifications": None,
             "variants": None,
             "price": f"\u20b9{price}" if price else None,
+            "mrp": f"\u20b9{original_price}" if original_price else None,
             "url": product_url,
             "status": "pending",
             "error": None,
@@ -646,6 +647,10 @@ def scrape_product(url: str, html: str = "") -> dict:
         "source_category_path": source_category_path,
         "source_catalog_name": source_catalog_name,
         "price": f"\u20b9{price}" if price else None,
+        # Meesho's list price. The template's "Mrp Price *" is mandatory and the
+        # exporter used to hardcode it empty ("no source") - the PDP payload has
+        # carried original_price all along, it just was not surfaced.
+        "mrp": f"\u20b9{original_price}" if original_price else None,
         "url": canonical_url,
         "error": None,
     }

@@ -415,9 +415,11 @@ def prepare(products: list[dict]) -> dict:
                 "Variantion  Name": (_clean(p.get("variants")) if not isinstance(p.get("variants"), list)
                                      else ", ".join(_as_list(p.get("variants")))),
                 # The scraped number is the marketplace's selling/transfer
-                # price. MRP is a separate field we have no source for, so it
-                # stays empty rather than carrying the same value twice.
-                "Mrp  Price *": "",
+                # price; "mrp" is the marketplace's list price (Meesho's
+                # original_price). Only fall back to blank when the platform
+                # genuinely did not report one - carrying the selling price in
+                # both columns would misstate the discount.
+                "Mrp  Price *": _price_number(p.get("mrp")),
                 "Transfer  Price *": _price_number(p.get("price")),
                 "Meta  Tag  Title": _clean(p.get("title"))[:60],
                 "Meta  Tag  Description": _clean(p.get("meta_description")) or _clean(p.get("description"))[:160],
