@@ -42,6 +42,17 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Home & Kitchen > Kitchen Accessories > Bottle, Flasks & Thermoware > Casserole"),
     ("cooler_bag", ["cooler bag", "cooler box", "ice box", "insulated bag"],
      "Home & Kitchen > Kitchen Accessories > Bottle, Flasks & Thermoware > Cooler Bag"),
+    # Handled drinking vessels. A homeware store selling "Tumbler 1200 ML with
+    # Handle, Lid & Straw" and "Coffee Mug" matched nothing, so 179 products came
+    # back unmapped. Gajab has no generic water-bottle/tumbler leaf under Bottle,
+    # Flasks & Thermoware (only Can Cooler / Casserole / Cooler Bag), so these
+    # land on Mugs - the Active handled-cup leaf.
+    ("mug", ["coffee mug", "tea mug", "travel mug", "beer mug", "milk mug", "mug"],
+     "Home & Kitchen > Kitchen Accessories > Cuttlery and Dinning Sets > Mugs"),
+    ("tumbler", ["tumbler", "tumblers", "tumbler mug"],
+     "Home & Kitchen > Kitchen Accessories > Cuttlery and Dinning Sets > Mugs"),
+    ("cup_saucer", ["cup and saucer", "cup & saucer", "tea cup", "coffee cup"],
+     "Home & Kitchen > Kitchen Accessories > Cuttlery and Dinning Sets > Cups & Saucers"),
     ("hip_flask", ["hip flask"],
      "Home & Kitchen > Kitchen Accessories > Bar & Glassware > Hip Flask"),
     ("bottle_opener", ["bottle opener", "bottle openner"],
