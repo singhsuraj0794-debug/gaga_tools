@@ -354,21 +354,58 @@ export default function PriceMapper() {
     setBatchSearching(true);
     setBatchProgress({ current: 0, total: toSearch.length });
 
-    const CONCURRENCY = 3;
-    let completed = 0;
-    for (let i = 0; i < toSearch.length && !batchAbortRef.current; i += CONCURRENCY) {
-      const batch = toSearch.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async (product) => {
-        if (batchAbortRef.current) return;
-        await searchPlatforms(product);
-        completed++;
-        setBatchProgress({ current: completed, total: toSearch.length });
-      }));
-    }
+    // Run on the SERVER as a background job, like "Search All Unmapped". The old
+    // browser loop did 3 concurrent /compare calls, and each compare is now ~50s
+    // (the free Lens path is slower than the paid API), so a page took ~7 min
+    // with a barely-moving counter and was lost on refresh.
+    try {
+      const res = await fetch(`${API_BASE}/api/price-mapper/map-all`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ products: toSearch.map(p => ({
+          id: p.id, name: p.name, image_url: (p as any).image_url, price: (p as any).price, url: (p as any).url,
+        })) }),
+      });
+      const start = await res.json();
+      if (!res.ok || !start.jobId) {
+        setError(start.error || "Failed to start the mapping job");
+        setBatchSearching(false);
+        return;
+      }
+      const jobId: string = start.jobId;
+      sessionStorage.setItem("priceMapJobId", jobId);
+      let cursor = 0;
 
-    setBatchSearching(false);
-    setSuccessMsg(`Batch ${researchMode ? "re-search" : "search"} complete: ${toSearch.length} product(s) processed`);
-    setTimeout(() => setSuccessMsg(""), 3000);
+      batchPollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/price-mapper/map-all/${jobId}?since=${cursor}`);
+          const job = await r.json();
+          if (typeof job.count === "number") cursor = job.count;
+          if (job.products?.length) {
+            setMappingsMap(prev => {
+              const next = new Map(prev);
+              for (const m of job.products) next.set(m.gajab_product_id, m);
+              return next;
+            });
+          }
+          setBatchProgress({ current: job.completed || 0, total: job.total || toSearch.length });
+          if (["completed", "failed", "cancelled", "interrupted"].includes(job.status)) {
+            if (batchPollRef.current) clearInterval(batchPollRef.current);
+            batchPollRef.current = null;
+            sessionStorage.removeItem("priceMapJobId");
+            setBatchSearching(false);
+            fetchMappedCount();
+            setSuccessMsg(`Mapping job ${job.status}: ${job.completed}/${job.total} processed`);
+            setTimeout(() => setSuccessMsg(""), 5000);
+          }
+        } catch {
+          // Keep polling — the job runs server-side.
+        }
+      }, 5000);
+    } catch {
+      setError("Failed to start the mapping job");
+      setBatchSearching(false);
+    }
   }
 
   function abortBatchSearch() {

@@ -499,8 +499,21 @@ router.post("/map-all", async (req: Request, res: Response): Promise<void> => {
     }
     const c = await loadCaches();
     const limit = Math.max(0, Number((req.body || {}).limit ?? 0) || 0);
-    let queue = c.products.filter((p) => !c.mappedIds.has(p.id) && !c.dupIds.has(p.id));
-    if (limit > 0) queue = queue.slice(0, limit);
+    // An explicit product list lets the UI's "Search this Page" run the SAME
+    // background job instead of looping in the browser (each compare is now
+    // ~50s, so a page took ~7 min client-side with a stalled counter and died on
+    // refresh). Entries are looked up in the cache so only known ids are queued.
+    const explicit = (req.body || {}).products;
+    let queue: PmProduct[];
+    if (Array.isArray(explicit) && explicit.length > 0) {
+      const byId = new Map(c.products.map((p) => [p.id, p]));
+      queue = explicit
+        .map((p: any) => byId.get(String(p?.id ?? "")) ?? (p?.id && p?.name ? p : null))
+        .filter(Boolean) as PmProduct[];
+    } else {
+      queue = c.products.filter((p) => !c.mappedIds.has(p.id) && !c.dupIds.has(p.id));
+      if (limit > 0) queue = queue.slice(0, limit);
+    }
 
     const job: ScrapeJob<Record<string, any>> = {
       id: crypto.randomBytes(8).toString("hex"),
