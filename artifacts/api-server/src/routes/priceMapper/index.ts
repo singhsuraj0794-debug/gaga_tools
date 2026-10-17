@@ -500,7 +500,11 @@ async function runMapJob(job: ScrapeJob<Record<string, any>>, queue: PmProduct[]
     MAP_CONCURRENCY,
     0,
   );
-  if (job.status !== "cancelled") job.status = "completed";
+  // job.status is mutated by POST /map-all/:jobId/cancel while this runs, so the
+  // narrowing TS applies after `job.status = "running"` above is wrong here - it
+  // genuinely can be "cancelled" by now. Read it through a widened local.
+  const finalStatus: string = job.status;
+  if (finalStatus !== "cancelled") job.status = "completed";
   job.completed = job.products.length;
   mapJobs.persist(job, true);
 }

@@ -11,6 +11,7 @@ Usage:
 """
 
 import json
+import os
 import sys
 import traceback
 from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -66,6 +67,33 @@ def _sweep_leaked_tabs():
                     pass
         if closed:
             print(f"closed {closed} leaked tab(s) on {base}", flush=True)
+
+    # The Lens/monitor Chrome (9222) is shared with the synthetic monitor, so
+    # only close OUR tabs there: leftover lens.google.com / google.com/search
+    # pages from failed Price Mapper searches, which used to leak until the
+    # browser could no longer service a navigation at all.
+    lens_base = os.environ.get("LENS_CDP_URL", "http://localhost:9222")
+    try:
+        with urllib.request.urlopen(f"{lens_base}/json", timeout=5) as r:
+            lens_targets = json.load(r)
+    except Exception:
+        lens_targets = []
+    lens_closed = 0
+    for t in lens_targets:
+        if t.get("type") != "page":
+            continue
+        url = t.get("url") or ""
+        if "lens.google.com" not in url and "google.com/search" not in url:
+            continue
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(f"{lens_base}/json/close/{t.get('id')}", method="PUT"),
+                timeout=5).read()
+            lens_closed += 1
+        except Exception:
+            pass
+    if lens_closed:
+        print(f"closed {lens_closed} leaked Lens tab(s) on {lens_base}", flush=True)
 
 
 class ScraperHandler(BaseHTTPRequestHandler):
