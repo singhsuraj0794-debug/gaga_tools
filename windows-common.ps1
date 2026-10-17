@@ -73,6 +73,31 @@ function Get-ChromePidOnPort {
         Select-Object -ExpandProperty ProcessId)
 }
 
+# The user-data-dir a CDP Chrome was launched with (start-chrome-*.ps1 name them
+# chrome-<kind>-profile-<port> under TEMP).
+function Get-ChromeProfileDir {
+    param([int]$Port)
+    $hit = Get-ChildItem $env:TEMP -Directory -Filter "*profile-$Port" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($hit) { return $hit.FullName }
+    return $null
+}
+
+# Delete a profile's registered service workers.
+#
+# amazon.in registers one, and Playwright's driver asserts on that target the next
+# time it attaches (_onAttachedToTarget), killing the driver process: the CDP port
+# keeps answering HTTP - so a port check calls it healthy - but every extraction
+# then fails with "Connection closed while reading from the driver". Clearing them
+# on restart makes a restart an actual recovery rather than a no-op.
+function Clear-ChromeServiceWorkers {
+    param([int]$Port)
+    $dir = Get-ChromeProfileDir -Port $Port
+    if (-not $dir -or -not (Test-Path $dir)) { return }
+    Get-ChildItem $dir -Recurse -Directory -Filter "Service Worker" -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # Kill the Chrome on a port and wait for the port to actually close, so the
 # caller can start a fresh one (start-chrome-*.ps1 refuses to start when the
 # port is still open).
@@ -83,9 +108,10 @@ function Stop-ChromeOnPort {
     }
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 500
-        if (-not (Test-PortOpen $Port)) { return $true }
+        if (-not (Test-PortOpen $Port)) { break }
     }
-    return $false
+    Clear-ChromeServiceWorkers -Port $Port
+    return $true
 }
 
 # Deep health check for a CDP Chrome. A wedged browser still accepts TCP and

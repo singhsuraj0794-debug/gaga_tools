@@ -1317,7 +1317,10 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
                 try:
                     import urllib.request as _ur
                     _ur.urlopen(f"{candidate}/json/version", timeout=5)
-                    browser = pw.chromium.connect_over_cdp(candidate)
+                    # Timeout matters: without one, connect_over_cdp waits its
+                    # 180s default, so a wedged Chrome stalls a whole extraction
+                    # until the caller's 5-minute limit kills the job.
+                    browser = pw.chromium.connect_over_cdp(candidate, timeout=15000)
                     cdp_used = candidate
                     break
                 except Exception:
@@ -1459,6 +1462,27 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
                 context.close()
                 browser.close()
             else:
+                # amazon.in registers a service worker. Playwright's driver
+                # asserts on that target the next time it attaches
+                # ("_onAttachedToTarget" -> "Connection closed while reading from
+                # the driver") and the whole driver process dies - after which
+                # EVERY extraction fails while the CDP port still answers HTTP,
+                # so a port check calls it healthy. Unregister it while our
+                # session is still alive, otherwise one Amazon run bricks the
+                # browser for all later runs.
+                try:
+                    page.evaluate("""async () => {
+                        try {
+                            const rs = await navigator.serviceWorker.getRegistrations();
+                            await Promise.all(rs.map(r => r.unregister()));
+                        } catch (e) {}
+                        try {
+                            const ks = await caches.keys();
+                            await Promise.all(ks.map(k => caches.delete(k)));
+                        } catch (e) {}
+                    }""")
+                except Exception:
+                    pass
                 try:
                     page.close()
                 except Exception:
