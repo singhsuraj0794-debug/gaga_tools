@@ -17,8 +17,14 @@ import ProductList from "@/pages/product-enhance/ProductList";
 import ProductDetail from "@/pages/product-enhance/ProductDetail";
 import VoiceAgentDashboard from "@/pages/VoiceAgentDashboard";
 import { setBaseUrl } from "@workspace/api-client-react";
+import { API_BASE } from "@/lib/api";
 
-setBaseUrl("https://product-video-scraper-api.onrender.com");
+// The generated API client is used by the Dashboard/Scraper pages. It used to be
+// pointed at the Render deployment, which no longer serves the scrapers (jobs are
+// kept in memory there, and that host is not where the browsers live), so every
+// call from those pages failed to connect. Use the same base as the rest of the
+// app - the always-on Windows box.
+setBaseUrl(API_BASE);
 
 const queryClient = new QueryClient();
 

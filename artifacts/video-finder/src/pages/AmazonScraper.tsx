@@ -270,8 +270,18 @@ export default function AmazonScraper() {
       setRange([1, productUrls.length || 1]);
       setIsExtracting(false);
     } catch (error) {
+      // Surface the real reason. The old catch-all said "Failed to connect to
+      // server" for everything, including the case this hides best: ngrok's free
+      // tier answers a browser-looking request with an HTML interstitial unless
+      // the skip header is present, so response.json() throws a SyntaxError and
+      // the job looks unreachable while it is actually running fine server-side.
       console.error("Extract error:", error);
-      setExtractError("Failed to connect to server");
+      const msg = error instanceof Error ? error.message : String(error);
+      setExtractError(
+        error instanceof SyntaxError
+          ? "The API returned HTML instead of JSON (ngrok browser warning). Reload the page and retry."
+          : `Could not reach the API: ${msg}`,
+      );
       setIsExtracting(false);
     }
   };
