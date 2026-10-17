@@ -38,7 +38,7 @@ while ($true) {
     # Postgres/PostgREST are started here (this process stays alive) so they are
     # not reaped when whatever launched them ends. Re-run the idempotent starter
     # if either port has gone quiet.
-    if (-not (Test-PortOpen $PgPort) -or -not (Test-PortOpen $PostgrestPort)) {
+    if (-not (Test-PortOpen $PgPort) -or -not (Test-PortOpen $PostgrestPort) -or -not (Test-PortOpen $ShimPort)) {
         Write-Host "[run-stack] database stack is down - restarting"
         & "$PSScriptRoot\start-db.ps1"
     }
