@@ -1423,7 +1423,7 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
             # Stop early and report has_more so the next chunk resumes exactly
             # where this one stopped.
             _t0 = time.time()
-            _budget = 210
+            _budget = 150
             stopped_on_time = False
             while page_no < _last:
                 if time.time() - _t0 > _budget:
@@ -1441,7 +1441,7 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
                         # deployed proxy timeout (Render was taking 120-200s and
                         # could be cut off mid-catalogue).
                         page.goto(f"{base_url}{sep}page={page_no}",
-                                  wait_until="commit", timeout=45000)
+                                  wait_until="commit", timeout=15000)
                         # Wait for the grid to SETTLE, not a fixed short sleep.
                         # (No separate wait_for_selector: on an empty tail page it
                         # burned its whole 15s timeout, and the poll below covers
@@ -1451,7 +1451,7 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
                         # where the page actually shows 48-60. Poll until the card
                         # count stops growing.
                         last_n, stable = -1, 0
-                        deadline = time.time() + 6
+                        deadline = time.time() + 4
                         while time.time() < deadline:
                             n = page.evaluate(
                                 "() => document.querySelectorAll("
