@@ -476,7 +476,11 @@ const mapJobs = new JobStore<Record<string, any>>(
   "price_mapper_jobs", "price-mapper", "PRICE_MAPPER_JOBS_DIR",
 );
 
-const MAP_CONCURRENCY = Math.max(1, Number(process.env.PRICE_MAPPER_CONCURRENCY ?? 3) || 3);
+// Products mapped in parallel by the bulk job. Each one runs a Lens reverse
+// search plus up to three platform searches (now parallel too), so this is the
+// main throughput knob. Raised 3 -> 6 for the 12-core / 64GB Windows box;
+// SEARCH_PLATFORM_WORKERS bounds the total concurrent Chromium instances.
+const MAP_CONCURRENCY = Math.max(1, Number(process.env.PRICE_MAPPER_CONCURRENCY ?? 6) || 6);
 
 async function runMapJob(job: ScrapeJob<Record<string, any>>, queue: PmProduct[]): Promise<void> {
   job.status = "running";

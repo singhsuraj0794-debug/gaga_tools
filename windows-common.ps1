@@ -146,6 +146,15 @@ if (-not $env:LOCAL_SCRAPER_URL) { $env:LOCAL_SCRAPER_URL = "http://localhost:90
 if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "8" }
 if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
 
+# Price Mapper bulk mapping. Each product runs a Lens reverse search plus three
+# platform searches (the platform three now run in parallel in the searcher).
+# Raised from 3 to 6 for this box (12 cores / 64GB); the searcher's own
+# SEARCH_PLATFORM_WORKERS=12 caps total concurrent Chromium instances, so
+# products queue rather than oversubscribe. Dial back if Lens starts returning
+# thin results (concurrent Lens pages get fewer URLs from Google).
+if (-not $env:PRICE_MAPPER_CONCURRENCY) { $env:PRICE_MAPPER_CONCURRENCY = "6" }
+if (-not $env:SEARCH_PLATFORM_WORKERS) { $env:SEARCH_PLATFORM_WORKERS = "12" }
+
 # ?? Model upgrades for the RTX 5060 Ti (17GB VRAM) ??????????????????????????
 # Vision model for the image rules (overlay/moderation). The thresholds are
 # calibrated for CLIP (a "BESTSELLER" badge scores 0.82, clean shots 0.53-0.75).

@@ -4,6 +4,7 @@ Multi-platform product search — called as subprocess by Node.js server.
 Searches Amazon.in via scrape.do, marks Flipkart/Meesho as blocked.
 """
 import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import html as html_mod
 import io
@@ -13,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import traceback
 from urllib.parse import quote
 
@@ -31,6 +33,16 @@ _dinov2_processor = None
 _dinov2_model = None
 _clip_processor = None
 _clip_model = None
+# Guards the two lazy loaders. Platform searches now run in parallel, so without
+# this three threads could each load their own copy of DINOv2/CLIP at once.
+_model_lock = threading.Lock()
+
+# The three platform searches for one product are independent, so they run in
+# this shared pool (was sequential - ~38s of the ~58s per product). Size bounds
+# how many headless Chromium instances can be alive at once; each is ~250-400MB.
+# 12 fits comfortably in 64GB and keeps the 12 logical cores busy.
+PLATFORM_WORKERS = max(3, int(os.environ.get("SEARCH_PLATFORM_WORKERS", "12") or 12))
+_platform_pool = ThreadPoolExecutor(max_workers=PLATFORM_WORKERS, thread_name_prefix="platform")
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), ".search_cache.json")
 _cache = {}
@@ -226,25 +238,31 @@ def _load_dinov2():
     global _dinov2_processor, _dinov2_model
     if _dinov2_model is not None:
         return
-    try:
-        import torch
-        from transformers import AutoImageProcessor, AutoModel
-        _dinov2_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
-        _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small").to("cuda" if torch.cuda.is_available() else "cpu")
-    except Exception:
-        pass
+    with _model_lock:
+        if _dinov2_model is not None:
+            return
+        try:
+            import torch
+            from transformers import AutoImageProcessor, AutoModel
+            _dinov2_processor = AutoImageProcessor.from_pretrained("facebook/dinov2-small")
+            _dinov2_model = AutoModel.from_pretrained("facebook/dinov2-small").to("cuda" if torch.cuda.is_available() else "cpu")
+        except Exception:
+            pass
 
 def _load_clip():
     global _clip_processor, _clip_model
     if _clip_model is not None:
         return
-    try:
-        import torch
-        from transformers import CLIPProcessor, CLIPModel
-        _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda" if torch.cuda.is_available() else "cpu")
-    except Exception:
-        pass
+    with _model_lock:
+        if _clip_model is not None:
+            return
+        try:
+            import torch
+            from transformers import CLIPProcessor, CLIPModel
+            _clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+            _clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to("cuda" if torch.cuda.is_available() else "cpu")
+        except Exception:
+            pass
 
 _IMAGE_CACHE = {}
 
@@ -1137,10 +1155,25 @@ def search_all(title: str, image_url: str = "", gajab_price: str = "", gajab_url
     # Reverse image search once, share across all platforms
     rev_result = _reverse_image_search(image_url) if image_url else None
 
-    # Run sequentially to avoid resource contention (Chrome CDP + subprocess Chromium)
-    result["amazon"] = _search_amazon(title, image_url, gajab_price, gajab_url, rev_result)
-    result["flipkart"] = _search_flipkart(title, image_url, gajab_price, gajab_url, rev_result)
-    result["meesho"] = _search_meesho(title, image_url, gajab_price, gajab_url, rev_result)
+    # The three platform searches are independent - each launches its own
+    # headless Chromium and the only shared mutable state is the GPU model
+    # singletons (now lock-guarded). Run them together: sequentially they were
+    # ~38s of the ~58s per product, and the slowest platform is ~19s, so this
+    # saves roughly half the wall time per product.
+    jobs = (
+        ("amazon", _search_amazon),
+        ("flipkart", _search_flipkart),
+        ("meesho", _search_meesho),
+    )
+    futures = {
+        key: _platform_pool.submit(fn, title, image_url, gajab_price, gajab_url, rev_result)
+        for key, fn in jobs
+    }
+    for key, fut in futures.items():
+        try:
+            result[key] = fut.result()
+        except Exception as e:
+            result[key] = {"status": "failed", "error": f"{e}"}
 
     return result
 
