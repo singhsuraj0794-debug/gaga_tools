@@ -1418,7 +1418,19 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
             # the per-page YIELD was the real problem (see the settle wait below),
             # and every retry on a genuinely-empty tail page costs ~8s.
             PAGE_TRIES = 2
+            # Hard time budget. The caller aborts the HTTP call at 300s, and a
+            # chunk that overran simply failed the whole extraction (observed).
+            # Stop early and report has_more so the next chunk resumes exactly
+            # where this one stopped.
+            _t0 = time.time()
+            _budget = 210
+            stopped_on_time = False
             while page_no < _last:
+                if time.time() - _t0 > _budget:
+                    stopped_on_time = True
+                    logger.info("Time budget reached at page %s (%s products) - resuming in the next chunk",
+                                page_no, len(seen_asins))
+                    break
                 page_no += 1
                 new = 0
                 for _try in range(PAGE_TRIES):
@@ -1430,18 +1442,16 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
                         # could be cut off mid-catalogue).
                         page.goto(f"{base_url}{sep}page={page_no}",
                                   wait_until="commit", timeout=45000)
-                        try:
-                            page.wait_for_selector('[data-component-type="s-search-result"]',
-                                                   timeout=15000)
-                        except Exception:
-                            pass
                         # Wait for the grid to SETTLE, not a fixed short sleep.
+                        # (No separate wait_for_selector: on an empty tail page it
+                        # burned its whole 15s timeout, and the poll below covers
+                        # the same thing.)
                         # 'commit' returns before the results render, so the old
                         # fixed wait grabbed a partial grid: ~32 products/page
                         # where the page actually shows 48-60. Poll until the card
                         # count stops growing.
                         last_n, stable = -1, 0
-                        deadline = time.time() + 8
+                        deadline = time.time() + 6
                         while time.time() < deadline:
                             n = page.evaluate(
                                 "() => document.querySelectorAll("
@@ -1479,6 +1489,8 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
             else:
                 # the loop ran to the chunk cap without stalling => more pages exist
                 has_more = _last < EXTRACT_MAX_PAGES
+            if stopped_on_time:
+                has_more = True
 
             if cdp_used is None:
                 context.close()
@@ -1517,7 +1529,9 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
         "products": products[:EXTRACT_MAX_PRODUCTS],
         "error": "",
         "has_more": has_more,
-        "next_page": (_last + 1) if has_more else None,
+        # page_no is the last page we actually attempted, so resume from the next
+        # one - using _last here skipped pages when the time budget stopped us early.
+        "next_page": (page_no + 1) if has_more else None,
     }
 
 
