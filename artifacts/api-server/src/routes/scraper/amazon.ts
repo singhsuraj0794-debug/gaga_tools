@@ -256,7 +256,11 @@ async function walkAmazonCatalogue(
   onProgress: (total: number, pages: number) => void = () => {},
 ): Promise<{ storeName: string; products: any[]; error: string }> {
   const tunnel = (process.env.SCRAPER_TUNNEL_URL || "https://headphone-shudder-lavender.ngrok-free.dev").replace(/\/+$/, "");
-  const CHUNK_PAGES = 15;
+  // Chunk size trades wall-clock against the caller's 5-minute cap. The
+  // extractor now waits for each page's grid to settle and retries an empty page
+  // once, so a page costs ~10-18s: 10 pages stays comfortably inside the cap even
+  // when the tail pages are all empty and get retried.
+  const CHUNK_PAGES = 10;
   const MAX_TOTAL_PAGES = 400;
   const all: any[] = [];
   const seen = new Set<string>();

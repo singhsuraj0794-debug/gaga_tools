@@ -1414,12 +1414,10 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
             stall = 0
             has_more = False
             # A page that loads but yields no NEW asins is usually throttling or a
-            # partial render, not the end of the catalogue: a search still serves
-            # real results on pages 1..7 yet intermittently returns an empty grid.
-            # Retry the page ITSELF (fresh navigation, longer settle each time)
-            # before counting it as a stall - a single bad page used to end the
-            # run early (measured: 219-250 of the ~336 a search actually exposes).
-            PAGE_TRIES = 3
+            # partial render, not the end of the catalogue. One retry is enough:
+            # the per-page YIELD was the real problem (see the settle wait below),
+            # and every retry on a genuinely-empty tail page costs ~8s.
+            PAGE_TRIES = 2
             while page_no < _last:
                 page_no += 1
                 new = 0
@@ -1432,14 +1430,30 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
                         # could be cut off mid-catalogue).
                         page.goto(f"{base_url}{sep}page={page_no}",
                                   wait_until="commit", timeout=45000)
-                        # wait for the result grid, best-effort
                         try:
                             page.wait_for_selector('[data-component-type="s-search-result"]',
-                                                   timeout=12000)
+                                                   timeout=15000)
                         except Exception:
                             pass
-                        # settle longer on each retry — throttled pages need it
-                        page.wait_for_timeout(900 + _try * 2000)
+                        # Wait for the grid to SETTLE, not a fixed short sleep.
+                        # 'commit' returns before the results render, so the old
+                        # fixed wait grabbed a partial grid: ~32 products/page
+                        # where the page actually shows 48-60. Poll until the card
+                        # count stops growing.
+                        last_n, stable = -1, 0
+                        deadline = time.time() + 8
+                        while time.time() < deadline:
+                            n = page.evaluate(
+                                "() => document.querySelectorAll("
+                                "'[data-component-type=\"s-search-result\"]').length")
+                            if n == last_n:
+                                stable += 1
+                                if stable >= 3 and n > 0:
+                                    break
+                            else:
+                                stable = 0
+                            last_n = n
+                            time.sleep(0.6)
                     except Exception as e:
                         logger.info("Catalogue page %s attempt %s navigation failed: %s",
                                     page_no, _try + 1, str(e)[:80])
