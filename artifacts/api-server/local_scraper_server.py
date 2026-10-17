@@ -97,8 +97,36 @@ def _sweep_leaked_tabs():
 
 
 class ScraperHandler(BaseHTTPRequestHandler):
+    def _is_supabase_path(self):
+        return (self.path.startswith("/rest/v1") or self.path.startswith("/storage/v1"))
+
+    def do_PUT(self):
+        if self._is_supabase_path():
+            self._proxy_supabase()
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'{"error":"not found"}')
+
+    def do_DELETE(self):
+        if self._is_supabase_path():
+            self._proxy_supabase()
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'{"error":"not found"}')
+
+    def do_HEAD(self):
+        if self._is_supabase_path():
+            self._proxy_supabase()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_POST(self):
-        if self.path == "/scrape":
+        if self._is_supabase_path():
+            self._proxy_supabase()
+        elif self.path == "/scrape":
             self._handle_scrape()
         elif self.path == "/extract":
             self._handle_extract()
@@ -118,12 +146,65 @@ class ScraperHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":"not found"}')
 
     def do_GET(self):
-        if self.path.startswith("/api/"):
+        if self._is_supabase_path():
+            self._proxy_supabase()
+        elif self.path.startswith("/api/"):
             self._proxy_api()
         else:
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b'{"error":"not found"}')
+
+    def _proxy_supabase(self):
+        """Forward /rest/v1/* and /storage/v1/* to the local storage shim (:3001).
+
+        GitHub Actions cannot reach 127.0.0.1, so the monitor cron has to come in
+        through this tunnel. The shim is a full Supabase-compatible origin (it
+        serves storage itself and proxies /rest/v1 to PostgREST), so the paths are
+        forwarded as-is - unlike /api/*, these need the apikey/Authorization
+        headers preserved and PUT/DELETE/HEAD support.
+        """
+        import urllib.request
+        import urllib.error
+
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else None
+        target = "http://127.0.0.1:3001" + self.path
+        fwd = {}
+        for h in ("Content-Type", "Accept", "apikey", "Authorization",
+                  "Prefer", "Range", "X-Client-Info", "ngrok-skip-browser-warning",
+                  "Accept-Profile", "Content-Profile"):
+            v = self.headers.get(h)
+            if v:
+                fwd[h] = v
+        req = urllib.request.Request(target, data=body, method=self.command, headers=fwd)
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                payload = resp.read()
+                self.send_response(resp.status)
+                for h in ("Content-Type", "Content-Range", "Content-Length"):
+                    v = resp.headers.get(h)
+                    if v:
+                        self.send_header(h, v)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Range")
+                self.end_headers()
+                self.wfile.write(payload)
+        except urllib.error.HTTPError as e:
+            payload = e.read() if hasattr(e, "read") else b"{}"
+            self.send_response(e.code)
+            self.send_header("Content-Type", e.headers.get("Content-Type", "application/json"))
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(payload)
+        except Exception as e:
+            msg = json.dumps({"error": f"supabase proxy failed: {e}"}).encode()
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
 
     def _proxy_api(self):
         """Forward /api/* to the local pre-listing API server on port 8090."""
