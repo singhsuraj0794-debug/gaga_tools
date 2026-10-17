@@ -205,16 +205,19 @@ export default function PreListingValidator() {
       // name client-side to find the newest published tunnel URL.
       let bestName = "prelisting-api-url.txt";
       try {
-        const listResp = await fetch(`${supabaseUrl}/storage/v1/object/list/monitoring`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
+        // The key goes in the query string, not a header: ngrok answers the CORS
+        // preflight itself and only allows Content-Type and
+        // ngrok-skip-browser-warning, so a request carrying apikey/Authorization is
+        // blocked before it is sent. The shim reads ?apikey= and passes it on.
+        const listResp = await fetch(
+          `${supabaseUrl}/storage/v1/object/list/monitoring?apikey=${encodeURIComponent(supabaseKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prefix: "", limit: 1000 }),
+            signal: ctrl.signal,
           },
-          body: JSON.stringify({ prefix: "", limit: 1000 }),
-          signal: ctrl.signal,
-        });
+        );
         if (listResp.ok) {
           const items: { name?: string; created_at?: string }[] = await listResp.json();
           const matches = (items || []).filter((i) => i.name && /^prelisting-api-url-\d+\.txt$/.test(i.name));

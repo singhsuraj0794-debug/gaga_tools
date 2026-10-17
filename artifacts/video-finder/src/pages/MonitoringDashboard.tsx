@@ -398,8 +398,15 @@ export default function MonitoringDashboard() {
       u.searchParams.set("select", "*");
       u.searchParams.set("order", "run_at.desc");
       u.searchParams.set("limit", "600");
+      // The key travels in the QUERY STRING, not a header. ngrok answers the CORS
+      // preflight itself and only allows Content-Type and ngrok-skip-browser-warning,
+      // so a request carrying apikey/Authorization is blocked before it is ever sent
+      // ("No monitoring data yet" while the table had 67k rows). With no custom
+      // headers this is a "simple" request and skips the preflight entirely; the
+      // shim reads ?apikey= and forwards it to PostgREST as a header.
+      u.searchParams.set("apikey", key);
       console.log("Fetching from:", u.toString().slice(0, 60) + "...");
-      const r = await fetch(u.toString(), { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+      const r = await fetch(u.toString());
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       console.log(`Fetched ${data.length} rows`);

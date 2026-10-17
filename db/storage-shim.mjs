@@ -51,8 +51,19 @@ function json(res, code, obj) {
 }
 
 function presentedKey(req) {
+  // A browser cannot send the apikey/Authorization headers through ngrok: ngrok
+  // answers the CORS preflight itself and only allows Content-Type and
+  // ngrok-skip-browser-warning, so the preflight fails and the request never
+  // happens. Accept the key in the query string instead - a GET with no custom
+  // headers is a "simple" request and needs no preflight at all.
   const auth = req.headers["authorization"] || "";
-  return (auth.startsWith("Bearer ") ? auth.slice(7) : "") || req.headers["apikey"] || "";
+  const fromHeader = (auth.startsWith("Bearer ") ? auth.slice(7) : "") || req.headers["apikey"] || "";
+  if (fromHeader) return fromHeader;
+  try {
+    return new URL(req.url, "http://localhost").searchParams.get("apikey") || "";
+  } catch {
+    return "";
+  }
 }
 
 function canWrite(req) {
@@ -181,11 +192,24 @@ function proxy(req, res) {
   // Strip Supabase's /rest/v1 prefix: PostgREST serves the API at its ROOT
   // (/products), and /rest/v1 is the Kong routing convention in front of it.
   // Forwarding it verbatim gives PGRST125 "Invalid path specified in request URL".
-  let pathname = new URL(req.url, "http://localhost").pathname;
+  const parsed = new URL(req.url, "http://localhost");
+  let pathname = parsed.pathname;
   if (pathname === "/rest/v1" || pathname === "/rest/v1/") pathname = "/";
   else if (pathname.startsWith("/rest/v1/")) pathname = pathname.slice("/rest/v1".length);
-  const target = new URL(pathname + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : ""), POSTGREST);
+
+  // A browser can only pass the key as ?apikey= (see presentedKey). PostgREST
+  // needs it as a header, and must not see the extra query param.
+  const q = new URLSearchParams(parsed.searchParams);
+  const queryKey = q.get("apikey");
+  q.delete("apikey");
+  const qs = q.toString();
+  const target = new URL(pathname + (qs ? "?" + qs : ""), POSTGREST);
+
   const headers = { ...req.headers, host: target.host };
+  if (queryKey) {
+    headers["apikey"] = queryKey;
+    if (!headers["authorization"]) headers["authorization"] = `Bearer ${queryKey}`;
+  }
   const preq = http.request(
     { hostname: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers },
     (pres) => {
