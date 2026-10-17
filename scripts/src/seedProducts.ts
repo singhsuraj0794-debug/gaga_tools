@@ -19,9 +19,9 @@ const execFileAsync = promisify(execFile);
 
 // ─── Config ───────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://okxyskmjsmtykblrtmyi.supabase.co";
+const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://headphone-shudder-lavender.ngrok-free.dev";
 const SUPABASE_KEY =
-  process.env.SUPABASE_KEY ?? "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp";
+  process.env.SUPABASE_KEY ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y";
 
 const GATEWAY_BASE = "https://gatewayservice.gajab.com";
 const GATEWAY_KEY = "8097571064818418";

@@ -118,9 +118,9 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Resume from saved progress")
     args = parser.parse_args()
 
-    supabase_url = os.environ.get("SUPABASE_URL", "https://okxyskmjsmtykblrtmyi.supabase.co")
+    supabase_url = os.environ.get("SUPABASE_URL", "https://headphone-shudder-lavender.ngrok-free.dev")
     supabase_key = os.environ.get("SUPABASE_KEY",
-                                   "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp")
+                                   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y")
 
     print("Fetching products from Supabase...", flush=True)
     products = get_all_products(supabase_url, supabase_key)

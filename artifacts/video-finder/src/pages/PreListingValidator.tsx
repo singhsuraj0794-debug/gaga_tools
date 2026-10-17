@@ -193,9 +193,9 @@ export default function PreListingValidator() {
   const discoverTunnelUrl = async () => {
     try {
       const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ||
-        "https://okxyskmjsmtykblrtmyi.supabase.co";
+        "https://headphone-shudder-lavender.ngrok-free.dev";
       const supabaseKey = (import.meta.env?.VITE_SUPABASE_KEY as string | undefined) ||
-        "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp";
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y";
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 8000);
 
