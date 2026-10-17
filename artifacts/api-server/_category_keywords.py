@@ -53,6 +53,17 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Home & Kitchen > Kitchen Accessories > Cuttlery and Dinning Sets > Mugs"),
     ("cup_saucer", ["cup and saucer", "cup & saucer", "tea cup", "coffee cup"],
      "Home & Kitchen > Kitchen Accessories > Cuttlery and Dinning Sets > Cups & Saucers"),
+    # Bare "cup" breaks the no-ambiguous-nouns rule, but this store is drinkware:
+    # every remaining unmapped title was "<something> Cup" or "Water Glass" and all
+    # of them are drinking vessels. The ambiguous senses are carved out with
+    # LONGER keywords, which win under the longest-match rule (measuring cup,
+    # water glass), so this only catches plain drinking cups.
+    ("cup", ["cup", "cups"],
+     "Home & Kitchen > Kitchen Accessories > Cuttlery and Dinning Sets > Cups & Saucers"),
+    ("measuring_cup", ["measuring cup", "measuring cups", "measurement cup"],
+     "Home & Kitchen > Kitchen Accessories > Kitchen Tools > Measuring Cup"),
+    ("water_glass", ["water glass", "drinking glass", "juice glass"],
+     "Home & Kitchen > Kitchen Accessories > Bar & Glassware > Glass"),
     ("hip_flask", ["hip flask"],
      "Home & Kitchen > Kitchen Accessories > Bar & Glassware > Hip Flask"),
     ("bottle_opener", ["bottle opener", "bottle openner"],
