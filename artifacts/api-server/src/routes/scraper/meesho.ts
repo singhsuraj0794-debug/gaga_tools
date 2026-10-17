@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import crypto from "node:crypto";
-import { runLocalScraper, runLocalExtract, runLocalExtractPage, hasLocalScraper } from "../../lib/localScraper.js";
+import { runLocalScraper, runLocalExtract, runLocalExtractPage, runLocalExtractStore, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
 import { runBatched } from "../../lib/scrapeBatch";
@@ -55,6 +55,9 @@ interface ScrapeJob {
   storeUrl?: string;
   /** Extract jobs: next page to fetch per sort order — the resume point. */
   progress?: Record<string, number>;
+  /** Extract jobs: true once the shop-API enumeration has succeeded, so a
+   *  resumed job does not re-walk the (now unnecessary) HTML pagination. */
+  apiEnumerated?: boolean;
   /** Scrape jobs: the full URL list, so an interrupted run can finish the rest. */
   urls?: string[];
   createdAt: Date;
@@ -258,6 +261,32 @@ async function walkStore(job: ScrapeJob, storeUrl: string): Promise<void> {
   const allProducts = job.products;
   const seen = new Set(allProducts.map((p) => p.url));
   const progress = job.progress || (job.progress = {});
+
+  // Preferred path: one call to the store's own JSON API, which returns the WHOLE
+  // catalogue. Paging the storefront HTML instead stops after ~2 pages (~40
+  // products) regardless of shop size, so a 308-product shop came back with 57.
+  if (!job.apiEnumerated) {
+    const api = await runLocalExtractStore(storeUrl);
+    if (api && Array.isArray(api.products) && api.products.length > 0) {
+      for (const p of api.products) {
+        const url = p.url || "";
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        allProducts.push(mapExtractProduct(p));
+      }
+      job.apiEnumerated = true;
+      job.total = allProducts.length;
+      job.completed = allProducts.length;
+      persistJob(job);
+      logger.info(
+        { jobId: job.id, products: api.products.length, unique: allProducts.length, reported: api.total, warning: api.warning },
+        "Meesho store enumerated via shop API",
+      );
+      return;
+    }
+    logger.warn({ jobId: job.id, error: api?.error }, "shop API enumeration unavailable - falling back to HTML walk");
+  }
+
   await Promise.all(EXTRACT_SORTS.map(async (sort) => {
     let page = progress[sort] || 1;
     let consecutiveEmpty = 0;

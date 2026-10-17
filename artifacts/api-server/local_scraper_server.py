@@ -102,6 +102,8 @@ class ScraperHandler(BaseHTTPRequestHandler):
             self._handle_scrape()
         elif self.path == "/extract":
             self._handle_extract()
+        elif self.path == "/extract-store":
+            self._handle_extract_store()
         elif self.path == "/search":
             self._handle_search()
         elif self.path.startswith("/api/"):
@@ -204,6 +206,28 @@ class ScraperHandler(BaseHTTPRequestHandler):
             result = meesho_scraper.extract_store(url)
             self._json(200, result)
 
+        except Exception as e:
+            traceback.print_exc()
+            self._json(500, {"status": "failed", "error": str(e)})
+
+    def _handle_extract_store(self):
+        """Enumerate a Meesho store's whole catalogue via its own JSON API.
+
+        walkStore used to page the storefront HTML across three sort orders, but
+        Meesho's HTML pagination stops after ~2 pages (~40 products) however big
+        the shop is, so a 308-product shop yielded 57. The page's own
+        /api/v1/meri-shop/feed endpoint is offset-paginated and returns all of it.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            url = body.get("url", "")
+            if not url:
+                self._json(400, {"status": "failed", "error": "url required"})
+                return
+            print(f"[EXTRACT-STORE] {url}", flush=True)
+            result = meesho_scraper.extract_store_api(url)
+            self._json(200, result)
         except Exception as e:
             traceback.print_exc()
             self._json(500, {"status": "failed", "error": str(e)})

@@ -31,13 +31,31 @@ export async function runLocalSearch(title: string, imageUrl: string, price: str
   } catch { return null; }
 }
 
-export async function runLocalExtract(url: string): Promise<any> {
-  if (!LOCAL_SCRAPER_URL) return null;
+export async function runLocalExtract(url: string): Promise<any> {  if (!LOCAL_SCRAPER_URL) return null;
   try {
     const { data } = await axios.post(
       `${LOCAL_SCRAPER_URL}/extract`,
       { url },
       { timeout: 900000 },
+    );
+    return data;
+  } catch { return null; }
+}
+
+/** Enumerate a whole Meesho store through its own JSON API (one call).
+ *
+ * The storefront HTML stops paginating after ~2 pages (~40 products) however big
+ * the shop is, so paging it across sort orders under-counted badly (a 308-product
+ * shop yielded 57). The local server drives /api/v1/meri-shop/feed instead, which
+ * is offset-paginated and returns the entire catalogue. Generous timeout: it is a
+ * page load plus one throttled request per 20 products. */
+export async function runLocalExtractStore(storeUrl: string): Promise<any> {
+  if (!LOCAL_SCRAPER_URL) return null;
+  try {
+    const { data } = await axios.post(
+      `${LOCAL_SCRAPER_URL}/extract-store`,
+      { url: storeUrl },
+      { timeout: isLoopbackLocalScraper() ? 240000 : 55000 },
     );
     return data;
   } catch { return null; }

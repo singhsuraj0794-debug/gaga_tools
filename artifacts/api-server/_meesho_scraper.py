@@ -907,6 +907,147 @@ def extract_store(store_url: str) -> dict:
     return _extract_via_browser(url_clean, store_url)
 
 
+def extract_store_api(store_url: str) -> dict:
+    """Enumerate a Meesho store's WHOLE catalogue through its own JSON API.
+
+    The storefront HTML never paginates past ~2 pages (~40 products) no matter how
+    big the shop is, so a 308-product shop yielded only 57 across the three sort
+    orders walkStore used to union. The page's own /api/v1/meri-shop/feed endpoint
+    is offset-paginated and returns the entire catalogue with names, slugs,
+    prices, images and attributes, so drive that instead:
+
+        GET  /api/v1/meri-shop/profile?supplierHandle=<handle>  -> masked supplier id + product count
+        POST /api/v1/meri-shop/feed  {limit, offset, supplier_id, filter}  -> {catalogs: [...]}
+
+    Measured on MSSOMNATHENTERPRISES: 308/308 products in 16 calls. Meesho
+    rate-limits this endpoint (observed 429), so calls are throttled and retried.
+
+    Returns {"products": [...], "total": n, "hasMore": False} in the same shape
+    extract_page produces, so callers can treat them interchangeably.
+    """
+    import time as _time
+    import urllib.request
+    from playwright.sync_api import sync_playwright
+
+    url_clean = store_url.split("?")[0].rstrip("/")
+    handle = url_clean.split("/")[-1]
+
+    try:
+        urllib.request.urlopen(f"{EXTRACT_CDP_URL}/json/version", timeout=5)
+    except Exception as e:
+        return {"products": [], "total": 0, "hasMore": False, "error": f"Chrome CDP not available: {e}"}
+
+    LIMIT = PAGE_SIZE  # 20
+    FEED_DELAY = 0.4   # seconds between feed calls (429s appear without it)
+    products: list = []
+    seen = set()
+    expected = 0
+    error = None
+
+    def _post_feed(page, offset: int, supplier_id: str) -> tuple:
+        return page.evaluate(
+            """async (args) => {
+                const r = await fetch('/api/v1/meri-shop/feed', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({limit: args.limit, offset: args.offset,
+                        supplier_id: args.sid, featured_collection_type: null,
+                        filter: {selected_filter_ids: [], type: 'shop',
+                                 sort_option: null, session_state: null}})
+                });
+                return {status: r.status, body: await r.text()};
+            }""",
+            {"offset": offset, "sid": supplier_id, "limit": LIMIT},
+        )
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(EXTRACT_CDP_URL)
+            ctx = browser.new_context()
+            page = ctx.new_page()
+            try:
+                # Load the storefront once so the API calls share its origin and
+                # whatever cookies/headers Meesho expects.
+                page.goto(f"{url_clean}?_ms=3.0.1", wait_until="domcontentloaded", timeout=30000)
+
+                prof = page.evaluate(
+                    """async (h) => {
+                        const r = await fetch('/api/v1/meri-shop/profile?supplierHandle=' + encodeURIComponent(h));
+                        return {status: r.status, body: await r.text()};
+                    }""",
+                    handle,
+                )
+                if prof.get("status") != 200:
+                    return {"products": [], "total": 0, "hasMore": False,
+                            "error": f"shop profile API returned {prof.get('status')}"}
+                pdata = json.loads(prof["body"]).get("profile") or {}
+                supplier_id = pdata.get("masked_id")
+                for prop in pdata.get("shop_value_props") or []:
+                    if prop.get("type") == "product":
+                        expected = int((prop.get("product") or {}).get("count") or 0)
+                if not supplier_id:
+                    return {"products": [], "total": 0, "hasMore": False,
+                            "error": "shop profile API did not return a supplier id"}
+
+                offset = 0
+                # Walk to the reported count, plus one page of slack in case the
+                # count is stale. A short page also ends the walk.
+                while offset < expected + LIMIT:
+                    res = _post_feed(page, offset, supplier_id)
+                    status = res.get("status")
+                    if status == 429:
+                        _time.sleep(3)
+                        res = _post_feed(page, offset, supplier_id)
+                        status = res.get("status")
+                    if status != 200:
+                        error = f"feed API returned {status} at offset {offset}"
+                        break
+                    catalogs = (json.loads(res["body"]) or {}).get("catalogs") or []
+                    for c in catalogs:
+                        pid = str(c.get("product_id") or c.get("original_product_id") or "").strip()
+                        if not pid or pid in seen:
+                            continue
+                        seen.add(pid)
+                        slug = (c.get("slug") or c.get("original_slug") or "p").strip()
+                        images = [u for u in (c.get("images") or c.get("product_images") or [])
+                                  if isinstance(u, str)]
+                        price = c.get("min_catalog_price")
+                        products.append({
+                            "id": pid,
+                            "title": (c.get("name") or c.get("hero_product_name") or "Untitled").strip(),
+                            "url": f"https://www.meesho.com/{slug}/p/{pid}",
+                            "images": images[:10],
+                            "price": f"\u20b9{price}" if price else None,
+                            "mrp": c.get("original_price"),
+                            "category": c.get("sub_sub_category_name") or c.get("name"),
+                            "attributes": c.get("product_attributes") or [],
+                            "details": c.get("full_details") or "",
+                            "status": "pending",
+                            "error": None,
+                        })
+                    if len(catalogs) < LIMIT:
+                        break
+                    offset += LIMIT
+                    _time.sleep(FEED_DELAY)
+            finally:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
+    except Exception as e:
+        return {"products": products, "total": len(products), "hasMore": False, "error": str(e)}
+
+    out = {"products": products, "total": len(products), "hasMore": False}
+    if expected and len(products) < expected:
+        out["warning"] = f"feed API yielded {len(products)} of {expected} reported products"
+    if error:
+        out["error"] = error
+    return out
+
+
 def _extract_from_html(html: str, store_url: str) -> dict:
     result = extract_products(html, store_url)
     total_count = _get_total_count(html)
