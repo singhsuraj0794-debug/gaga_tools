@@ -31,10 +31,35 @@ def _get_browser():
         return _browser
     try:
         _pw = sync_playwright().start()
-        _browser = _pw.chromium.connect_over_cdp(CDP_URL)
+        # Fail fast. Without a timeout connect_over_cdp waits its 180s default,
+        # so one unhealthy Chrome stalled the whole search for three minutes and
+        # then failed anyway.
+        _browser = _pw.chromium.connect_over_cdp(CDP_URL, timeout=15000)
         return _browser
     except Exception:
         return None
+
+
+def _sweep_lens_tabs(browser) -> None:
+    """Close Lens/Google-Search tabs left behind by earlier runs.
+
+    A failed search used to return before page.close(), so every error leaked a
+    heavy Google Search tab into the shared Chrome. They piled up until the
+    browser could not service a new navigation and each search burned its full
+    timeout. 9222 is a dedicated monitor Chrome, so anything Lens/Google-Search
+    there is ours to close.
+    """
+    for ctx in browser.contexts:
+        for p in list(ctx.pages):
+            try:
+                url = p.url or ""
+            except Exception:
+                continue
+            if "lens.google.com" in url or "google.com/search" in url:
+                try:
+                    p.close()
+                except Exception:
+                    pass
 
 
 def _search_lens(image_url: str) -> dict:
@@ -54,8 +79,15 @@ def _search_lens(image_url: str) -> dict:
 
         try:
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            # Clear tabs leaked by earlier failed runs before adding another.
+            _sweep_lens_tabs(browser)
             page = ctx.new_page()
+        except Exception as e:
+            print(f"LENS open error: {e}", file=sys.stderr)
+            return result
 
+        html = ""
+        try:
             # The Lens result page is a heavy Google Search page (~3MB, mostly
             # thumbnails) and this box is busy, so it kept hitting the goto
             # timeout. Only the HTML matters, so drop images/media/fonts.
@@ -81,14 +113,20 @@ def _search_lens(image_url: str) -> dict:
             page.wait_for_timeout(3000)
 
             html = page.evaluate("() => document.documentElement.outerHTML")
-            page.close()
         except Exception as e:
             # Do NOT drop the shared browser on a page-level failure. The old code
             # set _browser = None here, so ONE slow page made every later search
             # print "Chrome not available" and return instantly empty — which is
-            # why a run "failed once and then searched for so long".
+            # why a run "failed once and then searched so long".
             print(f"LENS error: {e}", file=sys.stderr)
-            return result
+        finally:
+            # ALWAYS close: the old code only closed on success, so each failure
+            # leaked a heavy Google Search tab into the shared Chrome until it
+            # stopped servicing new navigations entirely.
+            try:
+                page.close()
+            except Exception:
+                pass
 
     html = html.replace("&quot;", '"').replace("&amp;", "&")
     seen = set()
