@@ -1413,14 +1413,17 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
             page_no = _start
             stall = 0
             has_more = False
+            # A page that loads but yields no NEW asins is usually throttling or a
+            # partial render, not the end of the catalogue: a search still serves
+            # real results on pages 1..7 yet intermittently returns an empty grid.
+            # Retry the page ITSELF (fresh navigation, longer settle each time)
+            # before counting it as a stall - a single bad page used to end the
+            # run early (measured: 219-250 of the ~336 a search actually exposes).
+            PAGE_TRIES = 3
             while page_no < _last:
                 page_no += 1
-                loaded = False
-                # A page that comes back empty is usually throttling/backoff, not
-                # the end of the catalogue — reload it once before counting it as
-                # a stall. Without this, two bad pages near the middle silently
-                # truncated the catalogue (e.g. 130 of 220 products).
-                for _try in range(2):
+                new = 0
+                for _try in range(PAGE_TRIES):
                     try:
                         # 'commit' resolves as soon as the response starts — far
                         # cheaper than domcontentloaded on a heavy page, and it
@@ -1435,17 +1438,22 @@ def extract_products(store_url: str, start_page: int = 1, max_pages: int | None 
                                                    timeout=12000)
                         except Exception:
                             pass
-                        page.wait_for_timeout(800 + _try * 1500)
-                        loaded = True
-                        break
-                    except Exception:
+                        # settle longer on each retry — throttled pages need it
+                        page.wait_for_timeout(900 + _try * 2000)
+                    except Exception as e:
+                        logger.info("Catalogue page %s attempt %s navigation failed: %s",
+                                    page_no, _try + 1, str(e)[:80])
                         time.sleep(2)
-                if not loaded:
-                    break
-                new = _collect()
+                        continue
+                    new = _collect()
+                    if new > 0:
+                        break
+                    logger.info("Catalogue page %s attempt %s yielded no new products",
+                                page_no, _try + 1)
+                    time.sleep(1.5)
                 if new == 0:
                     stall += 1
-                    logger.info("Catalogue page %s added nothing (stall %s/3)", page_no, stall)
+                    logger.info("Catalogue page %s stalled (%s/3)", page_no, stall)
                     if stall >= 3:
                         break
                 else:
