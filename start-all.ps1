@@ -23,6 +23,7 @@ if (Test-Path (Join-Path $ApiDir "build.mjs")) {
 
 & "$PSScriptRoot\start-prelisting-tunnel.ps1"
 & "$PSScriptRoot\start-scraper-tunnel.ps1"
+& "$PSScriptRoot\start-db.ps1"
 & "$PSScriptRoot\start-chrome-extract.ps1"
 & "$PSScriptRoot\start-chrome-scraper.ps1"
 & "$PSScriptRoot\start-chrome-monitor.ps1"
@@ -34,6 +35,8 @@ $services = @(
     @{ Port = $AnalysisPort;      Name = "ANALYSIS" },
     @{ Port = $ApiPort;           Name = "API" },
     @{ Port = $ScraperPort;       Name = "SCRAPER" },
+    @{ Port = $PgPort;            Name = "POSTGRES" },
+    @{ Port = $PostgrestPort;     Name = "POSTGREST" },
     @{ Port = $ChromeScraperPort; Name = "CHROME-SCRAPE" },
     @{ Port = $ChromeExtractPort; Name = "CHROME-EXTRACT" },
     @{ Port = $LocalProxyPort;    Name = "WEBSHARE-PROXY" }

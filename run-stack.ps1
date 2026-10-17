@@ -35,4 +35,11 @@ while ($true) {
     Restart-ChromeIfUnhealthy -Port $ChromeExtractPort -Label "extraction" -Script "start-chrome-extract.ps1"
     Restart-ChromeIfUnhealthy -Port $ChromeScraperPort -Label "scraping"   -Script "start-chrome-scraper.ps1"
     Restart-ChromeIfUnhealthy -Port $MonitorChromePort -Label "Lens"       -Script "start-chrome-monitor.ps1"
+    # Postgres/PostgREST are started here (this process stays alive) so they are
+    # not reaped when whatever launched them ends. Re-run the idempotent starter
+    # if either port has gone quiet.
+    if (-not (Test-PortOpen $PgPort) -or -not (Test-PortOpen $PostgrestPort)) {
+        Write-Host "[run-stack] database stack is down - restarting"
+        & "$PSScriptRoot\start-db.ps1"
+    }
 }

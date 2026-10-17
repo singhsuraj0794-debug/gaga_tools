@@ -25,6 +25,13 @@ $ChromeExtractPort = 9225   # link extraction, no proxy
 $MonitorChromePort = 9222   # Google Lens reverse search (Price Mapper), no proxy
 $AppiumPort        = 4723
 
+# --- Local database (Option A: Supabase replacement) -------------------------
+$DbRoot        = "C:\gajab"          # holds pgdata, postgrest.conf, .db-secrets.json
+$PgRoot        = "C:\gajab\pg"       # Postgres portable binaries
+$PgData        = "C:\gajab\pgdata"
+$PgPort        = 5432
+$PostgrestPort = 3000
+
 # --- Tunnels -----------------------------------------------------------------
 $NgrokDomain = if ($env:GAJAB_NGROK_DOMAIN) { $env:GAJAB_NGROK_DOMAIN } else { "headphone-shudder-lavender.ngrok-free.dev" }
 

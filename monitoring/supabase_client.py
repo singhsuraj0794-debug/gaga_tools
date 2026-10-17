@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY
+from prune_storage import prune
 
 
 class SupabaseStore:
@@ -176,25 +177,29 @@ class SupabaseStore:
             return False
 
     def clean_old_recordings(self):
-        """Delete recordings older than 24h or keep max 24 most recent."""
-        if not self._client:
-            return
+        """Prune monitor artefacts older than 24h - recordings AND screenshots.
+
+        The name is kept for callers, but the work lives in prune_storage.prune.
+        The previous implementation had three bugs that let this bucket reach
+        ~20 GB and hit the Supabase storage quota:
+          1. it deleted with the anon key while the bucket had no DELETE policy,
+             so every remove() was a silent no-op that still printed
+             "Deleted old recording" - it deleted nothing for months;
+          2. storage.list() used supabase-py's default page of 100, so it never
+             saw the full listing;
+          3. screenshots were never pruned at all (17,270 accumulated).
+        prune_storage pages the listing, parses the timestamp from the object
+        name, and verifies the delete actually removed rows.
+        """
         try:
-            resp = self._client.storage.from_("monitoring").list(path="recordings/")
-            if not resp:
-                return
-            all_files = sorted(resp, key=lambda x: x.get("created_at", ""), reverse=True)
-            if len(all_files) <= 24:
-                return
-            # Keep 24 most recent, delete rest
-            for f in all_files[24:]:
-                try:
-                    self._client.storage.from_("monitoring").remove([f"recordings/{f['name']}"])
-                    print(f"[SUPABASE] Deleted old recording: {f['name']}")
-                except Exception as e:
-                    print(f"[SUPABASE] Delete error: {e}")
+            summary = prune(hours=24, apply=True, verbose=False)
+            if summary.get("deleted"):
+                print(f"[SUPABASE] Pruned {summary['deleted']} artefact(s) older than 24h; "
+                      f"keeping {summary['kept']}")
+            if summary.get("error"):
+                print(f"[SUPABASE] Prune warning: {summary['error']}")
         except Exception as e:
-            print(f"[SUPABASE] Clean error: {e}")
+            print(f"[SUPABASE] Prune error: {e}")
 
     def get_latest_runs(self, limit: int = 100):
         if not self._client:
