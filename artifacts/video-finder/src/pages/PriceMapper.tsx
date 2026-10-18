@@ -78,7 +78,9 @@ interface ManualEntry {
   price: string;
 }
 
-const PAGE_SIZES = [10, 25, 50, 100];
+// The API caps pageSize at 200. 25 was the default, which made it look like
+// only 25 products could be worked at a time.
+const PAGE_SIZES = [25, 50, 100, 200];
 
 const platforms = [
   {
@@ -114,6 +116,7 @@ export default function PriceMapper() {
   const [products, setProducts] = useState<GajabProduct[]>([]);
   const [mappingsMap, setMappingsMap] = useState<Map<string, PriceMapping>>(new Map());
   const [mappedCount, setMappedCount] = useState(0);
+  const [unmappedCount, setUnmappedCount] = useState(0);
   const [duplicates, setDuplicates] = useState<ProductDuplicate[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -162,6 +165,7 @@ export default function PriceMapper() {
 
   useEffect(() => {
     fetchMappedCount();
+    fetchUnmappedCount();
     fetchDuplicates();
   }, []);
 
@@ -228,6 +232,14 @@ export default function PriceMapper() {
     } catch {
       // non-critical
     }
+  }
+
+  async function fetchUnmappedCount() {
+    try {
+      const res = await fetch(`${API_BASE}/api/price-mapper/products?limit=1&filter=unmapped`);
+      const data = await res.json();
+      setUnmappedCount(data.total ?? 0);
+    } catch { /* non-fatal */ }
   }
 
   async function fetchMappedCount() {
@@ -327,6 +339,7 @@ export default function PriceMapper() {
             sessionStorage.removeItem("priceMapJobId");
             setBatchSearching(false);
             fetchMappedCount();
+            fetchUnmappedCount();
             setSuccessMsg(`Mapping job ${job.status}: ${job.completed}/${job.total} processed`);
             setTimeout(() => setSuccessMsg(""), 5000);
           }
@@ -500,6 +513,7 @@ export default function PriceMapper() {
             sessionStorage.removeItem("priceMapJobId");
             setBatchSearching(false);
             fetchMappedCount();
+            fetchUnmappedCount();
             setSuccessMsg(`Mapping job ${job.status}: ${job.completed}/${job.total} processed`);
             setTimeout(() => setSuccessMsg(""), 5000);
           }
@@ -912,7 +926,7 @@ export default function PriceMapper() {
               className="text-indigo-600 border-indigo-200 hover:bg-indigo-50"
             >
               <Play className="h-4 w-4 mr-2" />
-              Map ALL Unmapped
+              Map ALL Unmapped{unmappedCount > 0 ? ` (${unmappedCount.toLocaleString()})` : ""}
             </Button>
 
             {/* Price Refetch: re-scrape the stored links so stale prices update. */}
