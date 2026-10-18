@@ -233,6 +233,11 @@ if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
 # thin results (concurrent Lens pages get fewer URLs from Google).
 if (-not $env:PRICE_MAPPER_CONCURRENCY) { $env:PRICE_MAPPER_CONCURRENCY = "6" }
 if (-not $env:SEARCH_PLATFORM_WORKERS) { $env:SEARCH_PLATFORM_WORKERS = "12" }
+# Price Refetch workers. 18k rows x ~1.7 links each is ~31k scrapes; at 4 the
+# sweep was ~8/min (~37h). 8 roughly halves it. Failures are non-destructive
+# (the old price is kept and the row is retried first next pass), so a little
+# rate-limiting is an acceptable trade for finishing sooner.
+if (-not $env:PRICE_REFETCH_CONCURRENCY) { $env:PRICE_REFETCH_CONCURRENCY = "8" }
 # Concurrent Google Lens pages (searcher's own pool). Lens is the per-product
 # floor at ~20s. 4 at once is ~4x faster but Google returns far fewer URLs
 # (32 -> 9 across 4 images), which starves the platform search - so 2 balances
