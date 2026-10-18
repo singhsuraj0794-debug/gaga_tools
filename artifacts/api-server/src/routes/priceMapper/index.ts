@@ -636,9 +636,14 @@ async function refetchMapping(row: any, platforms: RefetchPlatform[]) {
   const update: Record<string, any> = {};
   const platformsOut: Record<string, any> = {};
 
-  for (const platform of platforms) {
+  // Scrape the platforms CONCURRENTLY. Sequentially a 3-platform product took
+  // ~40s (3 x ~13s), which capped the whole sweep at ~11/min; in parallel it is
+  // one scrape long. The scrapers are independent (each drives its own page), and
+  // assignments below happen without an await between read and write, so sharing
+  // `update` across the tasks is safe.
+  await Promise.all(platforms.map(async (platform) => {
     const url = row[`${platform}_url`];
-    if (!url) continue;
+    if (!url) return;
     let data: any = null;
     try {
       data = await runLocalScraper(url, platform);
@@ -652,7 +657,7 @@ async function refetchMapping(row: any, platforms: RefetchPlatform[]) {
       update[`${platform}_price`] = null;
       update[`${platform}_price_checked_at`] = new Date().toISOString();
       platformsOut[platform] = { status: "unavailable" };
-      continue;
+      return;
     }
     let price = data && data.status === "success" ? data.price : null;
     if (price) {
@@ -666,7 +671,7 @@ async function refetchMapping(row: any, platforms: RefetchPlatform[]) {
     } else {
       platformsOut[platform] = { status: "failed", error: data?.error || "no price returned" };
     }
-  }
+  }));
 
   if (Object.keys(update).length > 0 && supabase) {
     update.last_checked = new Date().toISOString();
