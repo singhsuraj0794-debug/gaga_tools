@@ -78,6 +78,25 @@ export async function runLocalExtractPage(url: string, page: number, sort: strin
   } catch { return null; }
 }
 
+/** Block until the local scraper server answers, or the timeout expires.
+ *
+ * The refetch and map jobs resume as soon as the API process starts, which on a
+ * stack restart is before :9000 is listening. Without this every scrape failed
+ * instantly and the whole queue burned through in minutes with no prices updated.
+ */
+export async function waitForLocalScraper(timeoutMs = 300000): Promise<boolean> {
+  if (!LOCAL_SCRAPER_URL) return false;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const { status } = await axios.get(`${LOCAL_SCRAPER_URL}/healthz`, { timeout: 5000 });
+      if (status === 200) return true;
+    } catch { /* not up yet */ }
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+
 export function hasLocalScraper(): boolean {
   return !!LOCAL_SCRAPER_URL;
 }

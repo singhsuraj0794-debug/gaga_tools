@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { runLocalSearch, runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
+import { runLocalSearch, runLocalScraper, hasLocalScraper, waitForLocalScraper } from "../../lib/localScraper.js";
 import { runBatched } from "../../lib/scrapeBatch.js";
 import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
 import { pythonBin } from "../../lib/py";
@@ -485,6 +485,13 @@ const MAP_CONCURRENCY = Math.max(1, Number(process.env.PRICE_MAPPER_CONCURRENCY 
 async function runMapJob(job: ScrapeJob<Record<string, any>>, queue: PmProduct[]): Promise<void> {
   job.status = "running";
   mapJobs.persist(job, true);
+  // Same restart race as the refetch job: the platform search goes through :9000.
+  if (!(await waitForLocalScraper())) {
+    job.status = "interrupted";
+    job.errors = ["local scraper (port 9000) never became reachable"];
+    mapJobs.persist(job, true);
+    return;
+  }
   const done = new Set(job.products.map((p) => p.gajab_product_id));
   const pending = queue.filter((p) => !done.has(p.id));
   await runBatched(
@@ -685,6 +692,14 @@ async function runRefetchJob(
 ): Promise<void> {
   job.status = "running";
   refetchJobs.persist(job, true);
+  // On a restart this resumes before :9000 is listening; without the gate every
+  // scrape fails instantly and the whole queue is consumed with nothing updated.
+  if (!(await waitForLocalScraper())) {
+    job.status = "interrupted";
+    job.errors = ["local scraper (port 9000) never became reachable"];
+    refetchJobs.persist(job, true);
+    return;
+  }
   const done = new Set((job.products || []).map((p: any) => p.gajab_product_id));
   const pending = queue.filter((r) => !done.has(r.gajab_product_id));
   await runBatched(

@@ -146,7 +146,13 @@ class ScraperHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":"not found"}')
 
     def do_GET(self):
-        if self._is_supabase_path():
+        if self.path == "/healthz":
+            # Liveness probe for the API server. Its refetch/map jobs resume the
+            # moment the process starts, which on a stack restart is BEFORE this
+            # server is listening - every scrape then fails instantly and a whole
+            # 18k queue burns through with nothing updated.
+            self._json(200, {"status": "ok"})
+        elif self._is_supabase_path():
             self._proxy_supabase()
         elif self.path.startswith("/api/"):
             self._proxy_api()
