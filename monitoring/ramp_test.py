@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import os
 import signal
 import subprocess
@@ -80,7 +81,7 @@ def kill_group(proc: subprocess.Popen):
 
 
 def run_level(args, sessions: int) -> dict:
-    level_json = Path(f"/tmp/ramp_level_{sessions}.json")
+    level_json = Path(tempfile.gettempdir()) / f"ramp_level_{sessions}.json"
     if level_json.exists():
         level_json.unlink()
 
@@ -139,7 +140,7 @@ def run_level(args, sessions: int) -> dict:
     if args.think_time:
         cmd += ["--think-time", str(args.think_time)]
 
-    log_path = Path(f"/tmp/ramp_level_{sessions}.log")
+    log_path = Path(tempfile.gettempdir()) / f"ramp_level_{sessions}.log"
     log = open(log_path, "w")
     proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=HERE, start_new_session=True)
 

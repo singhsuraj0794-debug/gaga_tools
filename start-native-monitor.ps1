@@ -1,46 +1,97 @@
 #Requires -Version 5.1
 # start-native-monitor.ps1 - Windows equivalent of start-native-monitor.sh:
-# ensure the Android emulator + Appium are up, then run the native happy flow.
-# AVD default: gajab_pixel7 (override with GAJAB_AVD).
+# boot the gajab_pixel7 emulator, start Appium, run the Android happy flow.
+#
+# The bash version hardcodes /opt/homebrew/share/android-commandlinetools; here the
+# SDK is at %LOCALAPPDATA%\Android\Sdk and adb/emulator live under it. WHPX
+# acceleration is installed on this box (verified: emulator-5554 boots in ~30s).
 . "$PSScriptRoot\windows-common.ps1"
 
-$androidHome = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { "$env:LOCALAPPDATA\Android\Sdk" }
-$env:ANDROID_HOME = $androidHome
-$env:ANDROID_SDK_ROOT = $androidHome
-$env:Path = "$androidHome\platform-tools;$androidHome\emulator;$env:Path"
+$SDK = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA "Android\Sdk" }
+$ADB = Join-Path $SDK "platform-tools\adb.exe"
+$EMU = Join-Path $SDK "emulator\emulator.exe"
+$AVD = if ($env:GAJAB_AVD) { $env:GAJAB_AVD } else { "gajab_pixel7" }
+$MON = Join-Path $PSScriptRoot "monitoring"
 
-$adb = Join-Path $androidHome "platform-tools\adb.exe"
-$emu = Join-Path $androidHome "emulator\emulator.exe"
-$avd = if ($env:GAJAB_AVD) { $env:GAJAB_AVD } else { "gajab_pixel7" }
-
-if (-not (Test-Path $adb)) { throw "adb not found at $adb - set ANDROID_HOME or install the Android SDK" }
-
-$devices = & $adb devices
-if ($devices -notmatch "emulator-\d+\s+device") {
-    Write-Host "Starting emulator $avd ..."
-    Start-Process -FilePath $emu -ArgumentList @("-avd", $avd, "-no-snapshot-load") | Out-Null
-    Start-Sleep -Seconds 15
+if (-not (Test-Path $ADB) -or -not (Test-Path $EMU)) {
+    Write-Warning "[native] Android SDK not found under $SDK"
+    exit 1
 }
 
-& $adb wait-for-device
+# --- emulator ----------------------------------------------------------------
+$running = (& $ADB devices) -match "emulator-\d+\s+device"
+if (-not $running) {
+    Write-Host "[native] starting emulator $AVD"
+    Start-Process -FilePath $EMU -ArgumentList @(
+        "-avd", $AVD, "-no-snapshot-load", "-no-audio", "-no-boot-anim"
+    ) -WindowStyle Minimized | Out-Null
+} else {
+    Write-Host "[native] emulator already running"
+}
+
+Write-Host "[native] waiting for device to boot"
+$booted = $false
 for ($i = 0; $i -lt 60; $i++) {
-    $boot = ((& $adb shell getprop sys.boot_completed) -join "").Trim()
-    if ($boot -eq "1") { Write-Host "Device booted."; break }
     Start-Sleep -Seconds 3
+    $boot = (& $ADB shell getprop sys.boot_completed 2>$null | Out-String).Trim()
+    if ($boot -eq "1") { $booted = $true; break }
+}
+if (-not $booted) {
+    Write-Warning "[native] emulator did not finish booting"
+    exit 1
+}
+Write-Host "[native] device booted"
+
+# Disable animations. Without this the app's UI thread never goes idle and
+# UIAutomator cannot read the accessibility tree, which made EVERY element lookup
+# time out (steps took 20-105s and all failed).
+foreach ($s in "window_animation_scale", "transition_animation_scale", "animator_duration_scale") {
+    & $ADB shell settings put global $s 0 2>$null | Out-Null
+}
+Write-Host "[native] animations disabled"
+
+$app = (& $ADB shell pm list packages 2>$null | Out-String)
+if ($app -notmatch "com.gajab.buyerstore") {
+    Write-Warning "[native] com.gajab.buyerstore is NOT installed on $AVD - the flow will fail at launch"
+} else {
+    Write-Host "[native] app com.gajab.buyerstore present"
 }
 
-# Animations off: with them on the app UI thread never goes idle and
-# UIAutomator cannot read the accessibility tree.
-& $adb shell settings put global window_animation_scale 0 | Out-Null
-& $adb shell settings put global transition_animation_scale 0 | Out-Null
-& $adb shell settings put global animator_duration_scale 0 | Out-Null
+# --- Appium ------------------------------------------------------------------
+$appiumUp = $false
+try {
+    $r = Invoke-WebRequest -Uri "http://localhost:4723/status" -TimeoutSec 5 -UseBasicParsing
+    $appiumUp = $r.StatusCode -eq 200
+} catch { $appiumUp = $false }
 
-if (-not (Test-PortOpen $AppiumPort)) {
-    Write-Host "Starting Appium on $AppiumPort ..."
-    Start-Process -FilePath "appium" -ArgumentList @("--port", "$AppiumPort") -WindowStyle Hidden | Out-Null
-    Start-Sleep -Seconds 8
+if (-not $appiumUp) {
+    Write-Host "[native] starting Appium on 4723"
+    $appium = (Get-Command appium -ErrorAction SilentlyContinue).Source
+    if (-not $appium) { $appium = Join-Path $env:APPDATA "npm\appium.cmd" }
+    Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", "`"$appium`" --port 4723 > `"$DbRoot\appium.log`" 2>&1") -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Seconds 2
+        try {
+            if ((Invoke-WebRequest -Uri "http://localhost:4723/status" -TimeoutSec 5 -UseBasicParsing).StatusCode -eq 200) { $appiumUp = $true; break }
+        } catch { }
+    }
 }
+if (-not $appiumUp) {
+    Write-Warning "[native] Appium did not come up"
+    exit 1
+}
+Write-Host "[native] Appium ready"
 
-Write-Host "Running native happy flow ..."
-Set-Location (Join-Path $RepoDir "monitoring")
-& (Get-Python) "native/android_happy_flow.py"
+# --- flow --------------------------------------------------------------------
+Write-Host "[native] running android_happy_flow.py"
+Push-Location $MON
+try {
+    $env:PYTHONUTF8 = "1"
+    $env:PYTHONIOENCODING = "utf-8"
+    $env:ANDROID_HOME = $SDK
+    $env:ANDROID_SDK_ROOT = $SDK
+    & $env:PYTHON_BIN (Join-Path $MON "native\android_happy_flow.py")
+    Write-Host ("[native] flow exit code: " + $LASTEXITCODE)
+} finally {
+    Pop-Location
+}

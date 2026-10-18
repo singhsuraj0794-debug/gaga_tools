@@ -9,7 +9,10 @@ else:
     load_dotenv()
 
 _MONITOR_DIR = os.path.dirname(os.path.abspath(__file__))
-LIGHTHOUSE_CLI = os.getenv("LIGHTHOUSE_CLI", os.path.join(_MONITOR_DIR, "node_modules", ".bin", "lighthouse"))
+# npm's .bin shim is a shell script on Unix and a .cmd on Windows; without
+# the extension the Windows run cannot find the CLI at all.
+_LH_BIN = "lighthouse.cmd" if os.name == "nt" else "lighthouse"
+LIGHTHOUSE_CLI = os.getenv("LIGHTHOUSE_CLI", os.path.join(_MONITOR_DIR, "node_modules", ".bin", _LH_BIN))
 
 PAGE_TIMEOUT = int(os.getenv("MONITOR_PAGE_TIMEOUT", "30000"))
 NAV_TIMEOUT = int(os.getenv("MONITOR_NAV_TIMEOUT", "30000"))

@@ -1,6 +1,8 @@
 from __future__ import annotations
 import json
+import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from config import LIGHTHOUSE_CLI, THRESHOLDS, PAGESPEED_API_KEY, PAGESPEED_URLS
@@ -19,7 +21,8 @@ LAB_METRICS_MAP = {
 
 
 def run_lighthouse(url: str) -> dict | None:
-    output_path = f"/tmp/lighthouse_{int(time.time())}.json"
+    # OS temp dir, not /tmp: this has to run on Windows too
+    output_path = os.path.join(tempfile.gettempdir(), f"lighthouse_{int(time.time())}.json")
     cmd = [
         LIGHTHOUSE_CLI,
         url,
@@ -32,8 +35,13 @@ def run_lighthouse(url: str) -> dict | None:
         "--throttling-method=provided",
         "--throttling.cpuSlowdownMultiplier=1",
     ]
+    # On Windows LIGHTHOUSE_CLI is npm's .cmd shim, which CreateProcess cannot
+    # execute directly (WinError 193 "%1 is not a valid Win32 application"), so
+    # run it through cmd.exe. Passing the list to cmd /c keeps quoting intact.
+    if os.name == "nt":
+        cmd = ["cmd", "/c"] + cmd
     print(f"[LIGHTHOUSE] Running audit on {url}")
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if result.returncode != 0:
         print(f"[LIGHTHOUSE] CLI failed for {url}: {result.stderr[:500]}")
         # Fallback: try getting from the output path
@@ -41,7 +49,7 @@ def run_lighthouse(url: str) -> dict | None:
     report_path = Path(output_path)
     if not report_path.exists():
         # lighthouse writes to a file with spaces/special chars replaced
-        for p in Path("/tmp").glob("lighthouse_*.json"):
+        for p in Path(tempfile.gettempdir()).glob("lighthouse_*.json"):
             report_path = p
             break
     if report_path.exists():
