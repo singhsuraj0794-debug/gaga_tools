@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { runLocalSearch, hasLocalScraper } from "../../lib/localScraper.js";
+import { runLocalSearch, runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 import { runBatched } from "../../lib/scrapeBatch.js";
 import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
 import { pythonBin } from "../../lib/py";
@@ -604,6 +604,219 @@ for (const job of mapJobs.jobs.values()) {
   } else {
     job.status = "interrupted";
     mapJobs.persist(job, true);
+  }
+}
+
+// ── Price Refetch ───────────────────────────────────────────────────────────
+// A mapped row already carries the platform URL, but the price beside it was
+// captured when the product was first mapped and drifts. This re-scrapes the
+// stored link for the selected platforms, updates the price in place, and stamps
+// {platform}_price_checked_at so the UI can show which platform is fresh.
+//
+// Only rows that actually HAVE a url for the chosen platform are touched, and a
+// failed scrape leaves the previous price alone rather than blanking it - a
+// missing price is worse than a slightly stale one.
+const REFETCH_CONCURRENCY = Math.max(1, Number(process.env.PRICE_REFETCH_CONCURRENCY ?? 4) || 4);
+const REFETCH_PLATFORMS = ["amazon", "flipkart", "meesho"] as const;
+type RefetchPlatform = (typeof REFETCH_PLATFORMS)[number];
+
+const refetchJobs = new JobStore<Record<string, any>>(
+  "price_refetch_jobs", "price-refetch", "PRICE_REFETCH_JOBS_DIR",
+);
+
+async function refetchMapping(row: any, platforms: RefetchPlatform[]) {
+  const supabase = getSupabase();
+  const update: Record<string, any> = {};
+  const platformsOut: Record<string, any> = {};
+
+  for (const platform of platforms) {
+    const url = row[`${platform}_url`];
+    if (!url) continue;
+    let data: any = null;
+    try {
+      data = await runLocalScraper(url, platform);
+    } catch (err: any) {
+      data = { status: "failed", error: err.message };
+    }
+    const price = data && data.status === "success" ? data.price : null;
+    if (price) {
+      update[`${platform}_price`] = String(price);
+      update[`${platform}_price_checked_at`] = new Date().toISOString();
+      platformsOut[platform] = { status: "refetched", price: String(price) };
+    } else {
+      platformsOut[platform] = { status: "failed", error: data?.error || "no price returned" };
+    }
+  }
+
+  if (Object.keys(update).length > 0 && supabase) {
+    update.last_checked = new Date().toISOString();
+    const { error } = await supabase
+      .from("price_mappings")
+      .update(update)
+      .eq("gajab_product_id", row.gajab_product_id);
+    if (error) logger.warn({ err: error.message, id: row.gajab_product_id }, "refetch update failed");
+  }
+
+  return {
+    gajab_product_id: row.gajab_product_id,
+    gajab_title: row.gajab_title,
+    platforms: platformsOut,
+    updated: Object.keys(update).length > 0,
+  };
+}
+
+async function runRefetchJob(
+  job: ScrapeJob<Record<string, any>>,
+  queue: any[],
+  platforms: RefetchPlatform[],
+): Promise<void> {
+  job.status = "running";
+  refetchJobs.persist(job, true);
+  const done = new Set((job.products || []).map((p: any) => p.gajab_product_id));
+  const pending = queue.filter((r) => !done.has(r.gajab_product_id));
+  await runBatched(
+    pending,
+    async (row) => {
+      if (job.status === "cancelled") return null;
+      const result = await refetchMapping(row, platforms);
+      job.products.push(result);
+      job.completed = job.products.length;
+      refetchJobs.persist(job);
+      return result;
+    },
+    REFETCH_CONCURRENCY,
+    0,
+  );
+  // job.status is mutated by the cancel route while this runs.
+  const finalStatus: string = job.status;
+  if (finalStatus !== "cancelled") job.status = "completed";
+  job.completed = job.products.length;
+  refetchJobs.persist(job, true);
+}
+
+// POST /api/price-mapper/refetch - re-fetch prices for mapped rows that have links
+router.post("/refetch", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      res.status(500).json({ error: "Supabase not configured" });
+      return;
+    }
+    const body = (req.body || {}) as {
+      ids?: string[]; platforms?: string[]; limit?: number; onlyStaleDays?: number;
+    };
+    const platforms = (Array.isArray(body.platforms) && body.platforms.length
+      ? body.platforms
+      : [...REFETCH_PLATFORMS]
+    ).filter((p): p is RefetchPlatform => (REFETCH_PLATFORMS as readonly string[]).includes(p));
+    if (platforms.length === 0) {
+      res.status(400).json({ error: "no valid platform selected" });
+      return;
+    }
+
+    let queue: any[] = [];
+    if (Array.isArray(body.ids) && body.ids.length > 0) {
+      // Explicit selection ("refetch this page"). Chunked so the URL stays sane.
+      for (let i = 0; i < body.ids.length; i += 100) {
+        const chunk = body.ids.slice(i, i + 100).map(String);
+        const { data, error } = await supabase
+          .from("price_mappings").select("*").in("gajab_product_id", chunk);
+        if (error) throw new Error(error.message);
+        queue.push(...(data || []));
+      }
+    } else {
+      // Oldest-first: the point of this feature is that old prices are wrong.
+      const limit = Math.max(0, Number(body.limit ?? 0) || 0);
+      const orFilter = platforms.map((p) => `${p}_url.not.is.null`).join(",");
+      let q = supabase.from("price_mappings").select("*")
+        .or(orFilter)
+        .order("last_checked", { ascending: true, nullsFirst: true });
+      if (limit > 0) q = q.limit(limit);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      queue = data || [];
+    }
+
+    // Keep only rows that have a url for at least one selected platform.
+    queue = queue.filter((r) => platforms.some((p) => r[`${p}_url`]));
+    if (queue.length === 0) {
+      res.status(400).json({ error: "no mapped rows with links for the selected platforms" });
+      return;
+    }
+
+    const job: ScrapeJob<Record<string, any>> = {
+      id: crypto.randomBytes(8).toString("hex"),
+      type: "price-refetch",
+      status: "pending",
+      total: queue.length,
+      completed: 0,
+      products: [],
+      queue,
+      errors: [],
+      platforms,
+      createdAt: new Date(),
+    };
+    refetchJobs.jobs.set(job.id, job);
+    refetchJobs.persist(job, true);
+    logger.info({ jobId: job.id, total: queue.length, platforms, concurrency: REFETCH_CONCURRENCY },
+      "Starting price-refetch job");
+
+    runRefetchJob(job, queue, platforms).catch((err: any) => {
+      logger.error({ jobId: job.id, err: err.message }, "price-refetch job failed");
+      job.status = "failed";
+      job.errors = [err.message];
+      refetchJobs.persist(job, true);
+    });
+
+    res.json({ jobId: job.id, total: queue.length, platforms });
+  } catch (err: any) {
+    logger.error({ err: err.message }, "price-refetch submit failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/refetch/:jobId", (req: Request, res: Response): void => {
+  const job = refetchJobs.jobs.get(req.params.jobId as string);
+  if (!job) {
+    res.json({ status: "failed", total: 0, completed: 0, count: 0, products: [], error: "Job not found" });
+    return;
+  }
+  res.json({
+    status: job.status,
+    total: job.total,
+    completed: job.completed,
+    count: job.products.length,
+    products: refetchJobs.slice(job, req.query.since),
+    error: (job.errors || []).join("; ") || null,
+  });
+});
+
+router.post("/refetch/:jobId/cancel", (req: Request, res: Response): void => {
+  const job = refetchJobs.jobs.get(req.params.jobId as string);
+  if (job) {
+    job.status = "cancelled";
+    refetchJobs.persist(job, true);
+  }
+  res.json({ status: "cancelled" });
+});
+
+// Resume a refetch job that was running when the process last stopped.
+refetchJobs.load();
+for (const job of refetchJobs.jobs.values()) {
+  if (job.status !== "running" && job.status !== "pending") continue;
+  const queue = (job.queue as any[]) || [];
+  if (queue.length) {
+    const platforms = (job.platforms as RefetchPlatform[]) ||
+      ([...REFETCH_PLATFORMS] as RefetchPlatform[]);
+    logger.info({ jobId: job.id, done: job.products.length, total: queue.length }, "resuming price-refetch job");
+    runRefetchJob(job, queue, platforms).catch((err: any) => {
+      job.status = "interrupted";
+      job.errors = [err.message];
+      refetchJobs.persist(job, true);
+    });
+  } else {
+    job.status = "interrupted";
+    refetchJobs.persist(job, true);
   }
 }
 

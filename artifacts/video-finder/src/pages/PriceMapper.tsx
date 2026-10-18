@@ -12,6 +12,7 @@ import {
   Loader2,
   ShoppingBag,
   ShoppingCart,
+  RefreshCw,
   Package,
   Save,
   Download,
@@ -38,6 +39,10 @@ interface PriceMapping {
   gajab_image_url: string | null;
   gajab_price: string | null;
   gajab_url: string | null;
+  // stamped by the Price Refetch job - which platform's price was re-scraped, and when
+  amazon_price_checked_at?: string | null;
+  flipkart_price_checked_at?: string | null;
+  meesho_price_checked_at?: string | null;
   amazon_url: string | null;
   amazon_price: string | null;
   amazon_match_score: number | null;
@@ -125,12 +130,19 @@ export default function PriceMapper() {
   const [productIndexMin, setProductIndexMin] = useState(1);
   const [productIndexMax, setProductIndexMax] = useState(0);
   const [mappingFilter, setMappingFilter] = useState<"all" | "mapped" | "unmapped" | "duplicates">("all");
+  // Price Refetch: which platforms to re-scrape, and its progress
+  const [refetchPlatforms, setRefetchPlatforms] = useState<Record<string, boolean>>({
+    amazon: true, flipkart: true, meesho: true,
+  });
+  const [refetching, setRefetching] = useState(false);
+  const [refetchProgress, setRefetchProgress] = useState({ current: 0, total: 0 });
   const [batchSearching, setBatchSearching] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [researchMode, setResearchMode] = useState(false);
   const [skipAttempted, setSkipAttempted] = useState(true);
   const batchAbortRef = useRef(false);
   const batchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refetchPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // O(1) lookups
@@ -324,6 +336,97 @@ export default function PriceMapper() {
       setError("Failed to start the mapping job");
       setBatchSearching(false);
     }
+  }
+
+  /** Re-scrape the stored platform link and update the price in place.
+   *
+   * "page" refetches the mapped rows currently visible (fast, predictable);
+   * "all" walks the oldest-checked rows first, which is the point - old prices
+   * are the wrong ones. Both run as a persisted server job.
+   */
+  async function startPriceRefetch(scope: "page" | "all") {
+    const platforms = Object.entries(refetchPlatforms).filter(([, on]) => on).map(([k]) => k);
+    if (platforms.length === 0) {
+      setError("Select at least one platform to refetch");
+      return;
+    }
+    setError("");
+    setSuccessMsg("");
+    setRefetching(true);
+    setRefetchProgress({ current: 0, total: 0 });
+    try {
+      const body: Record<string, unknown> = { platforms };
+      if (scope === "page") {
+        const ids = filtered
+          .map((prod) => prod.id)
+          .filter((id) => {
+            const m = mappingsMap.get(id);
+            return !!m && platforms.some((pl) => !!(m as any)[`${pl}_url`]);
+          });
+        if (ids.length === 0) {
+          setError("No mapped rows with links for the selected platforms on this page");
+          setRefetching(false);
+          return;
+        }
+        body.ids = ids;
+      } else {
+        body.limit = 500; // oldest-first batch; press again to continue
+      }
+
+      const res = await fetch(`${API_BASE}/api/price-mapper/refetch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const start = await res.json();
+      if (!res.ok || !start.jobId) {
+        setError(start.error || "Failed to start the price refetch");
+        setRefetching(false);
+        return;
+      }
+
+      const jobId: string = start.jobId;
+      sessionStorage.setItem("priceRefetchJobId", jobId);
+      setRefetchProgress({ current: 0, total: start.total || 0 });
+
+      refetchPollRef.current = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/price-mapper/refetch/${jobId}`);
+          const job = await r.json();
+          setRefetchProgress({ current: job.completed || 0, total: job.total || 0 });
+          if (["completed", "failed", "cancelled", "interrupted"].includes(job.status)) {
+            if (refetchPollRef.current) clearInterval(refetchPollRef.current);
+            refetchPollRef.current = null;
+            sessionStorage.removeItem("priceRefetchJobId");
+            setRefetching(false);
+            // Pull the fresh rows so the new prices and stamps appear.
+            const ids = filtered.map((prod) => prod.id);
+            if (ids.length > 0) fetchMappingsForIds(ids);
+            const okCount = (job.products || []).filter((x: any) => x.updated).length;
+            setSuccessMsg(`Price refetch ${job.status}: ${okCount}/${job.total} updated`);
+            setTimeout(() => setSuccessMsg(""), 6000);
+          }
+        } catch {
+          // the job runs server-side; a poll blip must not stop it
+        }
+      }, 5000);
+    } catch {
+      setError("Failed to start the price refetch");
+      setRefetching(false);
+    }
+  }
+
+  async function abortPriceRefetch() {
+    const jobId = sessionStorage.getItem("priceRefetchJobId");
+    if (jobId) {
+      try {
+        await fetch(`${API_BASE}/api/price-mapper/refetch/${jobId}/cancel`, { method: "POST" });
+      } catch { /* best effort */ }
+    }
+    if (refetchPollRef.current) clearInterval(refetchPollRef.current);
+    refetchPollRef.current = null;
+    sessionStorage.removeItem("priceRefetchJobId");
+    setRefetching(false);
   }
 
   async function searchAllFiltered() {
@@ -562,6 +665,25 @@ export default function PriceMapper() {
     return null;
   }
 
+  function getCheckedAt(mapping: PriceMapping | undefined, platform: string): string | null {
+    if (!mapping) return null;
+    const v = (mapping as any)[`${platform}_price_checked_at`];
+    return typeof v === "string" && v ? v : null;
+  }
+
+  /** "2h ago" - how stale a re-fetched price is. */
+  function relativeTime(iso: string | null): string {
+    if (!iso) return "";
+    const ms = Date.now() - new Date(iso).getTime();
+    if (!Number.isFinite(ms) || ms < 0) return "";
+    const mins = Math.floor(ms / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
+
   function getMatchUrl(mapping: PriceMapping | undefined, platform: string): string | null | undefined {
     if (!mapping) return null;
     if (platform === "amazon") return mapping.amazon_url;
@@ -790,6 +912,61 @@ export default function PriceMapper() {
               <Play className="h-4 w-4 mr-2" />
               Map ALL Unmapped
             </Button>
+
+            {/* Price Refetch: re-scrape the stored links so stale prices update. */}
+            <div className="flex items-center gap-1 ml-2 pl-2 border-l">
+              {(["amazon", "flipkart", "meesho"] as const).map((pl) => (
+                <button
+                  key={pl}
+                  type="button"
+                  onClick={() => setRefetchPlatforms((prev) => ({ ...prev, [pl]: !prev[pl] }))}
+                  disabled={refetching}
+                  title={`Include ${pl} in the refetch`}
+                  className={`text-[11px] px-2 py-1 rounded border capitalize transition-colors ${
+                    refetchPlatforms[pl]
+                      ? "bg-emerald-50 border-emerald-300 text-emerald-700"
+                      : "bg-white border-slate-200 text-slate-400"
+                  }`}
+                >
+                  {pl}
+                </button>
+              ))}
+            </div>
+            <Button
+              onClick={() => startPriceRefetch("page")}
+              disabled={refetching}
+              size="sm"
+              variant="outline"
+              className="text-emerald-700 border-emerald-300 hover:bg-emerald-50"
+              title="Re-fetch the price from the stored link for the mapped rows on this page"
+            >
+              {refetching ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  {refetchProgress.current}/{refetchProgress.total}
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Price Refetch
+                </>
+              )}
+            </Button>
+            {!refetching && (
+              <button
+                type="button"
+                onClick={() => startPriceRefetch("all")}
+                className="text-[11px] text-slate-500 underline hover:text-slate-700"
+                title="Re-fetch the 500 rows with the oldest price check, then press again to continue"
+              >
+                all (oldest first)
+              </button>
+            )}
+            {refetching && (
+              <Button onClick={abortPriceRefetch} size="sm" variant="outline" className="text-red-600 border-red-200">
+                Stop
+              </Button>
+            )}
             {batchSearching && (
               <Button onClick={abortBatchSearch} size="sm" variant="outline" className="text-red-600 border-red-200">
                 Stop
@@ -885,6 +1062,14 @@ export default function PriceMapper() {
                                   ) : (
                                     <>
                                       {matchPrice && <span className="font-bold">{matchPrice} </span>}
+                                      {getCheckedAt(mapping, key) && (
+                                        <span
+                                          className="text-[10px] text-emerald-600 ml-1"
+                                          title={`Price re-fetched from ${key} at ${new Date(getCheckedAt(mapping, key)!).toLocaleString()}`}
+                                        >
+                                          ↻ {relativeTime(getCheckedAt(mapping, key))}
+                                        </span>
+                                      )}
                                       {matchScore != null && (
                                         <span className="text-xs font-semibold">
                                           {Math.round(matchScore)}%

@@ -67,10 +67,18 @@ create table if not exists price_mappings (
     meesho_reliable       boolean default false,
     search_error          text,
     last_checked          timestamptz default now(),
+    -- Per-platform "when was this price last re-fetched from the stored link".
+    -- The prices were captured at mapping time and drift; the Price Refetch job
+    -- re-scrapes the stored URL and stamps the platform it refreshed.
+    amazon_price_checked_at   timestamptz,
+    flipkart_price_checked_at timestamptz,
+    meesho_price_checked_at   timestamptz,
     created_at            timestamptz default now()
 );
 create index if not exists price_mappings_gajab_id_idx   on price_mappings (gajab_product_id);
 create index if not exists price_mappings_last_checked_idx on price_mappings (last_checked desc);
+-- the refetch job walks oldest-first
+create index if not exists price_mappings_last_checked_asc_idx on price_mappings (last_checked asc nulls first);
 
 create table if not exists product_duplicates (
     id            uuid primary key default gen_random_uuid(),
