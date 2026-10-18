@@ -99,7 +99,10 @@ EXTRACT_JS = r"""() => {
     }
   }
   const avail = txt(q('#availability'));
-  if (avail && /currently unavailable|out of stock/i.test(avail)) price = null;
+  // Availability was computed and then discarded, so an out-of-stock listing came
+  // back looking identical to a scrape that simply failed to find a price.
+  const unavailable = !!(avail && /currently unavailable|out of stock/i.test(avail));
+  if (unavailable) price = null;
 
   const images = [];
   const seen = new Set();
@@ -225,7 +228,7 @@ EXTRACT_JS = r"""() => {
     }
   }
 
-  return { title, price, images, bullets, description, meta_description, specs, sourceCategoryPath };
+  return { title, price, images, bullets, description, meta_description, specs, sourceCategoryPath, unavailable };
 }"""
 
 
@@ -691,6 +694,8 @@ def _result_from_dom(data: dict) -> dict:
             deduped.append(clean)
     result["images"] = deduped[:10]
 
+    if data.get("unavailable"):
+        result["unavailable"] = True
     price = data.get("price")
     if price:
         result["price"] = _clean(price)

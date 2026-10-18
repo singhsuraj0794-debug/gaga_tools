@@ -638,6 +638,15 @@ async function refetchMapping(row: any, platforms: RefetchPlatform[]) {
     } catch (err: any) {
       data = { status: "failed", error: err.message };
     }
+    // Out of stock: the listing still exists but can no longer be bought, so
+    // record that rather than keeping a price nobody can pay.
+    if (data && data.status === "success" && data.unavailable === true) {
+      update[`${platform}_unavailable`] = true;
+      update[`${platform}_price`] = null;
+      update[`${platform}_price_checked_at`] = new Date().toISOString();
+      platformsOut[platform] = { status: "unavailable" };
+      continue;
+    }
     let price = data && data.status === "success" ? data.price : null;
     if (price) {
       // The platform scrapers are inconsistent: amazon/meesho return "₹299",
