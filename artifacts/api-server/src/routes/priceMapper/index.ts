@@ -732,13 +732,23 @@ router.post("/refetch", async (req: Request, res: Response): Promise<void> => {
       // Oldest-first: the point of this feature is that old prices are wrong.
       const limit = Math.max(0, Number(body.limit ?? 0) || 0);
       const orFilter = platforms.map((p) => `${p}_url.not.is.null`).join(",");
-      let q = supabase.from("price_mappings").select("*")
-        .or(orFilter)
-        .order("last_checked", { ascending: true, nullsFirst: true });
-      if (limit > 0) q = q.limit(limit);
-      const { data, error } = await q;
-      if (error) throw new Error(error.message);
-      queue = data || [];
+      // PostgREST caps a response at db-max-rows (1000). A single request
+      // therefore refetched only the first 1000 rows and reported total: 1000 -
+      // it looked like a full run. Page with .range() until a short page.
+      const PAGE = 1000;
+      for (let offset = 0; offset < 200000; offset += PAGE) {
+        const { data, error } = await supabase
+          .from("price_mappings").select("*")
+          .or(orFilter)
+          .order("last_checked", { ascending: true, nullsFirst: true })
+          .range(offset, offset + PAGE - 1);
+        if (error) throw new Error(error.message);
+        const batch = data || [];
+        queue.push(...batch);
+        if (batch.length < PAGE) break;
+        if (limit > 0 && queue.length >= limit) break;
+      }
+      if (limit > 0) queue = queue.slice(0, limit);
     }
 
     // Keep only rows that have a url for at least one selected platform.
