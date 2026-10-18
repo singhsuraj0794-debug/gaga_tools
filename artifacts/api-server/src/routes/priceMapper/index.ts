@@ -638,11 +638,15 @@ async function refetchMapping(row: any, platforms: RefetchPlatform[]) {
     } catch (err: any) {
       data = { status: "failed", error: err.message };
     }
-    const price = data && data.status === "success" ? data.price : null;
+    let price = data && data.status === "success" ? data.price : null;
     if (price) {
-      update[`${platform}_price`] = String(price);
+      // The platform scrapers are inconsistent: amazon/meesho return "₹299",
+      // flipkart a bare "183". Normalise so the column reads the same either way.
+      price = String(price).trim();
+      if (price && !/[₹$€£]/.test(price)) price = `₹${price}`;
+      update[`${platform}_price`] = price;
       update[`${platform}_price_checked_at`] = new Date().toISOString();
-      platformsOut[platform] = { status: "refetched", price: String(price) };
+      platformsOut[platform] = { status: "refetched", price };
     } else {
       platformsOut[platform] = { status: "failed", error: data?.error || "no price returned" };
     }
