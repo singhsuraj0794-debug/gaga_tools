@@ -131,8 +131,10 @@ export default function PriceMapper() {
   const [productIndexMax, setProductIndexMax] = useState(0);
   const [mappingFilter, setMappingFilter] = useState<"all" | "mapped" | "unmapped" | "duplicates">("all");
   // Price Refetch: which platforms to re-scrape, and its progress
+  // Meesho defaults OFF: it throttles hard (44% failures at concurrency 8, vs ~10%
+  // at 3), so it is opt-in for a refetch rather than part of the default sweep.
   const [refetchPlatforms, setRefetchPlatforms] = useState<Record<string, boolean>>({
-    amazon: true, flipkart: true, meesho: true,
+    amazon: true, flipkart: true, meesho: false,
   });
   const [refetching, setRefetching] = useState(false);
   const [refetchProgress, setRefetchProgress] = useState({ current: 0, total: 0 });
