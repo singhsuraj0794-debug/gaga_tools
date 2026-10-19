@@ -342,6 +342,11 @@ const SCRAPE_MAX_ROUNDS = 3;
 // back blocked (measured: success fell 73% -> 2% mid-run). 3 keeps the unproxied
 // Chrome fast while staying under Meesho's rate limit.
 const MEESHO_CONCURRENCY = Math.max(1, Number(process.env.MEESHO_SCRAPE_CONCURRENCY ?? 3) || 3);
+// Meesho's Akamai edge rate-limits by REQUEST RATE, and a flagged IP trips it
+// after only a handful of rapid requests. Measured on a flagged IP: 5/6 success
+// one-at-a-time with a 12s gap, versus 5/111 at concurrency 3 with no gap. Space
+// the chunks out; the retry rounds then recover whatever still gets throttled.
+const MEESHO_SCRAPE_DELAY_MS = Math.max(0, Number(process.env.MEESHO_SCRAPE_DELAY_MS ?? 0) || 0);
 
 /** A product that came back blocked/failed, or with no images, is worth another
  *  attempt: Meesho's block is intermittent (a fresh request usually succeeds),
@@ -366,6 +371,9 @@ async function scrapePass(job: ScrapeJob, urls: string[]): Promise<boolean> {
       job.completed = job.products.length;
       persistJob(job);
     }));
+    if (MEESHO_SCRAPE_DELAY_MS > 0 && i + MEESHO_CONCURRENCY < urls.length) {
+      await new Promise((r) => setTimeout(r, MEESHO_SCRAPE_DELAY_MS));
+    }
   }
   return true;
 }

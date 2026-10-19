@@ -238,6 +238,14 @@ if (-not $env:LOCAL_SCRAPER_URL) { $env:LOCAL_SCRAPER_URL = "http://localhost:90
 if (-not $env:SCRAPE_CONCURRENCY) { $env:SCRAPE_CONCURRENCY = "8" }
 if (-not $env:SCRAPE_BATCH_DELAY_MS) { $env:SCRAPE_BATCH_DELAY_MS = "300" }
 
+# Meesho throttles by REQUEST RATE (Akamai), and once the IP is flagged it trips
+# after only a handful of rapid requests. Measured on the current flagged IP:
+# 5/6 success one-at-a-time with a 12s gap, versus 5/111 at concurrency 3 with no
+# gap. Run Meesho one product at a time with a gap between them; the retry rounds
+# then recover whatever still gets throttled.
+if (-not $env:MEESHO_SCRAPE_CONCURRENCY) { $env:MEESHO_SCRAPE_CONCURRENCY = "1" }
+if (-not $env:MEESHO_SCRAPE_DELAY_MS) { $env:MEESHO_SCRAPE_DELAY_MS = "8000" }
+
 # Price Mapper bulk mapping. Each product runs a Lens reverse search plus three
 # platform searches (the platform three now run in parallel in the searcher).
 # Raised from 3 to 6 for this box (12 cores / 64GB); the searcher's own
