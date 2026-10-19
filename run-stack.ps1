@@ -42,4 +42,14 @@ while ($true) {
         Write-Host "[run-stack] database stack is down - restarting"
         & "$PSScriptRoot\start-db.ps1"
     }
+    # The API and the local scraper were only ever started once by start-all, so a
+    # crash took the whole UI down while the DB, the shim and the tunnels stayed
+    # up - exactly what happened here: /api/healthz returned 502 through ngrok
+    # while /healthz, /rest/v1 and /storage/v1 all answered. Their starters are
+    # idempotent, so re-running them brings back just the dead one.
+    if (-not (Test-PortOpen $ApiPort) -or -not (Test-PortOpen $ScraperPort)) {
+        Write-Host "[run-stack] API ($ApiPort) or scraper ($ScraperPort) is down - restarting"
+        & "$PSScriptRoot\start-prelisting-tunnel.ps1"
+        & "$PSScriptRoot\start-scraper-tunnel.ps1"
+    }
 }
