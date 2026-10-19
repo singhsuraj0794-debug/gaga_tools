@@ -950,19 +950,28 @@ def extract_store_api(store_url: str) -> dict:
     error = None
 
     def _post_feed(page, offset: int, supplier_id: str) -> tuple:
-        return page.evaluate(
-            """async (args) => {
-                const r = await fetch('/api/v1/meri-shop/feed', {
-                    method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({limit: args.limit, offset: args.offset,
-                        supplier_id: args.sid, featured_collection_type: null,
-                        filter: {selected_filter_ids: [], type: 'shop',
-                                 sort_option: null, session_state: null}})
-                });
-                return {status: r.status, body: await r.text()};
-            }""",
-            {"offset": offset, "sid": supplier_id, "limit": LIMIT},
-        )
+        for _attempt in range(3):
+            try:
+                return page.evaluate(
+                    """async (args) => {
+                        const r = await fetch('/api/v1/meri-shop/feed', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({limit: args.limit, offset: args.offset,
+                                supplier_id: args.sid, featured_collection_type: null,
+                                filter: {selected_filter_ids: [], type: 'shop',
+                                         sort_option: null, session_state: null}})
+                        });
+                        return {status: r.status, body: await r.text()};
+                    }""",
+                    {"offset": offset, "sid": supplier_id, "limit": LIMIT},
+                )
+            except Exception as e:
+                msg = str(e).lower()
+                if "navigation" in msg or "destroyed" in msg:
+                    _time.sleep(1.5)
+                    continue
+                raise
+        return {"status": -1, "body": "{}"}
 
     try:
         with sync_playwright() as p:
@@ -974,7 +983,36 @@ def extract_store_api(store_url: str) -> dict:
                 # whatever cookies/headers Meesho expects.
                 page.goto(f"{url_clean}?_ms=3.0.1", wait_until="domcontentloaded", timeout=30000)
 
-                prof = page.evaluate(
+                # The store page sometimes navigates again (client-side) right
+                # after load - e.g. a supplier-store redirect - which destroys the
+                # evaluate context ("Execution context was destroyed, most likely
+                # because of a navigation"). Wait for the URL to settle, then
+                # fetch the profile with a retry that survives a mid-flight
+                # navigation.
+                last_url = None
+                for _ in range(10):
+                    _time.sleep(0.6)
+                    try:
+                        cur = page.url
+                    except Exception:
+                        cur = None
+                    if cur and cur == last_url:
+                        break
+                    last_url = cur
+
+                def _eval(js: str, arg) -> dict:
+                    for _attempt in range(3):
+                        try:
+                            return page.evaluate(js, arg)
+                        except Exception as e:
+                            msg = str(e).lower()
+                            if "navigation" in msg or "destroyed" in msg:
+                                _time.sleep(1.5)
+                                continue
+                            raise
+                    return {}
+
+                prof = _eval(
                     """async (h) => {
                         const r = await fetch('/api/v1/meri-shop/profile?supplierHandle=' + encodeURIComponent(h));
                         return {status: r.status, body: await r.text()};
