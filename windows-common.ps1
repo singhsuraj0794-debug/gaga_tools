@@ -132,13 +132,26 @@ function Test-CdpHealthy {
     param([int]$Port)
     $probe = Join-Path $PSScriptRoot "check-cdp.py"
     if (-not (Test-Path $probe)) { return $true }
+    # HARD timeout. The probe starts Playwright, and a wedged driver can hang it
+    # indefinitely - which froze the entire watchdog loop, so nothing was ever
+    # revived (the DB stack and all three Chromes stayed down). WaitForExit(ms)
+    # is the only reliable bound for a native child on PowerShell 5.1.
+    $tmp = Join-Path $env:TEMP "cdp-probe-$Port.out"
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+    $proc = $null
     try {
-        $out = & (Get-Python) $probe $Port 2>$null
+        $proc = Start-Process -FilePath (Get-Python) -ArgumentList @($probe, $Port) -PassThru `
+            -WindowStyle Hidden -RedirectStandardOutput $tmp -RedirectStandardError (Join-Path $env:TEMP "cdp-probe-$Port.err")
+        if (-not $proc.WaitForExit(20000)) {
+            try { $proc.Kill() } catch { }
+            return $true   # unknown -> leave the browser alone
+        }
     } catch { return $true }
-    $verdict = "$out".Trim()
+    $verdict = (Get-Content $tmp -Raw -ErrorAction SilentlyContinue)
+    $verdict = if ($verdict) { $verdict.Trim() } else { "" }
     if ($verdict -eq "ok") { return $true }
     if ($verdict -eq "fail") { return $false }
-    return $true   # unknown (python failed) -> leave the browser alone
+    return $true   # unknown -> leave the browser alone
 }
 
 # Resolve the Python interpreter for the local ML stack.
