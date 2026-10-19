@@ -596,6 +596,27 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                 except Exception:
                     pass
             finally:
+                if use_cdp:
+                    # amazon.in registers a service worker. Playwright's driver
+                    # asserts on that ACTIVE target the next time it attaches
+                    # ("Connection closed while reading from the driver") and dies,
+                    # bricking the shared extraction Chrome for every later call -
+                    # Amazon AND Meesho alike (extract_products already does this,
+                    # but scrape() never did, which is why the price refetch kept
+                    # re-wedging 9225). Unregister while our session is still alive.
+                    try:
+                        page.evaluate("""async () => {
+                            try {
+                                const rs = await navigator.serviceWorker.getRegistrations();
+                                await Promise.all(rs.map(r => r.unregister()));
+                            } catch (e) {}
+                            try {
+                                const ks = await caches.keys();
+                                await Promise.all(ks.map(k => caches.delete(k)));
+                            } catch (e) {}
+                        }""")
+                    except Exception:
+                        pass
                 context.close()
                 # Never close the shared Chrome when connected over CDP.
                 if owns_browser:
