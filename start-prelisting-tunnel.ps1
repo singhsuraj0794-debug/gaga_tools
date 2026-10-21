@@ -88,6 +88,17 @@ if (-not $cloudflared) {
 
 $log = Join-Path $env:TEMP "cloudflared-prelisting.log"
 Remove-Item $log, "$log.err" -ErrorAction SilentlyContinue
+
+# Single instance. A quick tunnel is cheap to restart and its URL changes anyway,
+# so kill any existing cloudflared first - otherwise every watchdog restart
+# stacked another tunnel (two were running, one from the previous day, each
+# publishing its own URL that then accumulates in storage).
+Get-Process cloudflared -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "  stopping existing cloudflared $($_.Id)"
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 2
+
 Write-Host "Starting cloudflared tunnel -> http://127.0.0.1:$ApiPort"
 Start-Process -FilePath $cloudflared.Source `
     -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$ApiPort", "--no-autoupdate") `
@@ -123,4 +134,12 @@ if ($env:SUPABASE_URL -and $env:SUPABASE_KEY) {
     } catch {
         Write-Warning "Supabase publish failed: $_"
     }
+
+    # Keep only the newest few published URLs. Every tunnel restart adds one, and
+    # 194 had accumulated; only the newest is ever read.
+    $dir = Join-Path $DbRoot "storage\monitoring"
+    Get-ChildItem $dir -Filter "prelisting-api-url-*.txt" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip 5 |
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
 }
