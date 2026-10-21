@@ -21,12 +21,22 @@ if (Test-Path (Join-Path $ApiDir "build.mjs")) {
     }
 }
 
+# Stage markers (defined by run-stack.ps1) so a stall inside one starter is
+# visible instead of looking like a silently dead watchdog.
+if (-not (Get-Command Stage -ErrorAction SilentlyContinue)) { function Stage([string]$m) { } }
+Stage "all: prelisting"
 & "$PSScriptRoot\start-prelisting-tunnel.ps1"
+Stage "all: prelisting done"
 & "$PSScriptRoot\start-scraper-tunnel.ps1"
+Stage "all: scraper done"
 & "$PSScriptRoot\start-db.ps1"
+Stage "all: db done"
 & "$PSScriptRoot\start-chrome-extract.ps1"
+Stage "all: chrome-extract done"
 & "$PSScriptRoot\start-chrome-scraper.ps1"
+Stage "all: chrome-scraper done"
 & "$PSScriptRoot\start-chrome-monitor.ps1"
+Stage "all: chromes done"
 
 Write-Host ""
 Write-Host "=== STATUS ==="
