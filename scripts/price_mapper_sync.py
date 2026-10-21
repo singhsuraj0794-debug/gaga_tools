@@ -125,7 +125,13 @@ def money(value) -> str:
 
 
 def clean(value) -> str:
-    return " ".join(str(value or "").split())
+    """Whitespace-collapse and decode HTML entities ('&amp;' -> '&').
+
+    The export (and the DB it was scraped into) carries escaped titles, which
+    render literally in the UI. Decoding on write fixes that for every row we
+    touch.
+    """
+    return " ".join(html.unescape(str(value or "")).split())
 
 
 # ── loading ───────────────────────────────────────────────────────────────
