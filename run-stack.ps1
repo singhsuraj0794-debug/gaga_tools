@@ -31,6 +31,16 @@ Write-Host "[run-stack] watchdog started; staying alive to keep children alive."
 # and a store scrape quietly ended after a fraction of its products. So verify by
 # actually attaching (Test-CdpHealthy) and, when unhealthy, KILL the browser
 # first - start-chrome-*.ps1 refuses to start while the port is still open.
+# Fire-and-forget a starter. A starter can legitimately hang forever (pg_ctl on
+# a stale postmaster.pid does), and waiting for it froze the watchdog - the loop
+# must keep ticking no matter what a starter does.
+function Start-Starter([string]$Name) {
+    Start-Process -FilePath "powershell" -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", (Join-Path $PSScriptRoot $Name)
+    ) -WindowStyle Hidden | Out-Null
+}
+
 function Restart-ChromeIfUnhealthy {
     param([int]$Port, [string]$Label, [string]$Script)
     if ((Test-PortOpen $Port) -and (Test-CdpHealthy $Port)) { return }
