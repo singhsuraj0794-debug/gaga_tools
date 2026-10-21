@@ -97,28 +97,64 @@ interface PmCache {
   mappedIds: Set<string>;
   dupIds: Set<string>;
   ts: number;
-  loading: Promise<PmCache> | null;
 }
-let _cache: PmCache = { products: [], mappedIds: new Set(), dupIds: new Set(), ts: 0, loading: null };
+let _cache: PmCache = { products: [], mappedIds: new Set(), dupIds: new Set(), ts: 0 };
+let _inflight: Promise<PmCache> | null = null;
 
-const CACHE_TTL_MS = 60_000;
-// PostgREST caps every response at 1000 rows (db-max-rows), so the cache is
-// size-limited by these page counts. The catalogue sync takes `products` past
-// 60k, so the old 35-page ceiling silently dropped ~25k products from the list.
-const PRODUCT_PAGES = 70;   // 70k-row ceiling
-const MAPPING_PAGES = 30;   // 30k
-const DUP_PAGES = 10;
+// Reload at most every 3 minutes: the mapped set is also updated
+// incrementally when a mapping is saved, so this is a backstop, not the
+// mechanism. Reloading 60k rows every minute was pointless CPU/GC churn.
+const CACHE_TTL_MS = 180_000;
+const PAGE_SIZE = 1000;      // PostgREST db-max-rows
+// Fetching every page in one Promise.all opened 110 sockets for a 60k-product
+// catalogue and buffered 110 response bodies at once — that spike is what drove
+// the box into OutOfMemory right after the catalogue sync. Load a few pages at
+// a time instead, and stop at the first short page so there is no row ceiling.
+const PAGE_CONCURRENCY = 6;
+const MAX_PRODUCT_PAGES = 200;
+const MAX_MAPPING_PAGES = 100;
+const MAX_DUP_PAGES = 50;
 
-async function loadCaches(): Promise<PmCache> {
-  if (Date.now() - _cache.ts < CACHE_TTL_MS && _cache.products.length > 0) return _cache;
-  if (_cache.loading) return _cache.loading;
-  _cache.loading = (async () => {
-    const supabase = getSupabase()!;
-    const pages = (n: number) => Array.from({ length: n }, (_, i) => i);
-    const [prodPages, mapPages, dupPages] = await Promise.all([
-      Promise.all(pages(PRODUCT_PAGES).map((p) =>
-        supabase.from("products").select("id,name,price,image_url,url,category").order("name").range(p * 1000, p * 1000 + 999))),
-      Promise.all(pages(MAPPING_PAGES).map((p) =>
+/** Page a table in 1000-row chunks, PAGE_CONCURRENCY at a time. */
+async function fetchAllPages(
+  label: string,
+  page: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: any }>,
+  maxPages: number,
+): Promise<any[]> {
+  const out: any[] = [];
+  for (let base = 0; base < maxPages; base += PAGE_CONCURRENCY) {
+    const batch = await Promise.all(
+      Array.from({ length: Math.min(PAGE_CONCURRENCY, maxPages - base) }, (_, k) => {
+        const p = base + k;
+        return page(p * PAGE_SIZE, p * PAGE_SIZE + PAGE_SIZE - 1);
+      }),
+    );
+    let done = false;
+    for (const r of batch) {
+      if (r.error) throw new Error(`${label}: ${r.error.message || r.error}`);
+      const rows = r.data || [];
+      out.push(...rows);
+      if (rows.length < PAGE_SIZE) done = true;
+    }
+    if (done) break;
+  }
+  logger.info({ table: label, rows: out.length }, "price-mapper page load");
+  return out;
+}
+
+async function buildCache(): Promise<PmCache> {
+  const supabase = getSupabase()!;
+  const [products, mappedRows, dupRows] = await Promise.all([
+    fetchAllPages(
+      "products",
+      (from, to) =>
+        supabase.from("products").select("id,name,price,image_url,url,category")
+          .order("name").range(from, to),
+      MAX_PRODUCT_PAGES,
+    ),
+    fetchAllPages(
+      "mappings",
+      (from, to) =>
         supabase.from("price_mappings").select("gajab_product_id")
           // "Mapped" means the product actually got a price source. Rows where
           // every platform failed carry no url and are not mapped — the old
@@ -128,27 +164,52 @@ async function loadCaches(): Promise<PmCache> {
           // ORDER before range: without a stable order, offset pagination is
           // non-deterministic and silently skips rows (this was dropping
           // recently-mapped products from the Mapped set entirely).
-          .order("gajab_product_id")
-          .range(p * 1000, p * 1000 + 999))),
-      Promise.all(pages(DUP_PAGES).map((p) =>
+          .order("gajab_product_id").range(from, to),
+      MAX_MAPPING_PAGES,
+    ),
+    fetchAllPages(
+      "duplicates",
+      (from, to) =>
         supabase.from("product_duplicates").select("product_id")
-          .order("product_id")
-          .range(p * 1000, p * 1000 + 999))),
-    ]);
-    const products: any[] = [];
-    for (const r of prodPages) if (r.data) products.push(...r.data);
-    const mappedIds = new Set<string>();
-    for (const r of mapPages) if (r.data) for (const m of r.data) mappedIds.add(m.gajab_product_id);
-    const dupIds = new Set<string>();
-    for (const r of dupPages) if (r.data) for (const d of r.data) dupIds.add(d.product_id);
-    _cache = { products, mappedIds, dupIds, ts: Date.now(), loading: null };
-    logger.info(
-      { products: products.length, mapped: mappedIds.size, duplicates: dupIds.size },
-      "price-mapper cache loaded",
-    );
+          .order("product_id").range(from, to),
+      MAX_DUP_PAGES,
+    ),
+  ]);
+  const mappedIds = new Set<string>();
+  for (const m of mappedRows) mappedIds.add(m.gajab_product_id);
+  const dupIds = new Set<string>();
+  for (const d of dupRows) dupIds.add(d.product_id);
+  logger.info(
+    { products: products.length, mapped: mappedIds.size, duplicates: dupIds.size },
+    "price-mapper cache loaded",
+  );
+  return { products, mappedIds, dupIds, ts: 0 };
+}
+
+function refreshCache(): Promise<PmCache> {
+  if (_inflight) return _inflight;
+  _inflight = (async () => {
+    const next = await buildCache();
+    _cache = { ...next, ts: Date.now() };
     return _cache;
-  })();
-  return _cache.loading;
+  })().finally(() => {
+    _inflight = null;
+  });
+  return _inflight;
+}
+
+/** Stale-while-revalidate: a request only waits for the very first load; after
+ *  that the previous snapshot is served and a refresh runs in the background. */
+async function loadCaches(): Promise<PmCache> {
+  if (_cache.products.length > 0) {
+    if (Date.now() - _cache.ts >= CACHE_TTL_MS) {
+      void refreshCache().catch((err) =>
+        logger.warn({ err: err?.message }, "price-mapper cache refresh failed"),
+      );
+    }
+    return _cache;
+  }
+  return refreshCache();
 }
 
 // GET /api/price-mapper/products — list Gajab.com products from Supabase (paginated)

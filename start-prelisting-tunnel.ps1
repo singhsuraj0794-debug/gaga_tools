@@ -16,7 +16,10 @@ if (Test-PortOpen $ApiPort) {
 } else {
     $env:PORT = "$ApiPort"
     Write-Host "Starting API on $ApiPort ..."
-    Start-Bg -FilePath "node" -Arguments @("--enable-source-maps", ".\dist\index.mjs") -WorkingDirectory $ApiDir -LogName "prelisting-api.log" | Out-Null
+    # Cap the heap: if the API ever runs away it should crash and be restarted
+# by the watchdog, not exhaust the machine's page file (which stops ANY
+# process from starting, including the shell needed to fix it).
+    Start-Bg -FilePath "node" -Arguments @("--enable-source-maps", "--max-old-space-size=1536", ".\dist\index.mjs") -WorkingDirectory $ApiDir -LogName "prelisting-api.log" | Out-Null
     Start-Sleep -Seconds 3
 }
 
