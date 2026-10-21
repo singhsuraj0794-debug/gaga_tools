@@ -102,8 +102,11 @@ interface PmCache {
 let _cache: PmCache = { products: [], mappedIds: new Set(), dupIds: new Set(), ts: 0, loading: null };
 
 const CACHE_TTL_MS = 60_000;
-const PRODUCT_PAGES = 35;   // 35k-row ceiling
-const MAPPING_PAGES = 25;   // 25k
+// PostgREST caps every response at 1000 rows (db-max-rows), so the cache is
+// size-limited by these page counts. The catalogue sync takes `products` past
+// 60k, so the old 35-page ceiling silently dropped ~25k products from the list.
+const PRODUCT_PAGES = 70;   // 70k-row ceiling
+const MAPPING_PAGES = 30;   // 30k
 const DUP_PAGES = 10;
 
 async function loadCaches(): Promise<PmCache> {
