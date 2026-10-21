@@ -160,11 +160,11 @@ if ($env:SUPABASE_URL -and $env:SUPABASE_KEY -and -not $isLocalStore) {
     Stage "publish-done"
 }
 
-    # Keep only the newest few published URLs. Every tunnel restart adds one, and
-    # 194 had accumulated; only the newest is ever read.
-    $dir = Join-Path $DbRoot "storage\monitoring"
-    Get-ChildItem $dir -Filter "prelisting-api-url-*.txt" -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -Skip 5 |
-        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
-}
+# Keep only the newest few published URLs. Every tunnel restart used to add one
+# and 194 had accumulated; only the newest is ever read. Runs regardless of
+# whether this run published (the local stack skips the upload).
+$dir = Join-Path $DbRoot "storage\monitoring"
+Get-ChildItem $dir -Filter "prelisting-api-url-*.txt" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -Skip 5 |
+    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
