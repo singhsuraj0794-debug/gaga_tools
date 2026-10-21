@@ -268,6 +268,22 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
     ("ear_chain", ["kaan chain", "kan chain", "kaan sahara", "ear chain",
                    "ear support chain", "ear thread"],
      "Fashion > Jewellery > Artificial & Silver Jewellery > Earrings"),
+
+    # ── Grocery by product noun ────────────────────────────────────────────
+    # Amazon brand-store rows often arrive with an EMPTY breadcrumb, so the
+    # title is the only signal. These nouns are unambiguous in a grocery
+    # catalogue (AHUJA MART: 9 rows were unmapped, all listed below).
+    ("spice_chilli_powder", ["red chilli powder", "chilli powder", "chili powder",
+                             "mirchi powder", "red chilli"],
+     "Grocery > Food & Nutrition > Spices, Condiments & Sauces > Spices & Masalas"),
+    ("spice_fennel", ["fennel seeds", "fennel", "saunf", "variyali", "sombu",
+                      "perumjeerakam"],
+     "Grocery > Food & Nutrition > Spices, Condiments & Sauces > Spices & Masalas"),
+    ("spice_fenugreek", ["fenugreek seeds", "fenugreek", "methi dana", "methi seeds",
+                         "methi"],
+     "Grocery > Food & Nutrition > Spices, Condiments & Sauces > Spices & Masalas"),
+    ("pulse_rajma", ["rajma", "kidney beans"],
+     "Grocery > Food & Nutrition > Staples > Pulses"),
 ]
 
 
