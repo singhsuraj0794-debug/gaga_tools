@@ -863,7 +863,82 @@ for (const job of refetchJobs.jobs.values()) {
   }
 }
 
-// POST /api/price-mapper/export — export mappings to Excel
+/** The Price Mappings workbook, shared by /export (client rows) and /export-all
+ *  (every mapped row). */
+function buildMappingsWorkbook(mappings: any[]): ExcelJS.Workbook {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Price Mappings");
+  worksheet.columns = [
+    { header: "Gajab Product ID", key: "gajab_product_id", width: 30 },
+    { header: "Product Title", key: "gajab_title", width: 60 },
+    { header: "Gajab Price", key: "gajab_price", width: 20 },
+    { header: "Gajab URL", key: "gajab_url", width: 60 },
+    { header: "Amazon URL", key: "amazon_url", width: 60 },
+    { header: "Amazon Price", key: "amazon_price", width: 20 },
+    { header: "Amazon Match Score", key: "amazon_match_score", width: 18 },
+    { header: "Amazon DINOv2", key: "amazon_dinov2", width: 14 },
+    { header: "Amazon CLIP", key: "amazon_clip", width: 14 },
+    { header: "Amazon Match Tag", key: "amazon_match_tag", width: 18 },
+    { header: "Amazon Unavailable", key: "amazon_unavailable", width: 18 },
+    { header: "Flipkart URL", key: "flipkart_url", width: 60 },
+    { header: "Flipkart Price", key: "flipkart_price", width: 20 },
+    { header: "Flipkart Match Score", key: "flipkart_match_score", width: 18 },
+    { header: "Flipkart DINOv2", key: "flipkart_dinov2", width: 16 },
+    { header: "Flipkart CLIP", key: "flipkart_clip", width: 14 },
+    { header: "Flipkart Match Tag", key: "flipkart_match_tag", width: 20 },
+    { header: "Flipkart Unavailable", key: "flipkart_unavailable", width: 20 },
+    { header: "Meesho URL", key: "meesho_url", width: 60 },
+    { header: "Meesho Price", key: "meesho_price", width: 20 },
+    { header: "Meesho Match Score", key: "meesho_match_score", width: 18 },
+    { header: "Last Checked", key: "last_checked", width: 25 },
+  ];
+
+  const pct = (v: any) => (v != null ? Math.round(Number(v) * 100) + "%" : null);
+  for (const m of mappings) {
+    worksheet.addRow({
+      gajab_product_id: m.gajab_product_id,
+      gajab_title: m.gajab_title,
+      gajab_price: m.gajab_price,
+      gajab_url: m.gajab_url,
+      amazon_url: m.amazon_url,
+      amazon_price: m.amazon_price,
+      amazon_match_score: m.amazon_match_score,
+      amazon_dinov2: pct(m.amazon_dinov2),
+      amazon_clip: pct(m.amazon_clip),
+      amazon_match_tag: m.amazon_match_tag || null,
+      amazon_unavailable: m.amazon_unavailable ? "Yes" : "No",
+      flipkart_url: m.flipkart_url,
+      flipkart_price: m.flipkart_price,
+      flipkart_match_score: m.flipkart_match_score,
+      flipkart_dinov2: pct(m.flipkart_dinov2),
+      flipkart_clip: pct(m.flipkart_clip),
+      flipkart_match_tag: m.flipkart_match_tag || null,
+      flipkart_unavailable: m.flipkart_unavailable ? "Yes" : "No",
+      meesho_url: m.meesho_url,
+      meesho_price: m.meesho_price,
+      meesho_match_score: m.meesho_match_score,
+      last_checked: m.last_checked,
+    });
+  }
+
+  const headerRow = worksheet.getRow(1);
+  headerRow.font = { bold: true };
+  headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6366F1" } };
+  headerRow.eachCell((cell) => {
+    cell.font = { color: { argb: "FFFFFFFF" }, bold: true };
+  });
+  return workbook;
+}
+
+async function sendMappingsWorkbook(res: Response, mappings: any[], filename: string): Promise<void> {
+  const workbook = buildMappingsWorkbook(mappings);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  await workbook.xlsx.write(res);
+  res.end();
+}
+
+// POST /api/price-mapper/export — export the mappings the client sent
 router.post("/export", async (req: Request, res: Response): Promise<void> => {
   try {
     const { mappings, filename = "price-mappings.xlsx" } = req.body;
@@ -871,81 +946,46 @@ router.post("/export", async (req: Request, res: Response): Promise<void> => {
       res.status(400).json({ error: "Mappings array required" });
       return;
     }
-
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Price Mappings");
-
-    worksheet.columns = [
-      { header: "Gajab Product ID", key: "gajab_product_id", width: 30 },
-      { header: "Product Title", key: "gajab_title", width: 60 },
-      { header: "Gajab Price", key: "gajab_price", width: 20 },
-      { header: "Gajab URL", key: "gajab_url", width: 60 },
-      { header: "Amazon URL", key: "amazon_url", width: 60 },
-      { header: "Amazon Price", key: "amazon_price", width: 20 },
-      { header: "Amazon Match Score", key: "amazon_match_score", width: 18 },
-      { header: "Amazon DINOv2", key: "amazon_dinov2", width: 14 },
-      { header: "Amazon CLIP", key: "amazon_clip", width: 14 },
-      { header: "Amazon Match Tag", key: "amazon_match_tag", width: 18 },
-      { header: "Amazon Unavailable", key: "amazon_unavailable", width: 18 },
-      { header: "Flipkart URL", key: "flipkart_url", width: 60 },
-      { header: "Flipkart Price", key: "flipkart_price", width: 20 },
-      { header: "Flipkart Match Score", key: "flipkart_match_score", width: 18 },
-      { header: "Flipkart DINOv2", key: "flipkart_dinov2", width: 16 },
-      { header: "Flipkart CLIP", key: "flipkart_clip", width: 14 },
-      { header: "Flipkart Match Tag", key: "flipkart_match_tag", width: 20 },
-      { header: "Flipkart Unavailable", key: "flipkart_unavailable", width: 20 },
-      { header: "Meesho URL", key: "meesho_url", width: 60 },
-      { header: "Meesho Price", key: "meesho_price", width: 20 },
-      { header: "Meesho Match Score", key: "meesho_match_score", width: 18 },
-      { header: "Last Checked", key: "last_checked", width: 25 },
-    ];
-
-    for (const m of mappings) {
-      worksheet.addRow({
-        gajab_product_id: m.gajab_product_id,
-        gajab_title: m.gajab_title,
-        gajab_price: m.gajab_price,
-        gajab_url: m.gajab_url,
-        amazon_url: m.amazon_url,
-        amazon_price: m.amazon_price,
-        amazon_match_score: m.amazon_match_score,
-        amazon_dinov2: m.amazon_dinov2 != null ? Math.round(m.amazon_dinov2 * 100) + "%" : null,
-        amazon_clip: m.amazon_clip != null ? Math.round(m.amazon_clip * 100) + "%" : null,
-        amazon_match_tag: m.amazon_match_tag || null,
-        amazon_unavailable: m.amazon_unavailable ? "Yes" : "No",
-        flipkart_url: m.flipkart_url,
-        flipkart_price: m.flipkart_price,
-        flipkart_match_score: m.flipkart_match_score,
-        flipkart_dinov2: m.flipkart_dinov2 != null ? Math.round(m.flipkart_dinov2 * 100) + "%" : null,
-        flipkart_clip: m.flipkart_clip != null ? Math.round(m.flipkart_clip * 100) + "%" : null,
-        flipkart_match_tag: m.flipkart_match_tag || null,
-        flipkart_unavailable: m.flipkart_unavailable ? "Yes" : "No",
-        meesho_url: m.meesho_url,
-        meesho_price: m.meesho_price,
-        meesho_match_score: m.meesho_match_score,
-        last_checked: m.last_checked,
-      });
-    }
-
-    const headerRow = worksheet.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF6366F1" },
-    };
-    headerRow.eachCell((cell) => {
-      cell.font = { color: { argb: "FFFFFFFF" }, bold: true };
-    });
-
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-    await workbook.xlsx.write(res);
-    res.end();
+    await sendMappingsWorkbook(res, mappings, filename);
   } catch (err: any) {
     logger.error({ err }, "Price mapper Excel export failed");
-    res.status(500).json({ error: "Export failed: " + err.message });
+    if (!res.headersSent) res.status(500).json({ error: "Export failed: " + err.message });
+  }
+});
+
+// GET /api/price-mapper/export-all — every mapped row as a workbook.
+//
+// The UI's "Export All" button has always called this, but the route never
+// existed (it only lived on the legacy server.mjs), so the button always failed
+// with a 404. Page the DB - PostgREST caps a response at 1000 - and build the
+// sheet server-side.
+router.get("/export-all", async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) {
+      res.status(500).json({ error: "Supabase not configured" });
+      return;
+    }
+    const rows: any[] = [];
+    const PAGE = 1000;
+    for (let offset = 0; offset < 500000; offset += PAGE) {
+      const { data, error } = await supabase
+        .from("price_mappings")
+        .select("*")
+        .or("amazon_url.not.is.null,flipkart_url.not.is.null,meesho_url.not.is.null")
+        .order("gajab_product_id")
+        .range(offset, offset + PAGE - 1);
+      if (error) throw new Error(error.message);
+      const batch = data || [];
+      rows.push(...batch);
+      if (batch.length < PAGE) break;
+    }
+    logger.info({ rows: rows.length }, "price-mapper export-all");
+    const stamp = new Date().toISOString().slice(0, 10);
+    await sendMappingsWorkbook(res, rows, `price-mappings-all-${stamp}.xlsx`);
+  } catch (err: any) {
+    logger.error({ err }, "Price mapper export-all failed");
+    if (!res.headersSent) res.status(500).json({ error: "Export failed: " + err.message });
   }
 });
 

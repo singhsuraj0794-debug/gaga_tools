@@ -549,9 +549,11 @@ export default function PriceMapper() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = res.headers.get("Content-Disposition")?.match(/"([^"]+)"/)?.[1] || "price-mappings-all.csv";
+      a.download = res.headers.get("Content-Disposition")?.match(/"([^"]+)"/)?.[1] || "price-mappings-all.xlsx";
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
       setError("Export failed");
     } finally {
@@ -590,21 +592,24 @@ export default function PriceMapper() {
         exportData = allMappings;
       }
 
-      const filename = mappingFilter === "duplicates" ? "duplicate-products.csv" : "price-mappings.csv";
+      const filename = mappingFilter === "duplicates" ? "duplicate-products.xlsx" : "price-mappings.xlsx";
 
       const exportRes = await fetch(`${API_BASE}/api/price-mapper/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mappings: exportData, filename }),
       });
+      if (!exportRes.ok) throw new Error(`Export failed (HTTP ${exportRes.status})`);
 
       const blob = await exportRes.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename;
+      a.download = exportRes.headers.get("Content-Disposition")?.match(/"([^"]+)"/)?.[1] || filename;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
       setError("Export failed");
     } finally {
