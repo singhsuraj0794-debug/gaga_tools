@@ -137,18 +137,28 @@ if (-not $url) {
 Set-Content -Path (Join-Path $env:TEMP "prelisting-tunnel-url.txt") -Value $url -Encoding ascii
 Stage "url-found"
 Write-Host "Compute API (tunnel): $url"
+Stage "tunnel done"
 
-if ($env:SUPABASE_URL -and $env:SUPABASE_KEY) {
+# The local stack keeps this URL in $env:TEMP\prelisting-tunnel-url.txt, so the
+# storage upload is optional. It used to block start-all (and therefore the whole
+# watchdog) forever when the storage endpoint did not answer, so it now has a
+# hard timeout and is skipped altogether for a local (non-cloud) Supabase URL.
+$isLocalStore = $env:SUPABASE_URL -and ($env:SUPABASE_URL -match '127\.0\.0\.1|localhost')
+if ($env:SUPABASE_URL -and $env:SUPABASE_KEY -and -not $isLocalStore) {
+    Stage "publish-start"
     try {
         $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         $remote = "prelisting-api-url-$ts.txt"
-        Invoke-RestMethod -Method Put -Uri "$($env:SUPABASE_URL)/storage/v1/object/monitoring/$remote" `
+        Invoke-RestMethod -Method Put -TimeoutSec 15 `
+            -Uri "$($env:SUPABASE_URL)/storage/v1/object/monitoring/$remote" `
             -Headers @{ apikey = $env:SUPABASE_KEY; Authorization = "Bearer $($env:SUPABASE_KEY)" } `
             -ContentType "text/plain" -Body $url | Out-Null
         Write-Host "Published to Supabase ($remote)"
     } catch {
         Write-Warning "Supabase publish failed: $_"
     }
+    Stage "publish-done"
+}
 
     # Keep only the newest few published URLs. Every tunnel restart adds one, and
     # 194 had accumulated; only the newest is ever read.
