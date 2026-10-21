@@ -10,14 +10,38 @@ from urllib.parse import quote
 from _chrome_path import chrome_executable
 
 BROWSER = None
+_PW = None
 _CHROME = chrome_executable()
 
 
+def _shutdown():
+    """Close the browser AND the Playwright driver.
+
+    This runs as a one-shot subprocess per search. Without this the driver node
+    process outlived the script; enough of them (one per product) exhausted the
+    machine's page file.
+    """
+    global BROWSER, _PW
+    try:
+        if BROWSER is not None:
+            BROWSER.close()
+    except Exception:
+        pass
+    try:
+        if _PW is not None:
+            _PW.stop()
+    except Exception:
+        pass
+    BROWSER = None
+    _PW = None
+
+
 def _get_browser():
-    global BROWSER
+    global BROWSER, _PW
     if BROWSER is None:
         from playwright.sync_api import sync_playwright
-        p = sync_playwright().start()
+        _PW = sync_playwright().start()
+        p = _PW
         BROWSER = p.chromium.launch(
             headless=True,
             executable_path=_CHROME,
@@ -205,3 +229,5 @@ if __name__ == "__main__":
         print(json.dumps(result))
     except Exception as e:
         print(json.dumps({"status": "failed", "error": f"{e}\n{traceback.format_exc()}"}))
+    finally:
+        _shutdown()

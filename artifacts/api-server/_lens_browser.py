@@ -52,6 +52,21 @@ def _worker_browser():
                 return b
         except Exception:
             pass
+        try:
+            if getattr(_tls, "pw", None) is not None:
+                _tls.pw.stop()
+        except Exception:
+            pass
+        _tls.pw = None
+        _tls.browser = None
+    # Chrome down is a NORMAL state (it restarts with the stack). Retrying on
+    # every product used to start a Playwright driver per call and leave it
+    # running when the connect failed: 393 orphaned node processes (~18 GB) put
+    # the whole machine into a page-file OutOfMemory. Stop the driver on failure
+    # and back off for a bit instead of hammering.
+    if time.time() < getattr(_tls, "retry_at", 0.0):
+        return None
+    pw = None
     try:
         pw = sync_playwright().start()
         # Fail fast: without a timeout connect_over_cdp waits its 180s default, so
@@ -61,7 +76,15 @@ def _worker_browser():
         _tls.browser = b
         return b
     except Exception as e:
-        print(f"LENS: connect failed: {e}", file=sys.stderr)
+        try:
+            if pw is not None:
+                pw.stop()
+        except Exception:
+            pass
+        _tls.pw = None
+        _tls.browser = None
+        _tls.retry_at = time.time() + 30.0
+        print(f"LENS: connect failed (backing off 30s): {e}", file=sys.stderr)
         return None
 
 

@@ -35,6 +35,18 @@ while ($true) {
     Restart-ChromeIfUnhealthy -Port $ChromeExtractPort -Label "extraction" -Script "start-chrome-extract.ps1"
     Restart-ChromeIfUnhealthy -Port $ChromeScraperPort -Label "scraping"   -Script "start-chrome-scraper.ps1"
     Restart-ChromeIfUnhealthy -Port $MonitorChromePort -Label "Lens"       -Script "start-chrome-monitor.ps1"
+    # Reap leaked Playwright drivers. Chrome being down is a normal state, and a
+    # failed connect used to leave a driver behind (a node process holding ~100 MB)
+    # for every search; that is what drove the machine into a page-file
+    # OutOfMemory where not even a shell could start. A healthy stack keeps a
+    # handful, so dozens means a leak.
+    $drivers = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+                 Where-Object { $_.CommandLine -like '*playwright*run-driver*' })
+    if ($drivers.Count -gt 40) {
+        Write-Output "[run-stack] reaping $($drivers.Count) leaked Playwright drivers"
+        foreach ($d in $drivers) { Stop-Process -Id $d.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
+
     # Postgres/PostgREST are started here (this process stays alive) so they are
     # not reaped when whatever launched them ends. Re-run the idempotent starter
     # if either port has gone quiet.
