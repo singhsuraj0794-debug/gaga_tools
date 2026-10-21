@@ -172,7 +172,11 @@ def load_source(path: Path, limit: int = 0):
                 mixed += 1
         if limit and len(out) >= limit:
             break
-    return list(out.values()), {"duplicate_tails": dup_tails, "mixed_status_tails": mixed}
+    return list(out.values()), {
+        "duplicate_tails": sum(dup_tails.values()),
+        "duplicate_tail_samples": ", ".join(list(dup_tails)[:5]),
+        "mixed_status_tails": mixed,
+    }
 
 
 def load_db(conn):
@@ -291,7 +295,7 @@ def write_report(path: Path, stats, updates, inserts, removals, review, meta):
     ws.title = "Summary"
     ws.append(["Metric", "Value"])
     for k, v in list(stats.items()) + list(meta.items()):
-        ws.append([k, v])
+        ws.append([k, v if isinstance(v, (int, float, str)) or v is None else str(v)])
     for col, width in (("A", 34), ("B", 70)):
         ws.column_dimensions[col].width = width
     for c in ws[1]:
