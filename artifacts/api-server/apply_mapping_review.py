@@ -39,7 +39,7 @@ from openpyxl import load_workbook
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _category_map import (  # noqa: E402
-    _default_map,
+    _DEFAULT_MAP,
     _leafful_sets,
     _norm_key,
     load_taxonomy,
@@ -98,7 +98,7 @@ def main() -> int:
     taxonomy = load_taxonomy()
     _, valid, _ = _leafful_sets(taxonomy)
 
-    map_path = Path(args.map).expanduser() if args.map else Path(_default_map())
+    map_path = Path(args.map).expanduser() if args.map else _DEFAULT_MAP
     data = json.loads(map_path.read_text(encoding="utf-8"))
     bucket = data.setdefault("map", {}).setdefault("amazon", {})
     buckets = data["map"]
