@@ -29,7 +29,11 @@ Stage "all: prelisting"
 Stage "all: prelisting done"
 & "$PSScriptRoot\start-scraper-tunnel.ps1"
 Stage "all: scraper done"
-& "$PSScriptRoot\start-db.ps1"
+# Only when something is actually down: the starter waits on ports and can be
+# slow, and the watchdog loop already re-runs it on demand.
+if (-not (Test-PortOpen $PgPort) -or -not (Test-PortOpen $PostgrestPort) -or -not (Test-PortOpen $ShimPort)) {
+    & "$PSScriptRoot\start-db.ps1"
+}
 Stage "all: db done"
 & "$PSScriptRoot\start-chrome-extract.ps1"
 Stage "all: chrome-extract done"

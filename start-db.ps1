@@ -6,6 +6,8 @@
 # alive - run-stack.ps1 (the Gajab-Stack scheduled task) - otherwise it dies the
 # moment the SSH session or short-lived task that started it ends.
 . "$PSScriptRoot\windows-common.ps1"
+if (-not (Get-Command Stage -ErrorAction SilentlyContinue)) { function Stage([string]$m) { } }
+Stage "db: begin"
 
 $PGBIN = Join-Path $PgRoot "pgsql\bin"
 $SECRETS = Join-Path $DbRoot ".db-secrets.json"
@@ -16,6 +18,7 @@ if (-not (Test-Path $PGBIN)) {
     return
 }
 
+Stage "db: postgres check"
 # --- Postgres ---
 if (Test-PortOpen $PgPort) {
     Write-Host "[db] Postgres already listening on $PgPort"
@@ -30,6 +33,7 @@ if (Test-PortOpen $PgPort) {
     else { Write-Warning "[db] FAILED: Postgres did not come up (see pg.log)" }
 }
 
+Stage "db: postgrest check"
 # --- PostgREST ---
 if (Test-PortOpen $PostgrestPort) {
     Write-Host "[db] PostgREST already listening on $PostgrestPort"
@@ -56,6 +60,7 @@ if (Test-PortOpen $PostgrestPort) {
     else { Write-Warning "[db] FAILED: PostgREST did not come up (see postgrest.err)" }
 }
 
+Stage "db: shim check"
 # --- storage shim (+ /rest/v1 proxy) -----------------------------------------
 # supabase-js wants ONE origin serving both /rest/v1 and /storage/v1. PostgREST
 # owns /rest/v1; the shim serves /storage/v1 from a local folder and forwards the
@@ -90,3 +95,4 @@ if (Test-PortOpen $ShimPort) {
     if (Test-PortOpen $ShimPort) { Write-Host "[db] OK: storage shim up" }
     else { Write-Warning "[db] FAILED: storage shim did not come up (see shim.err)" }
 }
+Stage "db: done"
