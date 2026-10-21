@@ -301,13 +301,20 @@ def write_report(path: Path, stats, updates, inserts, removals, review, meta):
     for c in ws[1]:
         c.font = Font(bold=True)
 
+    def cell(v):
+        if v is None or isinstance(v, (int, float, str)):
+            return v
+        if isinstance(v, (list, tuple, set)):
+            return ", ".join(str(x) for x in v)
+        return str(v)
+
     def sheet(title, cols, rows):
         w = wb.create_sheet(title)
         w.append(cols)
         for c in w[1]:
             c.font = Font(bold=True)
         for r in rows:
-            w.append([r.get(k, "") for k in cols])
+            w.append([cell(r.get(k, "")) for k in cols])
         w.freeze_panes = "A2"
         if rows:
             w.auto_filter.ref = f"A1:{chr(64 + len(cols))}{len(rows) + 1}"
