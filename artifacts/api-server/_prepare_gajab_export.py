@@ -67,6 +67,16 @@ FIXED_COLUMNS = [
 # Extra trailing columns we add for review (not part of the template).
 AUDIT_COLUMNS = ["Mapping Status", "Source Category", "Mapped Category Path", "Review Notes"]
 
+# One row per mapping that a human should confirm. Fill 'Corrected Category'
+# with a full Gajab path and run apply_mapping_review.py: the correction is
+# written into marketplace_category_map.json under the breadcrumb PREFIX, so a
+# single confirmation covers the whole product family from then on.
+REVIEW_COLUMNS = [
+    "Platform", "Sku", "Product Name", "Source Category", "Mapped Category Path",
+    "Mapping Status", "Method", "Confidence", "Level",
+    "Suggested Alternatives", "Corrected Category",
+]
+
 
 def _clean(v) -> str:
     if v is None:
@@ -436,6 +446,12 @@ def prepare(products: list[dict]) -> dict:
                 "Source Category": src_cat,
                 "Mapped Category Path": node,
                 "Review Notes": mapping_note,
+                # private: consumed by build_review(); never rendered as columns
+                "_platform": platform,
+                "_method": mapping_method,
+                "_level": (resolved or {}).get("level", 0),
+                "_confidence": (resolved or {}).get("confidence", ""),
+                "_candidates": list((resolved or {}).get("candidates") or []),
             }
             for i in range(1, 11):
                 row[f"Product Image {i}" + (" *" if i == 1 else "")] = images[i - 1] if len(images) >= i else ""
@@ -453,7 +469,11 @@ def prepare(products: list[dict]) -> dict:
             err["Review Notes"] = f"row {idx + 1} failed: {type(exc).__name__}: {exc}"[:300]
             rows.append(err)
 
-    return build_sheets(rows, stats, col_meta, cat_attrs)
+    out = build_sheets(rows, stats, col_meta, cat_attrs)
+    out["review"], out["review_columns"] = build_review(rows)
+    if out["review"]:
+        stats["review"] = len(out["review"])
+    return out
 
 
 def _sheet_name(category: str, used: set[str]) -> str:
@@ -481,6 +501,36 @@ def _sheet_name(category: str, used: set[str]) -> str:
     final = f"{name[:28]} {i}"
     used.add(final)
     return final
+
+
+def build_review(rows: list[dict]) -> tuple[list[dict], list[str]]:
+    """Rows whose category is a guess rather than a curated answer.
+
+    Anything mechanical (coarse / coarse-cross / coarse-leaf), anything that had
+    to stop above L4, and anything unmapped. The suggestions column carries the
+    paths the scorer considered, so the fix is usually a pick from a list — not
+    a taxonomy hunt.
+    """
+    out: list[dict] = []
+    for row in rows:
+        status = row.get("Mapping Status", "")
+        level = row.get("_level") or 0
+        if status != "unmapped" and level >= 4 and status != "ok-coarse":
+            continue
+        out.append({
+            "Platform": row.get("_platform", ""),
+            "Sku": row.get("Sku *", ""),
+            "Product Name": row.get("Product  Name *", ""),
+            "Source Category": row.get("Source Category", ""),
+            "Mapped Category Path": row.get("Mapped Category Path", ""),
+            "Mapping Status": status,
+            "Method": row.get("_method", ""),
+            "Confidence": row.get("_confidence", ""),
+            "Level": level,
+            "Suggested Alternatives": " | ".join(row.get("_candidates") or []),
+            "Corrected Category": "",
+        })
+    return out, REVIEW_COLUMNS
 
 
 def build_sheets(rows: list[dict], stats: dict | None = None,

@@ -45,6 +45,10 @@ interface SheetData {
   rows: Record<string, string>[];
 }
 
+interface ReviewRow {
+  [key: string]: string | number;
+}
+
 interface PrepareResult {
   summary: {
     total_products: number;
@@ -57,6 +61,9 @@ interface PrepareResult {
   audit_columns: string[];
   rows: Record<string, string>[];
   stats: Record<string, number>;
+  /** Rows whose category is a mechanical guess (see _prepare_gajab_export.py) */
+  review?: ReviewRow[];
+  review_columns?: string[];
 }
 
 /** Run the Python enricher (or just its category pass) over a batch.
@@ -216,6 +223,46 @@ function addSummarySheet(
   ws.views = [{ state: "frozen", ySplit: 1 }];
 }
 
+/** Every mapping the enricher had to GUESS, on one sheet. A human confirms or
+ *  overrides it by typing into 'Corrected Category'; apply_mapping_review.py
+ *  then writes that correction into marketplace_category_map.json under the
+ *  breadcrumb prefix, so it covers the whole product family next time. */
+function addReviewSheet(
+  workbook: ExcelJS.Workbook,
+  rows: ReviewRow[] | undefined,
+  columns: string[] | undefined,
+): void {
+  if (!rows || rows.length === 0 || !columns || columns.length === 0) return;
+  const ws = workbook.addWorksheet("Mapping Review");
+  const wide = new Set([
+    "Product Name",
+    "Source Category",
+    "Mapped Category Path",
+    "Suggested Alternatives",
+  ]);
+  ws.columns = columns.map((c) => ({
+    header: c,
+    key: c,
+    width: c === "Product Name" ? 44 : wide.has(c) ? 54 : 18,
+  }));
+  const header = ws.getRow(1);
+  columns.forEach((c, i) => {
+    const cell = header.getCell(i + 1);
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: c === "Corrected Category" ? "FFFD7E14" : "FF6F42C1" },
+    };
+  });
+  for (const row of rows) ws.addRow(row);
+  ws.views = [{ state: "frozen", ySplit: 1, xSplit: 3 }];
+  ws.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: columns.length },
+  };
+}
+
 /**
  * Build the workbook: a "Category Summary" lead sheet, then ONE WORKSHEET PER
  * CATEGORY (38 fixed template columns + only the attributes that category
@@ -240,6 +287,8 @@ export async function buildGajabWorkbook(
     audit_columns: data.audit_columns,
     rows: data.rows,
   });
+
+  addReviewSheet(workbook, data.review, data.review_columns);
 
   for (const sheet of data.sheets) {
     const ws = workbook.addWorksheet(sheet.sheet_name);

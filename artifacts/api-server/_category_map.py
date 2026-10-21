@@ -587,8 +587,17 @@ class CategoryMapper:
             # noun is wholly present, or the candidate leaf is wholly described
             # by the noun, or a shared noun token is rare enough to be evidence.
             noun_hit = last & ptoks
-            if not (last <= ptoks
-                    or leaf_toks <= last
+            # An EXACT leaf-name match ('Water' -> the leaf 'Water') is direct
+            # evidence even when the name consists of generic words.
+            exact_leaf = _norm_key(cand.split(" > ")[-1]) == _norm_key(crumbs[-1])
+            # An EMPTY set is a subset of everything, and that vacuous truth was
+            # the 'Beverages > Water' bug: 'water' is a generic token, so
+            # leaf_toks was empty and `leaf_toks <= last` was True for every
+            # product, while `last <= ptoks` was likewise True whenever the
+            # product noun was generic. Both are now gated on being non-empty.
+            if not ((last and last <= ptoks)
+                    or (leaf_toks and leaf_toks <= last)
+                    or exact_leaf
                     or any(self._tok_freq.get(t, 0) <= self._specific_cutoff
                            for t in noun_hit)):
                 continue
@@ -684,7 +693,8 @@ class CategoryMapper:
                 if found:
                     break
             if found:
-                return self._result_for(found, "coarse-leaf", 0.7)
+                return self._coarse_result(found, "coarse-leaf", 0.7,
+                                           parts, title, self._coarse)
 
         # ── pass 2: descend inside the mapped L1 ───────────────────────────
         gajab_l1 = self._l1_alias(parts[0])
@@ -698,7 +708,8 @@ class CategoryMapper:
                 # instead of dropping through to a cross-taxonomy guess.
                 best = self._best_by_overlap(inside, parts[1:-1], title)
             if best:
-                return self._result_for(best, "coarse", 0.55)
+                return self._coarse_result(best, "coarse", 0.55,
+                                           parts[1:], title, inside)
             # NOT a dead end: 'Toys & Games > … > Pencil Erasers' has no match
             # inside the aliased L1 yet does in the whole taxonomy
             # (Stationery > … > Erasers). Returning the bare L1 here — as this
@@ -757,11 +768,15 @@ class CategoryMapper:
                     score >= 1 and bool(last_toks & best_toks) and title_ovl >= 1
                 )
             if strong:
-                return self._result_for(best, "coarse-cross", 0.5)
+                return self._coarse_result(best, "coarse-cross", 0.5,
+                                           parts[1:], title, self._coarse)
 
         # ── nothing matched anywhere: the aliased L1 is the honest placement ─
         if gajab_l1:
-            return self._result_for(gajab_l1, "coarse", 0.4)
+            return self._result_for(
+                gajab_l1, "coarse", 0.4, review=True,
+                candidates=self._overlap_shortlist(
+                    self._coarse_candidates(gajab_l1), parts[1:], title))
         return None
 
     def _title_leaf(self, title: str) -> str | None:
@@ -779,7 +794,78 @@ class CategoryMapper:
                     best = cand
         return best
 
-    def _result_for(self, full: str, method: str, confidence: float) -> dict:
+    def _leaf_supported(self, full: str, crumbs: list, title: str = "") -> bool:
+        """Is the L4 leaf actually NAMED by the product evidence?
+
+        Token overlap picks a BRANCH well and a LEAF badly: it once filed
+        'Dried Fruits > Dates' under 'Beverages > Water' (the leaf shares no
+        product word at all) and cocoa under 'Baking Mat Liner'. An L4 is a
+        commitment, so it has to be earned — the leaf is name-identical to the
+        product noun, fully described by the breadcrumb/title, or at least half
+        described by 2+ tokens. Anything less stops at the branch.
+        """
+        leaf = full.split(" > ")[-1]
+        if crumbs and _norm_key(leaf) == _norm_key(crumbs[-1]):
+            return True
+        lt = _significant(leaf)
+        if not lt:
+            # 'Water', 'Combo Kits' — no usable tokens, hence no token evidence.
+            return False
+        ev: set = set()
+        for c in crumbs:
+            ev |= _significant(c)
+        if title:
+            ev |= _significant(title)
+        hit = lt & ev
+        if not hit:
+            return False
+        if lt <= ev:
+            return True
+        return len(hit) >= 2 and len(hit) / len(lt) >= 0.5
+
+    def _overlap_shortlist(self, candidates, crumbs: list, title: str = "",
+                           k: int = 3) -> list:
+        """Top-k paths by breadcrumb/title overlap — hints for the review sheet."""
+        if not crumbs:
+            return []
+        want: set = set()
+        for c in crumbs:
+            want |= _significant(c)
+        if not want:
+            return []
+        title_toks = _significant(title) if title else set()
+        last = _significant(crumbs[-1])
+        scored = []
+        for cand in candidates:
+            ptoks = _significant(cand)
+            hit = want & ptoks
+            if not hit:
+                continue
+            prec = len(last & _significant(cand.split(" > ")[-1]))
+            scored.append(((len(hit), len(title_toks & ptoks), prec,
+                            cand.count(" > ")), cand))
+        scored.sort(reverse=True)
+        return [c for _, c in scored[:k]]
+
+    def _coarse_result(self, full: str, method: str, confidence: float,
+                       crumbs: list, title: str, pool) -> dict:
+        """A mechanical match, withheld from L4 unless the leaf is earned.
+
+        The window in which a wrong leaf can be invented is exactly the window
+        in which the name was not really matched — so keep the L4 only when
+        _leaf_supported() agrees, else stop at the deepest supported ancestor
+        (L3) and let the review sheet take it the rest of the way.
+        """
+        shortlist = self._overlap_shortlist(pool, crumbs, title)
+        lv = full.split(" > ")
+        if len(lv) >= 4 and not self._leaf_supported(full, crumbs, title):
+            full = " > ".join(lv[:-1])
+        return self._result_for(full, method, confidence, review=True,
+                                candidates=shortlist)
+
+    def _result_for(self, full: str, method: str, confidence: float,
+                    review: bool = False,
+                    candidates: list[str] | None = None) -> dict:
         lv = full.split(" > ")
         return {
             "full": full,
@@ -790,6 +876,11 @@ class CategoryMapper:
             "level": len(lv),
             "confidence": confidence,
             "method": method,
+            # True when no curated breadcrumb matched: the row is a MECHANICAL
+            # guess, so it is surfaced in the export's 'Mapping Review' sheet.
+            "review": review,
+            # A few paths worth a look, so a human can confirm in one click.
+            "candidates": candidates or [],
         }
 
     def resolve(self, platform: str, source_path: str | list | tuple | None,
@@ -854,6 +945,8 @@ class CategoryMapper:
                 "level": 4,
                 "confidence": 1.0,
                 "method": "curated",
+                "review": False,
+                "candidates": [],
             }
         # shallower than L4 (L1/L2/L3) — still a valid master category
         lv = [parts[i] if i < len(parts) else "" for i in range(4)]
@@ -866,6 +959,8 @@ class CategoryMapper:
             "level": len(parts),
             "confidence": 0.9,
             "method": "curated-coarse",
+            "review": True,
+            "candidates": [],
         }
 
 
