@@ -70,7 +70,7 @@ while ($true) {
     # if either port has gone quiet.
     if (-not (Test-PortOpen $PgPort) -or -not (Test-PortOpen $PostgrestPort) -or -not (Test-PortOpen $ShimPort)) {
         Write-Host "[run-stack] database stack is down - restarting"
-        & "$PSScriptRoot\start-db.ps1"
+        Start-Starter "start-db.ps1"
     }
     # The API and the local scraper were only ever started once by start-all, so a
     # crash took the whole UI down while the DB, the shim and the tunnels stayed
@@ -79,8 +79,8 @@ while ($true) {
     # idempotent, so re-running them brings back just the dead one.
     if (-not (Test-PortOpen $ApiPort) -or -not (Test-PortOpen $ScraperPort)) {
         Write-Host "[run-stack] API ($ApiPort) or scraper ($ScraperPort) is down - restarting"
-        & "$PSScriptRoot\start-prelisting-tunnel.ps1"
-        & "$PSScriptRoot\start-scraper-tunnel.ps1"
+        Start-Starter "start-prelisting-tunnel.ps1"
+        Start-Starter "start-scraper-tunnel.ps1"
     }
     Start-Sleep -Seconds 60
 }
