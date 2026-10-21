@@ -7,15 +7,18 @@
 # Registered as scheduled task "Gajab-Stack" (trigger: at logon).
 . "$PSScriptRoot\windows-common.ps1"
 
+# Deliberately NOT calling start-all.ps1 here. Every starter is idempotent and
+# the loop below calls each of them, so nothing is gained by a synchronous pass -
+# while a starter that hangs (pg_ctl waiting on a stale pid, cloudflared, an
+# inherited stdout handle) took the WHOLE watchdog down with it and left the box
+# with no self-healing at all. A hung service now just means that service stays
+# down until the next iteration.
 $stage = Join-Path $env:TEMP "run-stack.stage"
 function Stage([string]$m) {
     Add-Content -Path $stage -Value ((Get-Date -Format "HH:mm:ss") + " " + $m) -ErrorAction SilentlyContinue
 }
-Stage "run-stack start"
-& "$PSScriptRoot\start-all.ps1"
-Stage "start-all returned"
 
-Write-Host "[run-stack] stack started; staying alive to keep children alive."
+Write-Host "[run-stack] watchdog started; staying alive to keep children alive."
 
 # Self-heal the Chromes. They are the fragile part - they crash under load - and
 # start-all only launches them at boot, so a dead CDP port silently turned every
@@ -41,7 +44,6 @@ while ($true) {
     # Heartbeat first: without it a stalled iteration is invisible and looks
     # exactly like a watchdog that is running fine.
     Set-Content -Path $heartbeat -Value (Get-Date -Format "o") -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 60
     # Reap leaked Playwright drivers BEFORE the Chrome checks: a slow Chrome
     # stop/start must not delay the one job that prevents a page-file OOM.
     $drivers = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
@@ -70,4 +72,5 @@ while ($true) {
         & "$PSScriptRoot\start-prelisting-tunnel.ps1"
         & "$PSScriptRoot\start-scraper-tunnel.ps1"
     }
+    Start-Sleep -Seconds 60
 }
