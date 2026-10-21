@@ -9,6 +9,12 @@
 . "$PSScriptRoot\windows-common.ps1"
 Import-DotEnv
 
+$stageLog = Join-Path $env:TEMP "run-stack.stage"
+function Stage([string]$m) {
+    Add-Content -Path $stageLog -Value ((Get-Date -Format "HH:mm:ss") + " tunn " + $m) -ErrorAction SilentlyContinue
+}
+Stage "begin"
+
 $python = Get-Python
 
 if (Test-PortOpen $ApiPort) {
@@ -23,6 +29,7 @@ if (Test-PortOpen $ApiPort) {
     Start-Sleep -Seconds 3
 }
 
+Stage "api-done"
 if (Test-PortOpen $ClipPort) {
     Write-Host "CLIP verify already running on $ClipPort"
 } else {
@@ -33,6 +40,7 @@ if (Test-PortOpen $ClipPort) {
     Start-Sleep -Seconds 2
 }
 
+Stage "clip-done"
 if (Test-PortOpen $AnalysisPort) {
     Write-Host "Analysis server already running on $AnalysisPort"
 } else {
@@ -50,6 +58,7 @@ if (Test-PortOpen $AnalysisPort) {
 # embeddings. The pip llama-cpp-python build is too old to load this model, but
 # the winget llama.cpp does. Optional: skipped if llama-server isn't on PATH
 # (the analysis server then falls back to MiniLM).
+Stage "analysis-done"
 $LlamaPort = 8081
 $llama = Get-Command llama-server -ErrorAction SilentlyContinue
 if (-not $llama) {
@@ -83,6 +92,7 @@ if ($llama) {
     Write-Warning "llama-server not found - HSN/claim embeddings fall back to MiniLM"
 }
 
+Stage "llama-done"
 $cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
 if (-not $cloudflared) {
     Write-Warning "cloudflared not on PATH - skipping compute tunnel (install it first)"
@@ -107,6 +117,7 @@ Start-Process -FilePath $cloudflared.Source `
     -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$ApiPort", "--no-autoupdate") `
     -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err" | Out-Null
 
+Stage "cloudflared-launched"
 $url = $null
 for ($i = 0; $i -lt 40 -and -not $url; $i++) {
     Start-Sleep -Seconds 1
@@ -124,6 +135,7 @@ if (-not $url) {
 }
 
 Set-Content -Path (Join-Path $env:TEMP "prelisting-tunnel-url.txt") -Value $url -Encoding ascii
+Stage "url-found"
 Write-Host "Compute API (tunnel): $url"
 
 if ($env:SUPABASE_URL -and $env:SUPABASE_KEY) {

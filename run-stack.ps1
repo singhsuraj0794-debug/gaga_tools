@@ -7,7 +7,13 @@
 # Registered as scheduled task "Gajab-Stack" (trigger: at logon).
 . "$PSScriptRoot\windows-common.ps1"
 
+$stage = Join-Path $env:TEMP "run-stack.stage"
+function Stage([string]$m) {
+    Add-Content -Path $stage -Value ((Get-Date -Format "HH:mm:ss") + " " + $m) -ErrorAction SilentlyContinue
+}
+Stage "run-stack start"
 & "$PSScriptRoot\start-all.ps1"
+Stage "start-all returned"
 
 Write-Host "[run-stack] stack started; staying alive to keep children alive."
 
