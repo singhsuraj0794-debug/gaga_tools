@@ -64,6 +64,18 @@ from openpyxl.styles import Font
 SECRETS = Path(os.environ.get("PM_SYNC_SECRETS", r"C:\gajab\.db-secrets.json"))
 
 
+def pg_password(dsn: str) -> str:
+    """Password for pg_dump. psycopg2 does not reliably expose it in
+    get_dsn_parameters(), which left pg_dump waiting on an interactive prompt."""
+    if os.environ.get("PGPASSWORD"):
+        return os.environ["PGPASSWORD"]
+    try:
+        return json.loads(SECRETS.read_text(encoding="utf-8"))["superuser"]
+    except Exception:
+        from urllib.parse import unquote, urlparse
+        return unquote(urlparse(dsn).password or "")
+
+
 def default_dsn() -> str:
     """PM_SYNC_DSN, else the local stack's secrets file. Never a literal here."""
     if os.environ.get("PM_SYNC_DSN"):
@@ -336,16 +348,21 @@ def write_report(path: Path, stats, updates, inserts, removals, review, meta):
 
 
 # ── apply ─────────────────────────────────────────────────────────────────
-def backup(conn, pg_bin: str, backup_dir: str) -> Path:
+def backup(pg_bin: str, backup_dir: str, password: str) -> Path:
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out = Path(backup_dir) / f"price_mapper_pre_sync_{ts}.dump"
     Path(backup_dir).mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    env["PGPASSWORD"] = conn.get_dsn_parameters().get("password", "")
+    env["PGPASSWORD"] = password
     cmd = [str(Path(pg_bin) / "pg_dump.exe"), "-h", "127.0.0.1", "-U", "postgres",
-           "-d", "gajab", "-Fc", "--data-only", "-t", "public.products",
+           "-d", "gajab", "-Fc", "--data-only", "-w", "-t", "public.products",
            "-t", "public.price_mappings", "-f", str(out)]
-    subprocess.run(cmd, check=True, env=env)
+    print(f"  backing up -> {out}", flush=True)
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
+    if proc.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+        out.unlink(missing_ok=True)
+        raise SystemExit(f"backup FAILED ({proc.returncode}): {proc.stderr.strip()[:400]}")
+    print(f"  backup ok ({out.stat().st_size / 1e6:.1f} MB)", flush=True)
     return out
 
 
@@ -426,7 +443,8 @@ def main() -> int:
         raise SystemExit(f"not found: {src_path}")
 
     source, src_stats = load_source(src_path, args.limit)
-    conn = psycopg2.connect(args.dsn or default_dsn())
+    dsn = args.dsn or default_dsn()
+    conn = psycopg2.connect(dsn)
     try:
         products, mappings, id_tail = load_db(conn)
         stats = dict(src_stats)
@@ -454,10 +472,12 @@ def main() -> int:
             print("\n  nothing written (dry run). re-run with --apply to commit.")
             return 0
 
+        print("  snapshotting mapping progress...", flush=True)
         before = snapshot_progress(conn)
-        dump = backup(conn, args.pg_bin, args.backup_dir)
-        print(f"  backup -> {dump}")
+        dump = backup(args.pg_bin, args.backup_dir, pg_password(dsn))
+        print(f"  backup -> {dump}", flush=True)
         try:
+            print("  writing...", flush=True)
             n_u, n_i, n_r = apply_changes(conn, updates, inserts, removals)
             conn.commit()
         except Exception:
