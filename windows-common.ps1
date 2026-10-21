@@ -102,8 +102,20 @@ function Clear-ChromeServiceWorkers {
     param([int]$Port)
     $dir = Get-ChromeProfileDir -Port $Port
     if (-not $dir -or -not (Test-Path $dir)) { return }
-    Get-ChildItem $dir -Recurse -Directory -Filter "Service Worker" -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    # Do NOT recurse the whole profile: a Chrome user-data dir holds hundreds of
+    # thousands of cache files, so Get-ChildItem -Recurse here took many minutes
+    # and froze the watchdog loop - which is why a downed scraper/Chrome stayed
+    # down even though the loop "ran". The Service Worker dirs only live one
+    # level down, under each profile dir (Default, Profile 1, ...).
+    Get-ChildItem $dir -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            foreach ($name in @("Service Worker", "Service Worker CacheStorage")) {
+                $target = Join-Path $_.FullName $name
+                if (Test-Path $target) {
+                    Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
 }
 
 # Kill the Chrome on a port and wait for the port to actually close, so the

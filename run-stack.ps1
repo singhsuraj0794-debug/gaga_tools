@@ -30,23 +30,23 @@ function Restart-ChromeIfUnhealthy {
     & (Join-Path $PSScriptRoot $Script)
 }
 
+$heartbeat = Join-Path $env:TEMP "run-stack.heartbeat"
 while ($true) {
+    # Heartbeat first: without it a stalled iteration is invisible and looks
+    # exactly like a watchdog that is running fine.
+    Set-Content -Path $heartbeat -Value (Get-Date -Format "o") -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 60
-    Restart-ChromeIfUnhealthy -Port $ChromeExtractPort -Label "extraction" -Script "start-chrome-extract.ps1"
-    Restart-ChromeIfUnhealthy -Port $ChromeScraperPort -Label "scraping"   -Script "start-chrome-scraper.ps1"
-    Restart-ChromeIfUnhealthy -Port $MonitorChromePort -Label "Lens"       -Script "start-chrome-monitor.ps1"
-    # Reap leaked Playwright drivers. Chrome being down is a normal state, and a
-    # failed connect used to leave a driver behind (a node process holding ~100 MB)
-    # for every search; that is what drove the machine into a page-file
-    # OutOfMemory where not even a shell could start. A healthy stack keeps a
-    # handful, so dozens means a leak.
+    # Reap leaked Playwright drivers BEFORE the Chrome checks: a slow Chrome
+    # stop/start must not delay the one job that prevents a page-file OOM.
     $drivers = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
                  Where-Object { $_.CommandLine -like '*playwright*run-driver*' })
     if ($drivers.Count -gt 40) {
         Write-Output "[run-stack] reaping $($drivers.Count) leaked Playwright drivers"
         foreach ($d in $drivers) { Stop-Process -Id $d.ProcessId -Force -ErrorAction SilentlyContinue }
     }
-
+    Restart-ChromeIfUnhealthy -Port $ChromeExtractPort -Label "extraction" -Script "start-chrome-extract.ps1"
+    Restart-ChromeIfUnhealthy -Port $ChromeScraperPort -Label "scraping"   -Script "start-chrome-scraper.ps1"
+    Restart-ChromeIfUnhealthy -Port $MonitorChromePort -Label "Lens"       -Script "start-chrome-monitor.ps1"
     # Postgres/PostgREST are started here (this process stays alive) so they are
     # not reaped when whatever launched them ends. Re-run the idempotent starter
     # if either port has gone quiet.
