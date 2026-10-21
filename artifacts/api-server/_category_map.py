@@ -691,6 +691,12 @@ class CategoryMapper:
         if gajab_l1:
             inside = self._coarse_candidates(gajab_l1)
             best = self._best_by_overlap(inside, parts[1:], title)
+            if not best and len(parts) > 2:
+                # The product NOUN has no Gajab counterpart (Amazon's 'Dates'
+                # under 'Dried Fruits, Nuts & Seeds'; Gajab has no Dates leaf).
+                # The parent crumbs still describe the product, so match on them
+                # instead of dropping through to a cross-taxonomy guess.
+                best = self._best_by_overlap(inside, parts[1:-1], title)
             if best:
                 return self._result_for(best, "coarse", 0.55)
             # NOT a dead end: 'Toys & Games > … > Pencil Erasers' has no match
@@ -715,10 +721,14 @@ class CategoryMapper:
         # Decor > Deity Ornaments', and '… > Water Treatments' an aquarium
         # conditioner under 'Hair Treatment'. Cues must compound (breadcrumb +
         # product noun + title) before a cross-branch answer is accepted.
-        best = self._best_by_overlap(self._coarse, parts, title)
+        # The L1 crumb is NOT product evidence: 'Grocery & Gourmet Foods'
+        # shares 'grocery'/'food' with every Grocery path, so scoring it made any
+        # grocery product match an arbitrary leaf (117 AHUJA MART rows landed in
+        # 'Beverages > Water'). Score only the crumbs below the L1.
+        best = self._best_by_overlap(self._coarse, parts[1:], title)
         if best:
             want: set = set()
-            for c in parts:
+            for c in parts[1:]:
                 want |= _significant(c)
             best_toks = _significant(best)
             score = len(want & best_toks)
