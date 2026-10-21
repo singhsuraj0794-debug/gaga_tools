@@ -24,7 +24,9 @@ if (Test-PortOpen $PgPort) {
     Write-Host "[db] Postgres already listening on $PgPort"
 } else {
     Write-Host "[db] starting Postgres on $PgPort"
-    & "$PGBIN\pg_ctl.exe" -D $PgData -l (Join-Path $DbRoot "pg.log") start | Out-Null
+    # -w -t 20: never wait unbounded. pg_ctl start blocks until the server answers
+    # (or forever on a stale postmaster.pid), which froze the watchdog.
+    & "$PGBIN\pg_ctl.exe" -w -t 20 -D $PgData -l (Join-Path $DbRoot "pg.log") start | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 500
         if (Test-PortOpen $PgPort) { break }
