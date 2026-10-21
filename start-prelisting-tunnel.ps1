@@ -43,7 +43,7 @@ if (Test-PortOpen $AnalysisPort) {
     Start-Sleep -Seconds 2
 }
 
-# Embedding server (standalone llama.cpp) — EmbeddingGemma for HSN/claim text
+# Embedding server (standalone llama.cpp) - EmbeddingGemma for HSN/claim text
 # embeddings. The pip llama-cpp-python build is too old to load this model, but
 # the winget llama.cpp does. Optional: skipped if llama-server isn't on PATH
 # (the analysis server then falls back to MiniLM).
