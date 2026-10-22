@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Backfill products.sku from a Gajab ProductListing export.
+
+The Price Mapper's product rows never carried the seller's SKU: the only code
+they had was the last segment of the product URL (e.g. `AV-C697185030`), which is
+a LINK code - not the `Sku Number` in the marketplace sheet
+(`AV-C3-AP1-BN1-YK1-100G`). This script adds the column and fills it by joining
+on the URL tail, which is what `products.id` is built from.
+
+Usage:
+    python3 scripts/backfill_product_sku.py --xlsx C:\\gajab\\ProductListing.xlsx
+    python3 scripts/backfill_product_sku.py --xlsx sheet.xlsx --dry-run
+
+Idempotent: re-running with a newer export updates changed SKUs and fills new
+products. Rows whose URL is not in the sheet keep whatever they had.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+import psycopg2
+from psycopg2.extras import execute_values
+from openpyxl import load_workbook
+
+SECRETS = Path(os.environ.get("PM_SYNC_SECRETS", r"C:\gajab\.db-secrets.json"))
+
+
+def default_dsn() -> str:
+    if os.environ.get("PM_SYNC_DSN"):
+        return os.environ["PM_SYNC_DSN"]
+    pw = __import__("json").loads(SECRETS.read_text(encoding="utf-8"))["superuser"]
+    return f"postgresql://postgres:{pw}@127.0.0.1:5432/gajab"
+
+
+def url_tail(url: str) -> str:
+    u = (url or "").strip().rstrip("/")
+    if "/product-detail/" in u:
+        u = u.split("/product-detail/", 1)[1]
+    return re.sub(r"^[_\-\s]+", "", u.rsplit("/", 1)[-1]).strip().upper()
+
+
+def load_sheet(path: Path) -> dict[str, str]:
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb["Product Detail Sheet"] if "Product Detail Sheet" in wb.sheetnames else wb.active
+    it = ws.iter_rows(values_only=True)
+    hdr = [" ".join(str(h).split()) for h in next(it)]
+    ix = {h: i for i, h in enumerate(hdr)}
+    for col in ("Sku Number", "Product URL"):
+        if col not in ix:
+            raise SystemExit(f"sheet has no '{col}' column")
+    out: dict[str, str] = {}
+    for r in it:
+        sku = str(r[ix["Sku Number"]] or "").strip()
+        if not sku:
+            continue
+        t = url_tail(r[ix["Product URL"]])
+        if t:
+            out[t] = sku
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--xlsx", required=True)
+    ap.add_argument("--dsn", default="")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    sheet = load_sheet(Path(args.xlsx).expanduser())
+    print(f"sheet SKUs: {len(sheet)}")
+
+    conn = psycopg2.connect(args.dsn or default_dsn())
+    try:
+        cur = conn.cursor()
+        cur.execute("select id, url from products")
+        pairs = [(pid, sheet.get(url_tail(url) or re.sub(r"^gajab-", "", pid).lstrip("_").upper()))
+                 for pid, url in cur.fetchall()]
+        matched = [(pid, sku) for pid, sku in pairs if sku]
+        print(f"products: {len(pairs)}  matched to a sheet SKU: {len(matched)}"
+              f"  unmatched: {len(pairs) - len(matched)}")
+
+        if args.dry_run:
+            for pid, sku in matched[:5]:
+                print("  ", pid, "->", sku)
+            print("DRY RUN - nothing written")
+            return 0
+
+        cur.execute("alter table products add column if not exists sku text")
+        cur.execute("create temp table _sku (id text primary key, sku text) on commit drop")
+        execute_values(cur, "insert into _sku (id, sku) values %s", matched, page_size=2000)
+        cur.execute("""
+            update products p set sku = s.sku
+              from _sku s
+             where p.id = s.id
+               and (p.sku is null or p.sku <> s.sku)""")
+        changed = cur.rowcount
+        cur.execute("create index if not exists products_sku_idx on products (sku)")
+        conn.commit()
+        print(f"updated {changed} rows")
+        cur.execute("select count(*) from products where sku is not null")
+        print(f"products with a SKU: {cur.fetchone()[0]}")
+        return 0
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
