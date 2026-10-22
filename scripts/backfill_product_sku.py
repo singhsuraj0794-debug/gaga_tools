@@ -58,6 +58,11 @@ def norm_title_strict(t: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", t).split())
 
 
+def title_signature(t: str) -> frozenset:
+    """Order-insensitive token set of a title ('A B C' == 'C A B')."""
+    return frozenset(w for w in norm_title(t).split() if len(w) > 1)
+
+
 def load_sheet(path: Path) -> dict[str, str]:
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb["Product Detail Sheet"] if "Product Detail Sheet" in wb.sheetnames else wb.active
@@ -97,6 +102,22 @@ def load_sheet_titles(path: Path) -> dict[str, str]:
         k = norm_title(str(r[ix["Product Name"]] or ""))
         if sku and k:
             seen[k].add(sku)
+    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+
+def load_sheet_signatures(path: Path) -> dict[frozenset, str]:
+    """token-set -> SKU, only where every row with that signature has one SKU."""
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb["Product Detail Sheet"] if "Product Detail Sheet" in wb.sheetnames else wb.active
+    it = ws.iter_rows(values_only=True)
+    hdr = [" ".join(str(h).split()) for h in next(it)]
+    ix = {h: i for i, h in enumerate(hdr)}
+    seen: dict[frozenset, set] = defaultdict(set)
+    for r in it:
+        sku = str(r[ix["Sku Number"]] or "").strip()
+        sig = title_signature(str(r[ix["Product Name"]] or ""))
+        if sku and sig:
+            seen[sig].add(sku)
     return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
 
 
@@ -149,6 +170,14 @@ def main() -> int:
                      if norm_title_strict(name) in strict]
         matched += by_strict
         print(f"  recovered by strict (variant-aware) title: {len(by_strict)}")
+
+        # pass 4: same words, different order ('Techtiq A B' vs 'Techtiq B A')
+        sigs = load_sheet_signatures(Path(args.xlsx).expanduser())
+        cur.execute("select id, name from products where sku is null")
+        by_sig = [(pid, sigs[title_signature(name)]) for pid, name in cur.fetchall()
+                  if title_signature(name) in sigs]
+        matched += by_sig
+        print(f"  recovered by token-set title: {len(by_sig)}")
         print(f"products: {len(pairs)}  matched to a sheet SKU: {len(matched)}"
               f"  unmatched: {len(pairs) - len(matched)}")
 
