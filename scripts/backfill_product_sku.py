@@ -52,6 +52,12 @@ def norm_title(t: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", t).split())
 
 
+def norm_title_strict(t: str) -> str:
+    """Like norm_title but KEEPS bracketed variant text ('(Black)' vs '(Red)')."""
+    t = html.unescape(t or "").lower()
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", t).split())
+
+
 def load_sheet(path: Path) -> dict[str, str]:
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb["Product Detail Sheet"] if "Product Detail Sheet" in wb.sheetnames else wb.active
@@ -94,6 +100,23 @@ def load_sheet_titles(path: Path) -> dict[str, str]:
     return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
 
 
+def load_sheet_titles_strict(path: Path) -> dict[str, str]:
+    """Same, but bracketed variant text is kept, which separates products that
+    only differ by '(Pack of 2, Black)' / '(Pack of 2, Red)'."""
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb["Product Detail Sheet"] if "Product Detail Sheet" in wb.sheetnames else wb.active
+    it = ws.iter_rows(values_only=True)
+    hdr = [" ".join(str(h).split()) for h in next(it)]
+    ix = {h: i for i, h in enumerate(hdr)}
+    seen: dict[str, set] = defaultdict(set)
+    for r in it:
+        sku = str(r[ix["Sku Number"]] or "").strip()
+        k = norm_title_strict(str(r[ix["Product Name"]] or ""))
+        if sku and k:
+            seen[k].add(sku)
+    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--xlsx", required=True)
@@ -118,6 +141,14 @@ def main() -> int:
                     if norm_title(name) in titles]
         matched += by_title
         print(f"  recovered by exact title: {len(by_title)}")
+
+        # pass 3: strict title (keeps the bracketed variant), still single-SKU
+        strict = load_sheet_titles_strict(Path(args.xlsx).expanduser())
+        cur.execute("select id, name from products where sku is null")
+        by_strict = [(pid, strict[norm_title_strict(name)]) for pid, name in cur.fetchall()
+                     if norm_title_strict(name) in strict]
+        matched += by_strict
+        print(f"  recovered by strict (variant-aware) title: {len(by_strict)}")
         print(f"products: {len(pairs)}  matched to a sheet SKU: {len(matched)}"
               f"  unmatched: {len(pairs) - len(matched)}")
 
