@@ -938,7 +938,7 @@ function skuOf(id: string | null | undefined, url?: string | null): string {
 }
 
 interface ProductInfo {
-  id: string; name?: string; price?: string; mrp_price?: string;
+  id: string; sku?: string; name?: string; price?: string; mrp_price?: string;
   image_url?: string; url?: string; category?: string;
   brand?: string; seller?: string;
 }
@@ -961,7 +961,7 @@ async function fetchProductInfo(ids: string[]): Promise<Map<string, ProductInfo>
       chunks.slice(i, i + 4).map(async (chunk) => {
         const { data, error } = await supabase
           .from("products")
-          .select("id,name,price,mrp_price,image_url,url,category,brand,seller")
+          .select("id,sku,name,price,mrp_price,image_url,url,category,brand,seller")
           .in("id", chunk);
         if (error) throw new Error(error.message);
         for (const p of data || []) {
@@ -987,7 +987,8 @@ function buildMappingsWorkbook(
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Price Mappings");
   worksheet.columns = [
-    { header: "SKU", key: "sku", width: 22 },
+    { header: "SKU", key: "sku", width: 26 },
+    { header: "Product Code", key: "product_code", width: 22 },
     { header: "Gajab Product ID", key: "gajab_product_id", width: 30 },
     { header: "Product Title", key: "gajab_title", width: 60 },
     { header: "Category", key: "category", width: 32 },
@@ -1039,7 +1040,10 @@ function buildMappingsWorkbook(
       m.meesho_url ? "Meesho" : null,
     ].filter(Boolean);
     worksheet.addRow({
-      sku: skuOf(m.gajab_product_id, p?.url || m.gajab_url),
+      // The real marketplace SKU (products.sku); the URL tail is a link code,
+      // not a SKU, so it gets its own column instead of masquerading as one.
+      sku: p?.sku || null,
+      product_code: skuOf(m.gajab_product_id, p?.url || m.gajab_url),
       gajab_product_id: m.gajab_product_id,
       gajab_title: p?.name || m.gajab_title,
       category: p?.category || null,

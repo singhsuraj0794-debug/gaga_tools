@@ -173,6 +173,7 @@ def load_source(path: Path, limit: int = 0):
             "row": n,
             "tail": t,
             "name": clean(g(r, "Product Name")),
+            "sku": clean(g(r, "Sku Number")),
             "status": clean(g(r, "Product Status")),
             "price": money(g(r, "Asking Price")),
             "mrp": money(g(r, "Mrp Price")),
@@ -259,6 +260,7 @@ def plan(source, products, mappings, id_tail, stats):
                            if (p.get(f) or "") != (s.get(f) or "")]
                 used_ids.add(match)
                 updates.append({"db_id": match, "tail": tail, "name": s["name"], "price": s["price"],
+                                "sku": s["sku"],
                                 "mrp": s["mrp"], "image": s["image"], "url": s["url"],
                                 "category": s["category"], "seller": s["seller"],
                                 "how": how, "changed": changed,
@@ -266,6 +268,7 @@ def plan(source, products, mappings, id_tail, stats):
                                 "has_mapping": match in mappings})
             elif confidence == "none":
                 inserts.append({"id": "gajab-" + tail, "tail": tail, "name": s["name"],
+                                "sku": s["sku"],
                                 "price": s["price"], "mrp": s["mrp"], "image": s["image"],
                                 "url": s["url"], "category": s["category"], "seller": s["seller"],
                                 "status": s["status"]})
@@ -384,13 +387,14 @@ def apply_changes(conn, updates, inserts, removals):
 
     if updates:
         cur.execute("create temp table _sync_upd (id text primary key, name text, price text, "
-                    "mrp text, image text, url text, category text) on commit drop")
-        cur.executemany("insert into _sync_upd values (%s,%s,%s,%s,%s,%s,%s)",
+                    "mrp text, image text, url text, category text, sku text) on commit drop")
+        cur.executemany("insert into _sync_upd values (%s,%s,%s,%s,%s,%s,%s,%s)",
                         [(u["db_id"], u["name"], u["price"], u["mrp"], u["image"], u["url"],
-                          u["category"]) for u in updates])
+                          u["category"], u.get("sku") or None) for u in updates])
         cur.execute("""
             update products p set name=u.name, price=u.price, mrp_price=u.mrp,
-                   image_url=u.image, url=u.url, category=u.category
+                   image_url=u.image, url=u.url, category=u.category,
+                   sku = coalesce(nullif(u.sku, ''), p.sku)
               from _sync_upd u where p.id=u.id""")
         # keep the denormalised product copy in price_mappings fresh; mapping
         # columns are deliberately absent from this SET list
@@ -402,11 +406,11 @@ def apply_changes(conn, updates, inserts, removals):
 
     if inserts:
         cur.executemany("""
-            insert into products (id, name, price, mrp_price, image_url, url, category, seller)
-            values (%s,%s,%s,%s,%s,%s,%s,%s)
+            insert into products (id, name, price, mrp_price, image_url, url, category, seller, sku)
+            values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             on conflict (id) do nothing""",
             [(i["id"], i["name"], i["price"], i["mrp"], i["image"], i["url"],
-              i["category"], i["seller"]) for i in inserts])
+              i["category"], i["seller"], i.get("sku") or None) for i in inserts])
 
     if removals:
         ids = [r["db_id"] for r in removals]
