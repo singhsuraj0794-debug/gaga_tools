@@ -927,16 +927,77 @@ for (const job of refetchJobs.jobs.values()) {
   }
 }
 
+/** The Gajab SKU is the last URL segment (`gajab-___A816414756` -> `A816414756`).
+ *  The storefront puts it at the end of the product URL, which is what the
+ *  product id is built from, so it is derivable for every row. */
+function skuOf(id: string | null | undefined, url?: string | null): string {
+  const tail = (url || "").split("/product-detail/").pop()?.split("/").pop() || "";
+  const fromUrl = tail.replace(/^[_\-\s]+/, "").trim();
+  if (fromUrl) return fromUrl;
+  return String(id || "").replace(/^gajab-/i, "").replace(/^_+/, "");
+}
+
+interface ProductInfo {
+  id: string; name?: string; price?: string; mrp_price?: string;
+  image_url?: string; url?: string; category?: string;
+  brand?: string; seller?: string;
+}
+
+/** Product columns for the export. price_mappings only carries a denormalised
+ *  title/price/url copy, so the rest (SKU, category, MRP, brand, seller, image)
+ *  comes from the products table in id chunks (chunked to keep the PostgREST
+ *  query string short). */
+async function fetchProductInfo(ids: string[]): Promise<Map<string, ProductInfo>> {
+  const supabase = getSupabase()!;
+  const out = new Map<string, ProductInfo>();
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  const CHUNK = 200;
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += CHUNK) chunks.push(unique.slice(i, i + CHUNK));
+  // A few chunks at a time: 21k mappings is ~107 queries, and doing them
+  // sequentially made the export feel hung.
+  for (let i = 0; i < chunks.length; i += 4) {
+    await Promise.all(
+      chunks.slice(i, i + 4).map(async (chunk) => {
+        const { data, error } = await supabase
+          .from("products")
+          .select("id,name,price,mrp_price,image_url,url,category,brand,seller")
+          .in("id", chunk);
+        if (error) throw new Error(error.message);
+        for (const p of data || []) {
+          if (p && p.id) out.set(p.id, p as ProductInfo);
+        }
+      }),
+    );
+  }
+  return out;
+}
+
+const asNumber = (v: any): number => {
+  const n = Number(String(v ?? "").replace(/[^0-9.]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+};
+
 /** The Price Mappings workbook, shared by /export (client rows) and /export-all
  *  (every mapped row). */
-function buildMappingsWorkbook(mappings: any[]): ExcelJS.Workbook {
+function buildMappingsWorkbook(
+  mappings: any[],
+  products: Map<string, ProductInfo> = new Map(),
+): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("Price Mappings");
   worksheet.columns = [
+    { header: "SKU", key: "sku", width: 22 },
     { header: "Gajab Product ID", key: "gajab_product_id", width: 30 },
     { header: "Product Title", key: "gajab_title", width: 60 },
+    { header: "Category", key: "category", width: 32 },
+    { header: "Brand", key: "brand", width: 22 },
+    { header: "Seller", key: "seller", width: 26 },
+    { header: "MRP", key: "mrp", width: 14 },
     { header: "Gajab Price", key: "gajab_price", width: 20 },
+    { header: "Discount %", key: "discount", width: 12 },
     { header: "Gajab URL", key: "gajab_url", width: 60 },
+    { header: "Product Image", key: "image_url", width: 60 },
     { header: "Amazon URL", key: "amazon_url", width: 60 },
     { header: "Amazon Price", key: "amazon_price", width: 20 },
     { header: "Amazon Match Score", key: "amazon_match_score", width: 18 },
@@ -954,16 +1015,41 @@ function buildMappingsWorkbook(mappings: any[]): ExcelJS.Workbook {
     { header: "Meesho URL", key: "meesho_url", width: 60 },
     { header: "Meesho Price", key: "meesho_price", width: 20 },
     { header: "Meesho Match Score", key: "meesho_match_score", width: 18 },
+    { header: "Meesho DINOv2", key: "meesho_dinov2", width: 14 },
+    { header: "Meesho CLIP", key: "meesho_clip", width: 14 },
+    { header: "Meesho Match Tag", key: "meesho_match_tag", width: 18 },
+    { header: "Meesho Unavailable", key: "meesho_unavailable", width: 20 },
+    { header: "Mapped On", key: "mapped_on", width: 12 },
     { header: "Last Checked", key: "last_checked", width: 25 },
   ];
 
   const pct = (v: any) => (v != null ? Math.round(Number(v) * 100) + "%" : null);
   for (const m of mappings) {
+    const p = products.get(m.gajab_product_id);
+    const price = p?.price || m.gajab_price;
+    const mrp = p?.mrp_price || "";
+    const priceN = asNumber(price);
+    const mrpN = asNumber(mrp);
+    const discount = priceN > 0 && mrpN > priceN
+      ? Math.round(((mrpN - priceN) / mrpN) * 100)
+      : null;
+    const platforms = [
+      m.amazon_url ? "Amazon" : null,
+      m.flipkart_url ? "Flipkart" : null,
+      m.meesho_url ? "Meesho" : null,
+    ].filter(Boolean);
     worksheet.addRow({
+      sku: skuOf(m.gajab_product_id, p?.url || m.gajab_url),
       gajab_product_id: m.gajab_product_id,
-      gajab_title: m.gajab_title,
-      gajab_price: m.gajab_price,
-      gajab_url: m.gajab_url,
+      gajab_title: p?.name || m.gajab_title,
+      category: p?.category || null,
+      brand: p?.brand || null,
+      seller: p?.seller || null,
+      mrp: mrp || null,
+      gajab_price: price,
+      discount: discount != null ? discount + "%" : null,
+      gajab_url: p?.url || m.gajab_url,
+      image_url: p?.image_url || m.gajab_image_url || null,
       amazon_url: m.amazon_url,
       amazon_price: m.amazon_price,
       amazon_match_score: m.amazon_match_score,
@@ -981,6 +1067,11 @@ function buildMappingsWorkbook(mappings: any[]): ExcelJS.Workbook {
       meesho_url: m.meesho_url,
       meesho_price: m.meesho_price,
       meesho_match_score: m.meesho_match_score,
+      meesho_dinov2: pct(m.meesho_dinov2),
+      meesho_clip: pct(m.meesho_clip),
+      meesho_match_tag: m.meesho_match_tag || null,
+      meesho_unavailable: m.meesho_unavailable ? "Yes" : "No",
+      mapped_on: platforms.join("+") || null,
       last_checked: m.last_checked,
     });
   }
@@ -995,7 +1086,15 @@ function buildMappingsWorkbook(mappings: any[]): ExcelJS.Workbook {
 }
 
 async function sendMappingsWorkbook(res: Response, mappings: any[], filename: string): Promise<void> {
-  const workbook = buildMappingsWorkbook(mappings);
+  // Enrichment is best-effort: a product-lookup failure must not cost the user
+  // the whole export (the mapping columns alone are still useful).
+  let products = new Map<string, ProductInfo>();
+  try {
+    products = await fetchProductInfo(mappings.map((m) => m.gajab_product_id));
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, "price-mapper export: product enrichment failed");
+  }
+  const workbook = buildMappingsWorkbook(mappings, products);
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   await workbook.xlsx.write(res);
