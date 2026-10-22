@@ -174,30 +174,50 @@ def main() -> int:
     ids = [(pid, "delisted", "") for pid, _, _ in delisted]
     ids += [(pid, "non-active", status) for pid, _, _, status in nonactive]
     try:
+        def live_columns(table: str) -> list[str]:
+            cur.execute("""select a.attname, format_type(a.atttypid, a.atttypmod)
+                             from pg_attribute a join pg_class c on c.oid = a.attrelid
+                            where c.relname = %s and a.attnum > 0 and not a.attisdropped
+                            order by a.attnum""", (table,))
+            return cur.fetchall()
+
+        col_cache = {}
         for live, arch in (("products", "products_archive"),
                            ("price_mappings", "price_mappings_archive")):
             cur.execute(f"create table if not exists {arch} (like {live} including defaults)")
             cur.execute(f"alter table {arch} add column if not exists archived_at timestamptz default now()")
             cur.execute(f"alter table {arch} add column if not exists archive_reason text")
             cur.execute(f"alter table {arch} add column if not exists source_status text")
+            cols = live_columns(live)
+            col_cache[live] = [c for c, _ in cols]
+            # an archive table created before a column was added to the live table
+            # (products.sku) would otherwise make `select p.*` insert one extra value
+            for name, typ in cols:
+                cur.execute(f"alter table {arch} add column if not exists {name} {typ}")
 
         cur.execute("create temp table _clean (id text primary key, reason text, status text) on commit drop")
         if ids:
             execute_values(cur, "insert into _clean (id, reason, status) values %s", ids, page_size=2000)
-            cur.execute("""insert into price_mappings_archive
-                           select m.*, now(), c.reason, c.status
-                             from price_mappings m join _clean c on c.id = m.gajab_product_id""")
+            pm_cols = col_cache["price_mappings"]
+            cur.execute(f"""insert into price_mappings_archive
+                               ({", ".join(pm_cols)}, archived_at, archive_reason, source_status)
+                            select {", ".join("m." + c for c in pm_cols)}, now(), c.reason, c.status
+                              from price_mappings m join _clean c on c.id = m.gajab_product_id""")
             cur.execute("""delete from price_mappings m using _clean c where c.id = m.gajab_product_id""")
-            cur.execute("""insert into products_archive
-                           select p.*, now(), c.reason, c.status
-                             from products p join _clean c on c.id = p.id""")
+            p_cols = col_cache["products"]
+            cur.execute(f"""insert into products_archive
+                               ({", ".join(p_cols)}, archived_at, archive_reason, source_status)
+                            select {", ".join("p." + c for c in p_cols)}, now(), c.reason, c.status
+                              from products p join _clean c on c.id = p.id""")
             cur.execute("""delete from products p using _clean c where c.id = p.id""")
 
-        cur.execute("""insert into price_mappings_archive
-                       select m.*, now(), 'orphan', null
-                         from price_mappings m
-                         left join products p on p.id = m.gajab_product_id
-                        where p.id is null""")
+        pm_cols = col_cache["price_mappings"]
+        cur.execute(f"""insert into price_mappings_archive
+                           ({", ".join(pm_cols)}, archived_at, archive_reason, source_status)
+                        select {", ".join("m." + c for c in pm_cols)}, now(), 'orphan', null
+                          from price_mappings m
+                          left join products p on p.id = m.gajab_product_id
+                         where p.id is null""")
         cur.execute("""delete from price_mappings m
                         where not exists (select 1 from products p where p.id = m.gajab_product_id)""")
         conn.commit()
