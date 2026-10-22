@@ -18,9 +18,11 @@ products. Rows whose URL is not in the sheet keep whatever they had.
 from __future__ import annotations
 
 import argparse
+import html
 import os
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import psycopg2
@@ -44,6 +46,12 @@ def url_tail(url: str) -> str:
     return re.sub(r"^[_\-\s]+", "", u.rsplit("/", 1)[-1]).strip().upper()
 
 
+def norm_title(t: str) -> str:
+    t = html.unescape(t or "").lower()
+    t = re.sub(r"\(.*?\)|\[.*?\]", " ", t)
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", t).split())
+
+
 def load_sheet(path: Path) -> dict[str, str]:
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb["Product Detail Sheet"] if "Product Detail Sheet" in wb.sheetnames else wb.active
@@ -64,6 +72,28 @@ def load_sheet(path: Path) -> dict[str, str]:
     return out
 
 
+def load_sheet_titles(path: Path) -> dict[str, str]:
+    """normalised title -> SKU, only where that title has exactly ONE SKU.
+
+    Some products are in the DB but their URL is not in the sheet (renamed
+    listings). Their title still matches exactly, which recovers ~800 rows;
+    ambiguous titles are skipped so two different products cannot be given the
+    same SKU on a hunch.
+    """
+    wb = load_workbook(path, read_only=True, data_only=True)
+    ws = wb["Product Detail Sheet"] if "Product Detail Sheet" in wb.sheetnames else wb.active
+    it = ws.iter_rows(values_only=True)
+    hdr = [" ".join(str(h).split()) for h in next(it)]
+    ix = {h: i for i, h in enumerate(hdr)}
+    seen: dict[str, set] = defaultdict(set)
+    for r in it:
+        sku = str(r[ix["Sku Number"]] or "").strip()
+        k = norm_title(str(r[ix["Product Name"]] or ""))
+        if sku and k:
+            seen[k].add(sku)
+    return {k: next(iter(v)) for k, v in seen.items() if len(v) == 1}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--xlsx", required=True)
@@ -81,6 +111,13 @@ def main() -> int:
         pairs = [(pid, sheet.get(url_tail(url) or re.sub(r"^gajab-", "", pid).lstrip("_").upper()))
                  for pid, url in cur.fetchall()]
         matched = [(pid, sku) for pid, sku in pairs if sku]
+        # pass 2: exact title, only when that title maps to a single SKU
+        titles = load_sheet_titles(Path(args.xlsx).expanduser())
+        cur.execute("select id, name from products where sku is null")
+        by_title = [(pid, titles[norm_title(name)]) for pid, name in cur.fetchall()
+                    if norm_title(name) in titles]
+        matched += by_title
+        print(f"  recovered by exact title: {len(by_title)}")
         print(f"products: {len(pairs)}  matched to a sheet SKU: {len(matched)}"
               f"  unmatched: {len(pairs) - len(matched)}")
 
