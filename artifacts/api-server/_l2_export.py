@@ -539,7 +539,8 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     if progress:
         progress.write("Done", state="done", detail="batch complete", result={
             k: manifest[k] for k in ("batch_id", "products", "exported_products",
-                                     "review_products", "agent_rulings", "taxonomy_gaps",
+                                     "review_products", "agent_rulings", "agent_cache_hits",
+                                     "cache_written", "taxonomy_gaps",
                                      "exported_by_level", "files")
         })
     return manifest
