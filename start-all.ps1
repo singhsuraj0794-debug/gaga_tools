@@ -33,8 +33,12 @@ Stage "all: scraper done"
 # slow, and the watchdog loop already re-runs it on demand.
 if (-not (Test-PortOpen $PgPort) -or -not (Test-PortOpen $PostgrestPort) -or -not (Test-PortOpen $ShimPort)) {
     & "$PSScriptRoot\start-db.ps1"
+& "$PSScriptRoot\start-category-agent.ps1"
 }
 Stage "all: db done"
+Stage "all: agent"
+& "$PSScriptRoot\start-category-agent.ps1"
+Stage "all: agent done"
 & "$PSScriptRoot\start-chrome-extract.ps1"
 Stage "all: chrome-extract done"
 & "$PSScriptRoot\start-chrome-scraper.ps1"

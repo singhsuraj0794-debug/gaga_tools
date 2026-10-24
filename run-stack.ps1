@@ -77,6 +77,10 @@ while ($true) {
     # up - exactly what happened here: /api/healthz returned 502 through ngrok
     # while /healthz, /rest/v1 and /storage/v1 all answered. Their starters are
     # idempotent, so re-running them brings back just the dead one.
+    # Category agent (Qwen2.5-14B on the GPU): the export falls back to rules if
+    # it is down, so a missed restart only costs accuracy, never the batch.
+    if (-not (Test-PortOpen $AgentPort)) { Start-Starter "start-category-agent.ps1" }
+
     if (-not (Test-PortOpen $ApiPort) -or -not (Test-PortOpen $ScraperPort)) {
         Write-Host "[run-stack] API ($ApiPort) or scraper ($ScraperPort) is down - restarting"
         Start-Starter "start-prelisting-tunnel.ps1"
