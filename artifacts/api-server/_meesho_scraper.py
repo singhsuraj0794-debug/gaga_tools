@@ -34,7 +34,7 @@ CACHE_FILE = os.path.join(os.path.dirname(__file__), ".product_cache.json")
 # Bump when the extraction logic changes: entries written by an older version are
 # dropped on load, otherwise a persistent cache keeps serving results produced by
 # code that no longer exists (this hid the source_category_path fix completely).
-CACHE_VERSION = "v3-category"
+CACHE_VERSION = "v4-no-empty-pages"
 _cache = {}  # url_hash -> product dict
 # The local scraper server is a ThreadingHTTPServer: several product scrapes run
 # at once (SCRAPE_CONCURRENCY) and each success mutates _cache and saves it.
