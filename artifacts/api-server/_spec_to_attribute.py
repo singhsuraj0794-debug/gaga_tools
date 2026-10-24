@@ -219,7 +219,9 @@ def load_aliases(path: str | Path | None = None) -> dict[str, list[str]]:
         for k, v in (data.get("aliases") or {}).items():
             key = normalise_key(k)
             if isinstance(v, str):
-                out[key] = [v] if v else []
+                # an empty target is an explicit DROP (noise key); keep it as
+                # [""] so map_specs can tell it apart from "no alias at all"
+                out[key] = [v] if v else [""]
             elif isinstance(v, list):
                 out[key] = [str(x) for x in v]
             else:

@@ -1,5 +1,5 @@
 {
-  "version": 1.1,
+  "version": 1.11,
   "note": "Curated scraped-spec-key -> Gajab attribute. Keys are normalised (lowercase, punctuation to spaces). Leave a target empty to explicitly drop a noisy key.",
   "aliases": {
     "colour": "color",
@@ -114,7 +114,13 @@
     "is the item dishwasher safe?": "",
     "is the item microwaveable?": "",
     "recommended uses for product": "",
-    "specific uses for product": ""
+    "specific uses for product": "",
+    "shape": "shape",
+    "enclosure material": "material",
+    "number of items": "net quantity",
+    "special feature": "",
+    "product features": "",
+    "manufacture year": ""
   },
   "_comment_units": "unit companions handled automatically (product_weight_unit etc.)",
   "_comment_marketplace": "Amazon/Meesho field vocabulary added for the L2 export; targets only apply when the L3/L4 declares them."
