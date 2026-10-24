@@ -289,6 +289,8 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
     cat_mapper = CategoryMapper()
 
     rows: list[dict] = []
+    # raw specs per product, persisted at the end (audit + alias growth)
+    spec_records: list[dict] = []
     # per-spec column metadata (attribute name, leaf, type, mandatory, valid)
     # so each sheet's headers keep the template's "attribute" spelling
     col_meta: dict[str, dict] = {}
@@ -362,6 +364,18 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
                 mapping_method = resolved.get("method", "curated")
                 attrs = attr_mapper.attrs_for(node)
                 mapped = attr_mapper.map_specs(specs, node)
+                # Keep what the page actually said, and where each value landed.
+                if specs:
+                    spec_records.append({
+                        "platform": platform,
+                        "product_id": str(p.get("id") or p.get("sku") or ""),
+                        "url": p.get("url") or "",
+                        "title": _clean(p.get("title")),
+                        "l4_path": node,
+                        "specs": specs,
+                        "mapped": mapped.get("attributes") or {},
+                        "unmapped": mapped.get("unmapped") or [],
+                    })
                 stats["mapped"] += 1
                 # A coarse assignment (no L4 fits) is valid but less specific — say so
                 # rather than presenting it as a precise match.
@@ -482,6 +496,12 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
             err["Review Notes"] = f"row {idx + 1} failed: {type(exc).__name__}: {exc}"[:300]
             rows.append(err)
 
+    if spec_records:
+        try:
+            import _spec_store
+            stats["specs_stored"] = _spec_store.record_many(spec_records)
+        except Exception:  # noqa: BLE001 - the store must never break an export
+            pass
     out = build_sheets(rows, stats, col_meta, cat_attrs)
     out["review"], out["review_columns"] = build_review(rows)
     if out["review"]:

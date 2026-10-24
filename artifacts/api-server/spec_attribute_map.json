@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": 1.1,
   "note": "Curated scraped-spec-key -> Gajab attribute. Keys are normalised (lowercase, punctuation to spaces). Leave a target empty to explicitly drop a noisy key.",
   "aliases": {
     "colour": "color",
@@ -63,7 +63,59 @@
     "net volume": [
       "net volume"
     ],
-    "sku": []
+    "sku": [],
+    "lid material": "material",
+    "body material": "material",
+    "outer material": [
+      "material",
+      "outer material"
+    ],
+    "frame material": [
+      "material",
+      "frame material"
+    ],
+    "fabric type": [
+      "material",
+      "fabric"
+    ],
+    "color name": "color",
+    "colour name": "color",
+    "item colour": "color",
+    "item form": [
+      "product form",
+      "form"
+    ],
+    "product form factor": "product form",
+    "container shape": [
+      "shape",
+      "container shape"
+    ],
+    "shape name": "shape",
+    "product care instructions": "care instructions",
+    "care instruction": "care instructions",
+    "washing instructions": "wash care",
+    "item volume": "capacity",
+    "volume": "capacity",
+    "capacity name": "capacity",
+    "item package quantity": "net quantity",
+    "pack size": "net quantity",
+    "country of publication": "country of origin",
+    "country of assembly": "country of origin",
+    "item condition": "condition",
+    "style name": "model or style",
+    "model number": "model or style",
+    "asin": "",
+    "manufacturer": "",
+    "packer contact information": "",
+    "best sellers rank": "",
+    "customer reviews": "",
+    "material features": "",
+    "material feature": "",
+    "is the item dishwasher safe?": "",
+    "is the item microwaveable?": "",
+    "recommended uses for product": "",
+    "specific uses for product": ""
   },
-  "_comment_units": "unit companions handled automatically (product_weight_unit etc.)"
+  "_comment_units": "unit companions handled automatically (product_weight_unit etc.)",
+  "_comment_marketplace": "Amazon/Meesho field vocabulary added for the L2 export; targets only apply when the L3/L4 declares them."
 }

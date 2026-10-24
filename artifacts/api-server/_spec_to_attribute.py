@@ -488,21 +488,40 @@ class SpecAttributeMapper:
                 continue
 
             # exact attribute name, then curated candidates (first one the
-            # category declares wins)
+            # category declares wins). A candidate may also name a UNIT PAIR
+            # base ('capacity', 'net quantity'): then '1 Litres' fills
+            # capacity (Unit Value)/(UOM) instead of being dropped.
             target = by_name.get(key)
+            pair_base = key if key in pairs else None
+            drop_key = False
             if target is None and key in self.aliases:
-                for cand in self.aliases[key]:
-                    target = by_name.get(normalise_key(cand))
-                    if target is not None:
+                cands = self.aliases[key]
+                if not isinstance(cands, list):
+                    cands = [cands]
+                for cand in cands:
+                    nk = normalise_key(cand)
+                    if not nk:
+                        drop_key = True          # curated as noise: drop silently
+                        break
+                    t = by_name.get(nk)
+                    if t is not None:
+                        target, pair_base = t, None
+                        break
+                    if nk in pairs:
+                        pair_base = nk
                         break
             if target is not None:
                 snapped = self._match_valid(target, val)
                 out[target["attribute"]] = snapped or coerce_value(target, val)
                 used.add(key)
                 continue
+            if drop_key:
+                used.add(key)
+                continue
 
             # unit pair: 'capacity' -> capacity (Unit Value) + capacity (UOM)
-            if key in pairs:
+            if pair_base in pairs:
+                key = pair_base
                 num, uom = split_value_unit(val)
                 pair = pairs[key]
                 if num and "unit value" in pair:
