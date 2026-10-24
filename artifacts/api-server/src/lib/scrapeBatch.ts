@@ -39,7 +39,9 @@ export function scrapeBatchDelayMs(fallback = 300): number {
  */
 const GLOBAL_LIMIT = (() => {
   const v = Number(process.env.SCRAPE_GLOBAL_CONCURRENCY ?? "");
-  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 10;
+  // 16: one job keeps its own 8, two jobs still get ~8 each, three queue behind
+  // the budget instead of running 24 requests through the same Chrome/IP.
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 16;
 })();
 let inFlight = 0;
 const waiters: Array<() => void> = [];
