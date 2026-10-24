@@ -417,7 +417,7 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
             target = out_dir / f"{leaf}_{n}.xlsx"
             n += 1
         if progress:
-            progress.write("Writing L2 workbooks", done=gi, total=total_groups,
+            progress.write("Writing L2 workbooks", done=gi + 1, total=total_groups,
                            detail=f"{_leaf_of(l2)} ({len(group)} rows)")
         info = _write_group_rows(group, l2, template, target)
         info.update({"l2": l2, "template_version": template["version"],
