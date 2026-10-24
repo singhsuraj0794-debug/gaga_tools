@@ -20,6 +20,14 @@ PROXY = os.environ.get("SCRAPER_PROXY", "")
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "")
 # Chrome CDP instance used for scraping (runs through the Webshare proxy).
 SCRAPE_CDP_URL = os.environ.get("SCRAPE_CDP_URL", "http://localhost:9223")
+EXTRACT_CDP_URL = os.environ.get("EXTRACT_CDP_URL", "http://localhost:9225")
+# Shared browsers, tried before launching our own: a fresh headless Chrome per
+# product cost ~2-3s of startup plus a fixed 3s settle, and eight of them at once
+# fought for this box's 6 cores (scraping never got past ~1.4x parallelism).
+_CDP_CANDIDATES = [c for c in (EXTRACT_CDP_URL, SCRAPE_CDP_URL) if c]
+# A CDP endpoint that fails repeatedly is skipped for a while (dead proxy, etc.)
+_CDP_STATE: dict = {}
+_CDP_COOLDOWN = 300
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
@@ -107,11 +115,28 @@ def _try_playwright(url: str, ua: str = "") -> str:
             _exe = chrome_executable()
             if _exe:
                 launch_kwargs["executable_path"] = _exe
-            browser = p.chromium.launch(**launch_kwargs)
+            browser = None
+            owns_browser = True
+            import time as _t
+            for cdp in _CDP_CANDIDATES:
+                if _CDP_STATE.get(cdp, 0) > _t.time():
+                    continue
+                try:
+                    browser = p.chromium.connect_over_cdp(cdp, timeout=8000)
+                    owns_browser = False
+                    break
+                except Exception:
+                    _CDP_STATE[cdp] = _t.time() + _CDP_COOLDOWN
+                    browser = None
+            if browser is None:
+                browser = p.chromium.launch(**launch_kwargs)
             ctx = browser.new_context(
                 user_agent=ua or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                 viewport={"width": 1440, "height": 900},
                 locale="en-IN",
+                # the shared profile holds flipkart.com/sw.js, which crashed
+                # Playwright's driver on attach - blocking SWs makes CDP safe
+                service_workers="block",
             )
             page = ctx.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -172,7 +197,8 @@ def _try_playwright(url: str, ua: str = "") -> str:
                 html += ('<script id="__gajab_src_category__" type="application/json">'
                          + json.dumps(bc) + '</script>')
             ctx.close()
-            browser.close()
+            if owns_browser:
+                browser.close()
             if not _is_bot_page(html):
                 return html
     except Exception:
