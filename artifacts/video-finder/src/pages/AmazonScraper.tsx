@@ -497,7 +497,7 @@ export default function AmazonScraper() {
     if (products.length === 0) return;
     setIsExporting(true);
     try {
-      await exportL2WithProgress("amazon", products, "amazon-l2-templates.zip", setL2Progress);
+      await exportL2WithProgress("amazon", products, "amazon-l2-templates.zip", setL2Progress, sessionStorage.getItem("amazon_jobId"));
     } catch (error) {
       console.error("L2 export error:", error);
       const detail = error instanceof Error ? error.message : String(error);

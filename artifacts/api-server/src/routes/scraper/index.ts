@@ -421,11 +421,32 @@ function readL2Progress(jobId: string): any {
   return p;
 }
 
+/** Products for a platform, read from the persisted scrape job when the client
+ *  sends a jobId. Posting an entire 8k-product catalogue as JSON over the tunnel
+ *  was fragile (a truncated body could even kill the process). */
+function productsFromJob(platform: string, jobId: string): any[] | null {
+  const dirName = `${String(platform || "").toLowerCase()}_jobs`;
+  const file = path.resolve(__dirname, "..", dirName, `${jobId}.json`);
+  try {
+    const job = JSON.parse(fs.readFileSync(file, "utf-8"));
+    return Array.isArray(job?.products) ? job.products : null;
+  } catch {
+    return null;
+  }
+}
+
 router.post("/export-l2/start", async (req: Request, res: Response): Promise<void> => {
   try {
-    const { products, platform = "" } = req.body || {};
+    const { products: posted, platform = "", jobId: scrapeJobId = "" } = req.body || {};
+    const products = (Array.isArray(posted) && posted.length)
+      ? posted
+      : (scrapeJobId ? productsFromJob(String(platform), String(scrapeJobId)) : null);
     if (!Array.isArray(products) || products.length === 0) {
-      res.status(400).json({ error: "products array required" });
+      res.status(400).json({
+        error: scrapeJobId
+          ? `scrape job ${scrapeJobId} not found for ${platform}`
+          : "products array (or jobId) required",
+      });
       return;
     }
     const jobId = crypto.randomBytes(8).toString("hex");

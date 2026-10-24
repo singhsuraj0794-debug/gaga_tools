@@ -346,7 +346,7 @@ export default function FlipkartScraper() {
     if (products.length === 0) return;
     setIsExporting(true);
     try {
-      await exportL2WithProgress("flipkart", products, "flipkart-l2-templates.zip", setL2Progress);
+      await exportL2WithProgress("flipkart", products, "flipkart-l2-templates.zip", setL2Progress, sessionStorage.getItem("flipkart_jobId"));
     } catch (error) {
       console.error("L2 export error:", error);
       const detail = error instanceof Error ? error.message : String(error);

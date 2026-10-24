@@ -384,7 +384,7 @@ export default function MeeshoScraper() {
     if (scrapedProducts.length === 0) return;
     setIsExporting(true);
     try {
-      await exportL2WithProgress("meesho", scrapedProducts, "meesho-l2-templates.zip", setL2Progress);
+      await exportL2WithProgress("meesho", scrapedProducts, "meesho-l2-templates.zip", setL2Progress, sessionStorage.getItem("meesho_jobId"));
     } catch (error) {
       console.error("L2 export error:", error);
       const detail = error instanceof Error ? error.message : String(error);

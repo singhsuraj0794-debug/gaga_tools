@@ -31,4 +31,15 @@ app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 app.use("/api", router);
 
+// A truncated request body (large catalogue POST over the tunnel) used to throw
+// out of body-parser and kill the whole API. Answer 400 instead.
+app.use((err: any, _req: any, res: any, _next: any) => {
+  if (res.headersSent) return;
+  const parseError = err?.type === "entity.parse.failed";
+  const status = parseError ? 400 : (err?.status && err.status < 500 ? err.status : 500);
+  res.status(status).json({
+    error: parseError ? "malformed JSON body (request was truncated?)" : (err?.message || "server error"),
+  });
+});
+
 export default app;

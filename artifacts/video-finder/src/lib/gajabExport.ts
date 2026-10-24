@@ -47,11 +47,17 @@ export interface L2ExportProgress {
 export async function startL2Export(
   platform: string,
   products: unknown[],
+  scrapeJobId?: string | null,
 ): Promise<{ jobId: string; total: number }> {
+  // Prefer the server-side job: the catalogue can be megabytes, and a truncated
+  // body over the tunnel is both slow and fragile.
+  const body = scrapeJobId && products.length > 0
+    ? { platform, jobId: scrapeJobId }
+    : { products, platform };
   const response = await fetch(`${API_BASE}/api/scraper/export-l2/start`, withApiHeaders({
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ products, platform }),
+    body: JSON.stringify(body),
   }));
   if (!response.ok) {
     const detail = (await response.text().catch(() => "")).slice(0, 300);
@@ -82,6 +88,7 @@ export async function exportL2WithProgress(
   products: unknown[],
   filename: string,
   onProgress: (p: L2ExportProgress) => void,
+  scrapeJobId?: string | null,
   pollMs = 1500,
 ): Promise<void> {
   onProgress({
@@ -89,7 +96,7 @@ export async function exportL2WithProgress(
     done: 0, total: products.length, detail: "queued",
   });
 
-  const { jobId, total } = await startL2Export(platform, products);
+  const { jobId, total } = await startL2Export(platform, products, scrapeJobId);
   let tick = 0;
   for (;;) {
     await new Promise((r) => setTimeout(r, pollMs));
