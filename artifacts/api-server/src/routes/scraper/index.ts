@@ -18,7 +18,7 @@ import {
 import type { EcommerceProduct } from "@workspace/api-zod";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
-import { runBatched } from "../../lib/scrapeBatch";
+import { runBatched, scrapeLoad, scrapeConcurrency } from "../../lib/scrapeBatch";
 import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
 import crypto from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -540,6 +540,11 @@ router.post("/export-l2/:jobId/cancel", (req: Request, res: Response): void => {
 
 // ── background enrichment queue (category + attributes) ────────────────────
 const ENRICH_QUEUE_SCRIPT = path.resolve(__dirname, "_enrich_queue.py");
+
+/** Live scrape concurrency: in-flight vs the shared budget. */
+router.get("/scrape-load", (_req: Request, res: Response): void => {
+  res.json({ ...scrapeLoad(), perJob: scrapeConcurrency() });
+});
 
 router.get("/enrich/status", async (_req: Request, res: Response): Promise<void> => {
   try {
