@@ -348,11 +348,12 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     if gaps:
         review_dir.mkdir(parents=True, exist_ok=True)
         gw = Workbook(); gws = gw.active; gws.title = "Taxonomy Gaps"
-        gws.append(["Product", "Source category", "Suggested branch", "Nearest candidates"])
+        gws.append(["Product", "Source category", "Suggested branch", "Why",
+                    "Nearest existing candidates"])
         for g in gaps:
             gws.append([g.get("title"), g.get("source_category"), g.get("suggested_branch"),
-                        " | ".join(g.get("shortlist") or [])])
-        for col, w in zip("ABCD", (58, 52, 52, 90)):
+                        g.get("why", ""), " | ".join(g.get("shortlist") or [])])
+        for col, w in zip("ABCDE", (58, 52, 52, 44, 90)):
             gws.column_dimensions[col].width = w
         gws.freeze_panes = "A2"
         gw.save(review_dir / "Taxonomy_Gaps.xlsx")

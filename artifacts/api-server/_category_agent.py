@@ -154,6 +154,43 @@ def _ask(candidates: list[str], text: str) -> tuple[int, float, str]:
     return idx, conf, reason
 
 
+SUGGEST_SYSTEM = (
+    "You maintain the category taxonomy of an Indian marketplace. For the product you are given, "
+    "propose the most specific category path it SHOULD have, using an existing top-level category "
+    "where one fits and inventing only the missing levels below it. "
+    "Answer with JSON only: {\"path\": \"L1 > L2 > L3\", \"why\": \"<15 words>\"}."
+)
+
+
+def suggest_branch(p: dict, l1s: list[str]) -> tuple[str, str]:
+    """Ask for a NEW placeholder path when no existing category fits.
+
+    Advisory only: the value is shown to a human so the taxonomy can be extended.
+    It is never written into a product's category.
+    """
+    user = (f"Existing top-level categories: {', '.join(l1s)}\n"
+            f"Product: {product_text(p)[:900]}\n"
+            f"Seller category: {p.get('source_category_path') or ''}\n"
+            "Which category path should this product have?")
+    try:
+        r = requests.post(f"{CHAT_URL}/v1/chat/completions", timeout=TIMEOUT, json={
+            "messages": [{"role": "system", "content": SUGGEST_SYSTEM},
+                         {"role": "user", "content": user}],
+            "temperature": 0,
+            "max_tokens": 80,
+            "response_format": {"type": "json_object"},
+        })
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if m:
+            d = json.loads(m.group(0))
+            return str(d.get("path") or ""), str(d.get("why") or "")
+    except Exception:
+        pass
+    return "", ""
+
+
 def _branches(paths: list[str]) -> list[str]:
     out = []
     for p in paths:
@@ -195,12 +232,16 @@ def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
                 "method": "agent", "gap": None,
                 "shortlist_top": scores[0] if scores else None}
 
-    # Nothing fits: keep the evidence so the branch can be added deliberately.
+    # Nothing fits: keep the evidence AND ask for the missing branch, so the fix
+    # is a deliberate taxonomy addition rather than the nearest wrong leaf.
+    l1s = sorted({x.split(" > ")[0] for x in paths})
+    proposed, why = suggest_branch(p, l1s)
     return {"path": None, "level": 0, "confidence": round(conf, 3),
             "reason": reason or "no candidate fits", "method": "agent",
             "gap": {"title": str(p.get("title") or "")[:140],
                     "source_category": p.get("source_category_path") or p.get("sourceCategoryPath") or "",
-                    "suggested_branch": candidates[0] if candidates else "",
+                    "suggested_branch": proposed or (candidates[0] if candidates else ""),
+                    "why": why,
                     "shortlist": candidates[:5]},
             "shortlist_top": scores[0] if scores else None}
 
@@ -281,13 +322,14 @@ def main() -> int:
         from openpyxl import Workbook
         wb = Workbook(); ws = wb.active; ws.title = "Agent"
         ws.append(["Product", "Source Category", "Rule category", "Agent category",
-                   "Level", "Confidence", "Reason", "Gap (suggested branch)"])
+                   "Level", "Confidence", "Reason", "Gap (suggested branch)", "Why"])
         for r in rows:
             ws.append([r["product"].get("title"), r["product"].get("source_category_path"),
                        (r["rule"] or {}).get("full"), r["agent"]["path"],
                        r["agent"]["level"], r["agent"]["confidence"], r["agent"]["reason"],
-                       (r["agent"]["gap"] or {}).get("suggested_branch")])
-        for col, w in zip("ABCDEFGH", (58, 52, 52, 52, 7, 10, 40, 52)):
+                       (r["agent"]["gap"] or {}).get("suggested_branch"),
+                       (r["agent"]["gap"] or {}).get("why")])
+        for col, w in zip("ABCDEFGHI", (58, 52, 52, 52, 7, 10, 40, 52, 40)):
             ws.column_dimensions[col].width = w
         ws.freeze_panes = "A2"
         wb.save(args.report)
