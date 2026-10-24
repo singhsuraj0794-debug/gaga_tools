@@ -400,7 +400,10 @@ router.post("/export-l2", async (req: Request, res: Response): Promise<void> => 
       pythonBin(),
       [L2_EXPORT_SCRIPT, "--job", tmpJob, "--platform", String(platform),
        "--out", outDir, "--zip"],
-      { timeout: 1800000, maxBuffer: 32 * 1024 * 1024 },
+      // The category agent adds ~1.5-3s per product on the GPU (14B), so a large
+      // catalogue batch legitimately runs for hours. The old 30-minute cap would
+      // have killed an 8k-product export half way.
+      { timeout: 6 * 60 * 60 * 1000, maxBuffer: 32 * 1024 * 1024 },
     );
     const zipPath = `${outDir}.zip`;
     if (!fs.existsSync(zipPath)) {
