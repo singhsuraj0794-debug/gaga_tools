@@ -13,7 +13,7 @@ if ($running.Count -gt 0) {
     return
 }
 
-Write-Host "Starting enrichment worker (EnrichmentWorkers=$(if ($env:ENRICH_WORKERS) { $env:ENRICH_WORKERS } else { 2 }))"
+Write-Host "Starting enrichment worker (EnrichmentWorkers=$(if ($env:ENRICH_WORKERS) { $env:ENRICH_WORKERS } else { 1 }))"
 Start-Bg -FilePath (Get-Python) -Arguments @("_enrich_queue.py", "worker", "--wait") `
     -WorkingDirectory $ApiDir -LogName "enrich-worker.log" | Out-Null
 # Below-normal priority so Chrome always wins the CPU while scraping.
