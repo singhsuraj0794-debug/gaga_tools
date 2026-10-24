@@ -135,26 +135,40 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
 
     for offset, row in enumerate(rows):
         r = start_row + offset
-        leaf = _leaf_of(row.get("Mapped Category Path", ""))
+        path = row.get("Mapped Category Path", "")
+        segs = [x.strip() for x in path.split(">") if x.strip()]
+        leaf = segs[-1] if segs else ""
+
+        # Category Name *: the deepest category the template actually declares,
+        # walking L4 -> L3 -> L2 so a coarser mapping still matches a real value.
+        cat_value = ""
+        for cand in reversed(segs[1:]):
+            cat_value = cat_values.get(cand.lower(), "")
+            if cat_value:
+                break
+        if not cat_value:
+            cat_value = path
+
         # fixed columns, by header name
         for name in FIXED_COLUMNS:
             col = fixed_cols.get(_norm(name))
             if col is None:
                 continue
-            value = row.get(name, "")
-            if name == "Category  Name *":
-                value = cat_values.get(leaf.lower()) or row.get("Mapped Category Path", "")
+            value = cat_value if name == "Category  Name *" else row.get(name, "")
             sheet.cell(row=r, column=col + 1).value = value
 
-        # only the group belonging to this product's L4
-        group = spec_groups.get(leaf.lower(), {})
+        # Attributes: each spec key is "<leaf> | <attribute>" for the node the
+        # mapper resolved (L4, or L3/L2 when the finer level is unknown). Match it
+        # against whichever spec group the template has - never cross-fill,
+        # because prepare() only emits keys for the resolved node.
         for key, value in row.items():
             if not key.startswith("spec::") or value in (None, ""):
                 continue
             spec = key[len("spec::"):]
             attr_leaf, _, attr = spec.partition("|")
-            if attr_leaf.strip().lower() != leaf.lower():
-                continue          # a different L4's attribute - never cross-fill
+            group = spec_groups.get(attr_leaf.strip().lower())
+            if not group:
+                continue
             col = group.get(_norm(attr))
             if col is None:
                 continue
@@ -256,9 +270,12 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     for row in rows:
         path = row.get("Mapped Category Path", "")
         status = row.get("Mapping Status", "")
-        level = str(row.get("_level") or 0)
+        level = int(row.get("_level") or 0)
         l2 = _l2_of(path)
-        if not path or not l2 or level != "4" or status == "unmapped":
+        # L4 is ideal, but a confident L3 (or L2) still belongs in its L2 template:
+        # the attributes simply stop at that level. Only an L1-only or unmapped
+        # product cannot be placed.
+        if not path or not l2 or level < 2 or status == "unmapped":
             review.append({
                 "Platform": row.get("_platform", platform),
                 "Sku": row.get("Sku *", ""),
@@ -268,14 +285,15 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
                 "Mapping Status": status or "unmapped",
                 "Method": row.get("_method", ""),
                 "Confidence": row.get("_confidence", ""),
-                "Level": level,
-                "Reason": "no L4 category" if not path else
-                          ("category coarser than L4" if level != "4" else "unmapped"),
+                "Level": str(level),
+                "Reason": "no category" if not path else
+                          ("only L1 resolved" if level < 2 else "unmapped"),
                 "Suggested Alternatives": " | ".join(row.get("_candidates") or []),
             })
             continue
         exportable.setdefault(l2, []).append(row)
 
+    level_counts = Counter(int(r.get("_level") or 0) for g in exportable.values() for r in g)
     results, missing_templates = [], []
     for l2, group in exportable.items():
         template = get_template(l2)
@@ -332,6 +350,7 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         "decisions_logged": logged,
         "exported_products": sum(r["rows"] for r in results),
         "review_products": len(review),
+        "exported_by_level": {f"L{k}": v for k, v in sorted(level_counts.items(), reverse=True)},
         "files": results,
         "missing_templates": missing_templates,
         "categories": {k: len(v) for k, v in exportable.items()},

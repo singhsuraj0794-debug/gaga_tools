@@ -295,6 +295,13 @@ _L1_ALIASES: dict[str, str] = {
     "footwear": "Fashion",
     "jewellery & accessories": "Fashion",
     "bags": "Fashion",
+    # Flipkart's apparel tree (breadcrumb arrives as
+    # "Clothing and Accessories > Clothing Accessories > Dupattas > ...").
+    # Without an alias the whole branch resolved to nothing and 34 of 156 rows in
+    # one Flipkart batch went to review.
+    "clothing and accessories": "Fashion",
+    "clothing accessories": "Fashion",
+    "clothing": "Fashion",
     "kids clothing": "Kids & Baby",
     "kids & toys": "Toys & General Merchandise",
     "electronic accessories": "Electronics",
