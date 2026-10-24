@@ -335,16 +335,36 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     # Local category agent first (Qwen2.5-14B + EmbeddingGemma). It only overrides
     # a row when it has a validated taxonomy node; otherwise the rule-based
     # mapping stands and a gap is reported.
-    rulings, gaps = {}, []
+    rulings, gaps, attr_rulings = {}, [], {}
+    cached_hits = 0
     if progress:
         progress.write("Preparing", detail="loading templates and taxonomy")
+    # Persistent answers first: a product already classified by an earlier run
+    # needs neither GPU pass. This is what makes a restart cheap.
+    try:
+        import _enrich_cache
+        cached = _enrich_cache.get_many(platform or "", [str(p.get("id") or p.get("sku") or "")
+                                                         for p in products])
+        for p in products:
+            pid = str(p.get("id") or p.get("sku") or "")
+            hit = cached.get(pid)
+            if not hit:
+                continue
+            if hit.get("l4_path"):
+                rulings[id(p)] = {"path": hit["l4_path"], "confidence": hit.get("confidence", 0.0),
+                                  "method": hit.get("method") or "cached"}
+            if hit.get("attributes"):
+                attr_rulings[id(p)] = hit["attributes"]
+            cached_hits += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"enrich-cache read skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
     try:
         from _category_agent import apply_to_prepare
         if progress:
             progress.write("Category agent", done=0, total=len(products),
                            detail="classifying products on the GPU")
         agent_out = apply_to_prepare(
-            products,
+            [p for p in products if id(p) not in rulings],
             on_progress=(lambda done, total: progress.write(
                 "Category agent", done=done, total=total, detail="classifying products")
                 if progress else None),
@@ -367,7 +387,7 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         progress.write("Attribute agent", done=0, total=len(products),
                        detail="matching leftover specs on the GPU")
     data = prepare(
-        products, rulings=rulings,
+        products, rulings=rulings, attr_rulings=attr_rulings,
         on_progress=(lambda done, total: progress.write(
             "Mapping attributes", done=done, total=total,
             detail="resolving attributes per L4") if progress else None),
@@ -405,6 +425,30 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
             })
             continue
         exportable.setdefault(l2, []).append(row)
+
+    # Persist what we just decided, so the next export/restart is free.
+    try:
+        import _enrich_cache
+        records = []
+        for row in rows:
+            pid = str(row.get("_product_id") or "")
+            path = row.get("Mapped Category Path") or ""
+            if not pid or not path:
+                continue
+            attrs = {}
+            for k, v in row.items():
+                if k.startswith("spec::") and v not in (None, ""):
+                    spec = k[len("spec::"):]
+                    attr = spec.split("|")[-1].strip()
+                    if attr:
+                        attrs[attr] = v
+            records.append({"platform": row.get("_platform") or platform or "",
+                            "product_id": pid, "l4_path": path, "attributes": attrs,
+                            "method": row.get("_method", ""),
+                            "confidence": row.get("_confidence") or 0.0})
+        cached_written = _enrich_cache.put_many(records)
+    except Exception:  # noqa: BLE001
+        cached_written = 0
 
     level_counts = Counter(int(r.get("_level") or 0) for g in exportable.values() for r in g)
     results, missing_templates = [], []
@@ -481,6 +525,8 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         "products": len(rows),
         "decisions_logged": logged,
         "agent_rulings": len(rulings),
+        "agent_cache_hits": cached_hits,
+        "cache_written": cached_written,
         "taxonomy_gaps": len(gaps),
         "exported_products": sum(r["rows"] for r in results),
         "review_products": len(review),

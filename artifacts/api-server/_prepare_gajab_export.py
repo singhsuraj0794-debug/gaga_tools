@@ -286,6 +286,7 @@ def _error_row(idx: int, raw) -> dict:
 
 
 def prepare(products: list[dict], rulings: dict | None = None,
+            attr_rulings: dict | None = None,
             on_progress=None, on_attr_progress=None) -> dict:
     catalog = load_catalog()
     attr_mapper = SpecAttributeMapper(catalog)
@@ -371,6 +372,13 @@ def prepare(products: list[dict], rulings: dict | None = None,
                 mapping_method = resolved.get("method", "curated")
                 attrs = attr_mapper.attrs_for(node)
                 mapped = attr_mapper.map_specs(specs, node, platform=platform)
+                # Attributes decided by an earlier run (persistent cache) are
+                # merged first, so a re-run costs no GPU time at all.
+                cached_attrs = (attr_rulings or {}).get(id(p)) or {}
+                if cached_attrs:
+                    for _k, _v in cached_attrs.items():
+                        if _v not in (None, ""):
+                            mapped["attributes"].setdefault(_k, _v)
                 # Keep what the page actually said, and where each value landed.
                 if specs:
                     spec_records.append({
@@ -482,6 +490,7 @@ def prepare(products: list[dict], rulings: dict | None = None,
                 "Review Notes": mapping_note,
                 # private: consumed by build_review(); never rendered as columns
                 "_platform": platform,
+                "_product_id": str(p.get("id") or p.get("sku") or ""),
                 "_method": mapping_method,
                 "_level": (resolved or {}).get("level", 0),
                 "_confidence": (resolved or {}).get("confidence", ""),
@@ -494,7 +503,7 @@ def prepare(products: list[dict], rulings: dict | None = None,
                 v = vals.get(a["attribute"])
                 if v not in (None, ""):
                     row["spec::" + a["specification"]] = v
-            if attrs and mapped.get("unmapped"):
+            if attrs and mapped.get("unmapped") and not cached_attrs:
                 attr_pending.append((row, attrs, mapped, _clean(p.get("title"))))
 
             rows.append(row)
