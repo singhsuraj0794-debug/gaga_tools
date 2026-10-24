@@ -68,6 +68,7 @@ SCHEMA = """
 create table if not exists templates (
     id                integer primary key autoincrement,
     l2_name           text not null,
+    l2_path           text,               -- 'L1 > L2' (the export groups on this)
     l2_id             text,
     category_path     text,               -- marketplace path(s) found in the template
     source_name       text not null,      -- original filename
@@ -104,6 +105,15 @@ def connect(db: Path = DB_PATH) -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("pragma table_info(templates)")}
     if "updated_at" not in cols:
         conn.execute("alter table templates add column updated_at text")
+    if "l2_path" not in cols:
+        conn.execute("alter table templates add column l2_path text")
+        # backfill from the stored category path (first two segments)
+        for row in conn.execute("select id, l2_name, category_path from templates").fetchall():
+            path = (row["category_path"] or "").split("; ")[0]
+            parts = [x.strip() for x in path.split(">") if x.strip()]
+            conn.execute("update templates set l2_path = ? where id = ?",
+                         (" > ".join(parts[:2]) if len(parts) >= 2 else row["l2_name"], row["id"]))
+        conn.commit()
     return conn
 
 
@@ -176,8 +186,8 @@ def read_template(path: Path) -> dict:
     }
 
 
-def resolve_category(info: dict, filename: str) -> tuple[str, str, str, str]:
-    """(l2_name, l2_id, category_path, status_note)."""
+def resolve_category(info: dict, filename: str) -> tuple[str, str, str, str, str]:
+    """(l2_name, l2_path, l2_id, category_path, status_note)."""
     names = info["l2_names"]
     if names:
         common = Counter(names)
@@ -190,13 +200,18 @@ def resolve_category(info: dict, filename: str) -> tuple[str, str, str, str]:
             if len(parts) >= 2 and parts[1] == l2:
                 l2_id = cid
                 break
-        return l2, l2_id, path, f"from Specification List{conflict}"
+        l2_path = ""
+        for p in info["paths"]:
+            parts = [x.strip() for x in p.split(">") if x.strip()]
+            if len(parts) >= 2 and parts[1] == l2:
+                l2_path = " > ".join(parts[:2]); break
+        return l2, l2_path, l2_id, path, f"from Specification List{conflict}"
 
     # no embedded category: fall back to the filename (strip the _NN copy suffix)
     base = re.sub(r"_\d+$", "", Path(filename).stem).strip()
     if base:
-        return base, "", "", "from filename (no Specification List category)"
-    return "", "", "", "unidentified"
+        return base, "", "", "", "from filename (no Specification List category)"
+    return "", "", "", "", "unidentified"
 
 
 def validate(info: dict) -> tuple[str, list[str]]:
@@ -248,7 +263,7 @@ def import_templates(src: Path, db: Path = DB_PATH, store: Path = FILE_DIR,
                          "note": f"unreadable: {type(exc).__name__}: {exc}"})
             continue
 
-        l2, l2_id, path, source_note = resolve_category(info, f.name)
+        l2, l2_path, l2_id, path, source_note = resolve_category(info, f.name)
         status, notes = validate(info)
         if not l2:
             status = "unmapped"
@@ -302,11 +317,11 @@ def import_templates(src: Path, db: Path = DB_PATH, store: Path = FILE_DIR,
                              (now(), slug))
             conn.execute(
                 """insert into templates
-                   (l2_name, l2_id, category_path, source_name, slug, version, file_path, sha256,
+                   (l2_name, l2_path, l2_id, category_path, source_name, slug, version, file_path, sha256,
                     size_bytes, sheet_name, column_count, spec_category_count, validation_status,
                     validation_notes, active, imported_at, updated_at)
-                   values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (l2, l2_id, path, f.name, slug, version, str(target), digest, f.stat().st_size,
+                   values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (l2, l2_path or l2, l2_id, path, f.name, slug, version, str(target), digest, f.stat().st_size,
                  info["sheet"], len(info["headers"]), info["spec_rows"], status,
                  "; ".join(notes + [keep_note])[:900], 1 if make_active else 0, now(), now()),
             )
@@ -332,14 +347,14 @@ def import_templates(src: Path, db: Path = DB_PATH, store: Path = FILE_DIR,
 
 
 def get_template(l2_name: str, db: Path = DB_PATH) -> dict | None:
-    """Latest ACTIVE, validated template for a category (runtime lookup)."""
+    """Latest ACTIVE, validated template. Accepts 'L1 > L2' or a bare L2 name."""
     conn = connect(db)
     row = conn.execute(
         """select * from templates
-            where lower(l2_name) = lower(?) and active = 1
-              and validation_status in ('ok', 'warning')
-            order by version desc limit 1""",
-        (l2_name,),
+            where (lower(l2_path) = lower(?) or lower(l2_name) = lower(?))
+              and active = 1 and validation_status in ('ok', 'warning')
+            order by (l2_path is not null) desc, version desc limit 1""",
+        (l2_name, l2_name),
     ).fetchone()
     conn.close()
     return dict(row) if row else None
