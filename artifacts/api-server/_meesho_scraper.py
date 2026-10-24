@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 
 PROXY = os.environ.get("MEESHO_PROXY", "") or os.environ.get("SCRAPER_PROXY", "")
@@ -207,6 +208,36 @@ def _try_curl_cffi(url: str, impersonate: str = "safari15_5") -> str:
 _CDP_ORDER = [c for c in (SCRAPE_CDP_URL, EXTRACT_CDP_URL) if c]
 CDP_CONNECT_TIMEOUT_MS = int(os.environ.get("MEESHO_CDP_CONNECT_TIMEOUT_MS", "8000"))
 
+# A Chrome behind a dead proxy (9223 routes through the Webshare proxy, which
+# returns 402 when the quota is exhausted) does not fail fast - every goto just
+# times out after 30s before we fall back to the direct Chrome. Two failures in
+# a row demote it for ten minutes, so a whole job pays that cost once instead of
+# once per product.
+_CDP_STATE: dict = {}
+_CDP_FAIL_LIMIT = 2
+_CDP_COOLDOWN_SECONDS = int(os.environ.get("MEESHO_CDP_COOLDOWN_SECONDS", "600"))
+
+
+def _cdp_candidates() -> list:
+    now = time.time()
+    live = [c for c in _CDP_ORDER if _CDP_STATE.get(c, (0, 0.0))[1] <= now]
+    return live or list(_CDP_ORDER)
+
+
+def _cdp_failed(cdp: str, why: str = "") -> None:
+    fails, until = _CDP_STATE.get(cdp, (0, 0.0))
+    fails += 1
+    if fails >= _CDP_FAIL_LIMIT:
+        until = time.time() + _CDP_COOLDOWN_SECONDS
+        print(f"MEESHO: {cdp} failing ({why}) - skipping for {_CDP_COOLDOWN_SECONDS}s",
+              file=sys.stderr)
+    _CDP_STATE[cdp] = (fails, until)
+
+
+def _cdp_ok(cdp: str) -> None:
+    if cdp in _CDP_STATE:
+        _CDP_STATE[cdp] = (0, 0.0)
+
 
 def _try_playwright(url: str) -> str:
     """Fetch a product page via a shared Chrome over CDP (proxied, then direct)."""
@@ -214,7 +245,7 @@ def _try_playwright(url: str) -> str:
         import time
         from playwright.sync_api import sync_playwright
 
-        for cdp in _CDP_ORDER:
+        for cdp in _cdp_candidates():
             try:
                 with sync_playwright() as p:
                     browser = p.chromium.connect_over_cdp(cdp, timeout=CDP_CONNECT_TIMEOUT_MS)
@@ -250,17 +281,21 @@ def _try_playwright(url: str) -> str:
                                 or "window.__INITIAL_STATE__" in html
                             )
                             if has_product:
+                                _cdp_ok(cdp)
                                 return html
                         html = page.content()
                         if len(html) > 20000:
+                            _cdp_ok(cdp)
                             return html
+                        _cdp_failed(cdp, f"no product data ({len(html)} bytes)")
                     finally:
                         for _obj in (page, ctx):
                             try:
                                 _obj.close()
                             except Exception:
                                 pass
-            except Exception:
+            except Exception as exc:
+                _cdp_failed(cdp, type(exc).__name__)
                 continue
     except Exception:
         pass
@@ -661,7 +696,18 @@ def scrape_product(url: str, html: str = "") -> dict:
 
 
 def _fallback_scrape(html: str, url: str) -> dict:
-    """Fallback: extract product name from title tag and images from HTML."""
+    """Fallback: extract product name from title tag and images from HTML.
+
+    Returns a BLOCKED result when the page carries no product at all. It used to
+    return status=success with title "Meesho" and zero images, which the job
+    recorded as a scraped product - that is why products appeared "scraped" but
+    had no images.
+    """
+    low = html.lower()
+    if ("couldn't find what you were looking for" in low
+            or "couldnt find what you were looking for" in low
+            or "we couldn't find what you" in low):
+        return _blocked("Meesho: product page not found (deleted or bad URL)")
     title = None
     m = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL)
     if m:
@@ -692,6 +738,10 @@ def _fallback_scrape(html: str, url: str) -> dict:
         if pm2:
             price = f"\u20b9{pm2.group(1)}"
 
+    if not unique_imgs and (not title or title.strip().lower() in ("meesho", "untitled", "")):
+        # Nothing product-shaped on the page: no images AND a generic title.
+        return _blocked("Meesho: page had no product data (blocked or empty)")
+
     result = {
         "status": "success",
         "id": None,
@@ -719,6 +769,7 @@ def _fallback_scrape(html: str, url: str) -> dict:
 def _is_blocked(html: str) -> bool:
     checks = [
         "Something went wrong" in html,
+        "couldn't find what you were looking for" in html,
         "captcha" in html.lower(),
         "Access Denied" in html,
         "Please verify you are a human" in html,
