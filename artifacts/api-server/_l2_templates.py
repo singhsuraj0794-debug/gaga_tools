@@ -226,8 +226,10 @@ def validate(info: dict) -> tuple[str, list[str]]:
         status = "warning" if status != "invalid" else status
         notes.append(f"product sheet is {info['sheet']!r}, expected {PRODUCT_SHEET!r}")
     if not info["spec_rows"]:
-        status = "warning" if status == "ok" else status
-        notes.append("no Specification List rows (attributes cannot be resolved per L4)")
+        # Many marketplace categories define no specifications at all. Such a
+        # template is complete for its category (fixed columns only) - flagging it
+        # as degraded made 65 healthy templates look broken.
+        notes.append("no specifications for this category (fixed columns only)")
     dup = [h for h, n in Counter(info["headers"]).items() if n > 1]
     if dup:
         notes.append("duplicate column names: " + ", ".join(dup[:5]))
@@ -346,6 +348,133 @@ def import_templates(src: Path, db: Path = DB_PATH, store: Path = FILE_DIR,
             "skipped": skipped, "failed": failed}
 
 
+
+TAXONOMY = Path(__file__).with_name("category_l1l4.json")
+
+
+def _taxonomy_nodes() -> list[str]:
+    import json as _json
+    try:
+        tax = _json.loads(TAXONOMY.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return list((tax.get("ids") or {}))
+
+
+def _depth(path: str) -> int:
+    return len([x for x in path.split(">") if x.strip()])
+
+
+def resolve_taxonomy_node(name: str, nodes: list[str] | None = None) -> str | None:
+    """Best node whose last segment equals `name`, preferring one with children."""
+    nodes = nodes or _taxonomy_nodes()
+    target = re.sub(r"_\d+$", "", (name or "").strip()).lower()
+    if not target:
+        return None
+    cands = [p for p in nodes if [x.strip() for x in p.split(">")][-1].lower() == target]
+    best, best_score = None, -1
+    for cand in cands:
+        kids = [p for p in nodes if p.startswith(cand + " > ")]
+        deepest = max((_depth(k) for k in kids), default=0)
+        score = deepest * 1000 + len(kids)
+        if score > best_score:
+            best, best_score = cand, score
+    return best
+
+
+def spec_leaves(node: str, nodes: list[str] | None = None) -> list[str]:
+    """Deepest descendants of `node` (L4 when present, else L3)."""
+    nodes = nodes or _taxonomy_nodes()
+    kids = [p for p in nodes if p.startswith(node + " > ")]
+    if not kids:
+        return []
+    maxd = max(_depth(k) for k in kids)
+    # a spec group is a node that has no children of its own
+    leaves = [k for k in kids if not any(p.startswith(k + " > ") for p in nodes)]
+    return leaves or [k for k in kids if _depth(k) == maxd]
+
+
+def generate_specs(template: dict, db: Path = DB_PATH, store: Path = FILE_DIR,
+                   apply: bool = False) -> dict:
+    """Build the missing Specification List + attribute columns for one template.
+
+    Uses our taxonomy + attribute catalog: for each L4 leaf under the template's
+    category, one `Specifications - <leaf>` group whose columns are the attributes
+    that leaf declares. Writes a NEW VERSION - the original is never modified.
+    """
+    from _prepare_gajab_export import SpecAttributeMapper, load_catalog
+
+    nodes = _taxonomy_nodes()
+    node = resolve_taxonomy_node(template["l2_name"] or template["source_name"], nodes)
+    if not node:
+        return {"ok": False, "reason": f"cannot resolve {template['l2_name']!r} in the taxonomy"}
+    # A template can name a LEAF category ("Suitcases"): then that leaf is the one
+    # spec group and its own attributes apply.
+    leaves = spec_leaves(node, nodes) or [node]
+
+    mapper = SpecAttributeMapper(load_catalog())
+    groups = []
+    for leaf in leaves:
+        attrs = [a["attribute"] for a in mapper.attrs_for(leaf)]
+        if attrs:
+            groups.append((leaf, attrs))
+    if not groups:
+        return {"ok": False, "reason": f"no attributes declared for any leaf under {node!r}"}
+
+    src = Path(template["file_path"])
+    if not apply:
+        return {"ok": True, "node": node, "specs": len(groups),
+                "columns_to_add": sum(len(a) for _, a in groups), "apply": False}
+
+    wb = load_workbook(src)
+    sheet = wb[template["sheet_name"]] if template["sheet_name"] in wb.sheetnames else wb.active
+    last_col = sheet.max_column
+    spec_sheet = wb["Specification List"] if "Specification List" in wb.sheetnames else wb.create_sheet("Specification List")
+    if spec_sheet.max_row == 0 or not spec_sheet.cell(row=1, column=1).value:
+        spec_sheet.cell(row=1, column=1, value="Categories")
+        spec_sheet.cell(row=1, column=2, value="Specifications")
+        spec_sheet.cell(row=1, column=3, value="Attributes")
+    row = spec_sheet.max_row + 1
+    for leaf, attrs in groups:
+        spec_sheet.cell(row=row, column=1, value=leaf)
+        spec_sheet.cell(row=row, column=2, value=[x.strip() for x in leaf.split(">")][-1])
+        spec_sheet.cell(row=row, column=3, value=" | ".join(attrs))
+        row += 1
+        for attr in attrs:
+            last_col += 1
+            sheet.cell(row=1, column=last_col, value=f"Specifications - {[x.strip() for x in leaf.split('>')][-1]}")
+            sheet.cell(row=2, column=last_col, value=attr)
+
+    store.mkdir(parents=True, exist_ok=True)
+    slug = template["slug"]
+    version = template["version"] + 1
+    target = store / f"{slug}.v{version}.xlsx"
+    wb.save(target)
+
+    # register the new version in place (the file already lives in the store)
+    info = read_template(target)
+    status, notes = validate(info)
+    conn = connect(db)
+    conn.execute("update templates set active = 0, updated_at = ? where slug = ?", (now(), slug))
+    conn.execute(
+        """insert into templates
+           (l2_name, l2_path, l2_id, category_path, source_name, slug, version, file_path, sha256,
+            size_bytes, sheet_name, column_count, spec_category_count, validation_status,
+            validation_notes, active, imported_at, updated_at)
+           values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (template["l2_name"], template.get("l2_path"), template.get("l2_id"),
+         "; ".join(groups and [g[0] for g in groups])[:900],
+         template["source_name"], slug, version, str(target), sha256(target),
+         target.stat().st_size, info["sheet"], len(info["headers"]), len(groups),
+         status, "; ".join(notes + ["specifications generated from the taxonomy"])[:900],
+         1, now(), now()),
+    )
+    conn.commit(); conn.close()
+    return {"ok": True, "node": node, "specs": len(groups),
+            "columns_to_add": sum(len(a) for _, a in groups),
+            "file": str(target), "version": version, "apply": True}
+
+
 def get_template(l2_name: str, db: Path = DB_PATH) -> dict | None:
     """Latest ACTIVE, validated template. Accepts 'L1 > L2' or a bare L2 name."""
     conn = connect(db)
@@ -396,6 +525,12 @@ def main() -> int:
     p.add_argument("--l2")
     p.add_argument("--version", type=int)
 
+    p = sub.add_parser("generate-specs")
+    p.add_argument("--l2", help="only this template category")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--db", default=str(DB_PATH))
+    p.add_argument("--store", default=str(FILE_DIR))
+
     p = sub.add_parser("report")
     p.add_argument("--out", default=r"C:\gajab\templates\import_report.xlsx")
 
@@ -443,6 +578,29 @@ def main() -> int:
         conn.commit()
         print(f"deactivated {cur.rowcount} row(s)")
         conn.close()
+        return 0
+
+    if args.cmd == "generate-specs":
+        conn = connect(Path(args.db))
+        q = "select * from templates where active = 1 and spec_category_count = 0"
+        params: tuple = ()
+        if args.l2:
+            q += " and (lower(l2_name) = lower(?) or lower(l2_path) = lower(?))"
+            params = (args.l2, args.l2)
+        rows = [dict(r) for r in conn.execute(q, params)]
+        print(f"{len(rows)} template(s) without specifications")
+        done = 0
+        for t in rows:
+            res = generate_specs(t, db=Path(args.db), store=Path(args.store), apply=args.apply)
+            if not res.get("ok"):
+                print(f"  - {t['l2_name'][:32]:32} {res['reason']}")
+                continue
+            done += 1
+            if not args.apply:
+                print(f"  + {t['l2_name'][:32]:32} {res['specs']} specs, {res['columns_to_add']} columns  ({res['node']})")
+            else:
+                print(f"  + {t['l2_name'][:32]:32} v{res['version']} {res['specs']} specs, {res['columns_to_add']} columns")
+        print(f"{done} template(s) {'updated' if args.apply else 'can be enriched'}")
         return 0
 
     if args.cmd == "report":
