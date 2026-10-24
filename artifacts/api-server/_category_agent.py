@@ -246,6 +246,59 @@ def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
             "shortlist_top": scores[0] if scores else None}
 
 
+
+ATTR_SYSTEM = (
+    "You map marketplace product specifications onto the attributes of one category. "
+    "You are given the ALLOWED attribute names and a list of specifications that did not match. "
+    "For each specification choose the allowed attribute whose meaning matches, or null when none does. "
+    "Never invent an attribute name and never guess a value: copy the scraped value. "
+    "Answer as JSON only: {\"mappings\": [{\"key\": \"...\", \"attribute\": \"<allowed name or null>\", "
+    "\"value\": \"...\"}]}."
+)
+
+
+def map_attributes(unmapped: list[dict], declared: list[str], title: str = "") -> dict:
+    """Second pass: let the model place the specs the alias table could not.
+
+    Only attribute names the category actually declares are accepted, and the
+    value is always the scraped one - the model may not invent specifications.
+    """
+    if not unmapped or not declared:
+        return {}
+    allowed = {a.strip().lower(): a for a in declared}
+    items = [{"key": str(u.get("key") or ""), "value": str(u.get("value") or "")[:200]}
+             for u in unmapped[:12]]
+    user = (f"Allowed attributes: {', '.join(declared)}\n"
+            f"Product: {title[:160]}\n"
+            f"Unmatched specifications: {json.dumps(items, ensure_ascii=False)}")
+    try:
+        r = requests.post(f"{CHAT_URL}/v1/chat/completions", timeout=TIMEOUT, json={
+            "messages": [{"role": "system", "content": ATTR_SYSTEM},
+                         {"role": "user", "content": user}],
+            "temperature": 0,
+            "max_tokens": 400,
+            "response_format": {"type": "json_object"},
+        })
+        r.raise_for_status()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return {}
+        data = json.loads(m.group(0))
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for item in (data.get("mappings") or []):
+        attr = item.get("attribute")
+        if not isinstance(attr, str) or not attr.strip():
+            continue
+        target = allowed.get(attr.strip().lower())
+        value = str(item.get("value") or "").strip()
+        if target and value:
+            out[target] = value
+    return out
+
+
 def available() -> bool:
     for url in (EMBED_URL, CHAT_URL):
         try:

@@ -87,6 +87,18 @@ _COMBINED_DIM_KEYS = {
 }
 
 
+def _clean_axis(a: str) -> str:
+    """'20D' -> '20', '1Th' -> '1', 'L 41' -> '41', '10 Centimeters' unchanged."""
+    s = str(a or "").strip()
+    # leading axis label ('L 41', 'Depth: 5')
+    s = re.sub(r"^(?:length|width|height|depth|thickness)\s*[:.\-]?\s*(?=[0-9])", "", s, flags=re.I)
+    s = re.sub(r"^(?:l|w|h|d|th)\s*[:.\-]?\s*(?=[0-9])", "", s, flags=re.I)
+    # trailing axis letter glued to the number ('20D', '41L', '1Th', '7.5H').
+    # Only l/w/h/d/th - never a unit, so '10 cm' and '8 in' stay intact.
+    s = re.sub(r"(?<=[0-9])\s*(?:th|l|w|h|d)(?![a-z])", "", s, flags=re.I)
+    return s.strip()
+
+
 def _split_axes(value: str, default_unit: str = "cm") -> dict[str, str]:
     """Parse a combined size string into ``dim_* -> '<n> cm'``.
 
@@ -110,10 +122,10 @@ def _split_axes(value: str, default_unit: str = "cm") -> dict[str, str]:
     axes = [a.strip() for a in re.split(r"\s*[x×]\s*", v, flags=re.I) if a.strip()]
     if len(axes) < 2:
         return {}
-    # Amazon also writes axis directions straight onto the number:
-    # '7.5L x 5W x 7.5H Centimeters'. Strip them or to_cm sees '7.5L' as an
-    # unknown unit (it would match litre) and refuses the whole value.
-    axes = [re.sub(r"(?<=[0-9])[LWHlwhd](?![a-z])", "", a).strip() or a for a in axes]
+    # Axis labels, in every shape marketplaces emit: '20D', '41L', '1Th',
+    # 'L 41', '7.5H'. Strip them or to_cm reads D/Th as an unknown unit and
+    # refuses the whole value.
+    axes = [_clean_axis(a) or a for a in axes]
     # the unit is written once, at the end, and applies to every axis
     unit = default_unit or "cm"
     m = re.match(r"^[0-9.]+\s*([a-zA-Z.]+)$", axes[-1])
@@ -208,6 +220,25 @@ def to_cm(value: str, default_unit: str = "cm") -> str:
     return f"{cm} cm"
 
 
+def load_platform_aliases(path: str | Path | None = None) -> dict[str, dict[str, list[str]]]:
+    """{platform: {spec key: [target, ...]}} - overrides for one marketplace only."""
+    p = Path(path) if path else _DEFAULT_ALIASES
+    out: dict[str, dict[str, list[str]]] = {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        for plat, entries in (data.get("platform_aliases") or {}).items():
+            bucket: dict[str, list[str]] = {}
+            for k, v in (entries or {}).items():
+                if isinstance(v, str):
+                    bucket[normalise_key(k)] = [v] if v else [""]
+                elif isinstance(v, list):
+                    bucket[normalise_key(k)] = [str(x) for x in v]
+            out[plat.lower()] = bucket
+    except Exception:
+        return {}
+    return out
+
+
 def load_aliases(path: str | Path | None = None) -> dict[str, list[str]]:
     """Curated aliases. A value may be a single target or a candidate list —
     the first candidate the category actually declares wins (e.g. 'type' is
@@ -271,6 +302,7 @@ class SpecAttributeMapper:
         self.catalog = catalog
         self.by_path: dict[str, list[dict]] = catalog.get("by_path", {})
         self.aliases = load_aliases(alias_path)
+        self.platform_aliases = load_platform_aliases(alias_path)
         # normalised attribute name -> canonical attribute name
         self.attr_index: dict[str, str] = {}
         for name in (catalog.get("attribute_names") or {}):
@@ -420,7 +452,9 @@ class SpecAttributeMapper:
         return None
 
     # -- main ------------------------------------------------------------
-    def map_specs(self, specs: dict, node_path: str) -> dict:
+    def map_specs(self, specs: dict, node_path: str, platform: str = "") -> dict:
+        aliases = dict(self.aliases)
+        aliases.update(self.platform_aliases.get((platform or "").lower(), {}))
         attrs = self._attrs_for(node_path)
         by_name = {normalise_key(a["attribute"]): a for a in attrs}
         # unit pairs, e.g. 'capacity (Unit Value)' + 'capacity (UOM)'.
@@ -496,8 +530,8 @@ class SpecAttributeMapper:
             target = by_name.get(key)
             pair_base = key if key in pairs else None
             drop_key = False
-            if target is None and key in self.aliases:
-                cands = self.aliases[key]
+            if target is None and key in aliases:
+                cands = aliases[key]
                 if not isinstance(cands, list):
                     cands = [cands]
                 for cand in cands:

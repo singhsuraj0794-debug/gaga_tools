@@ -25,6 +25,8 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
 import json
 import re
 import sys
@@ -363,7 +365,22 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
                 node = resolved["full"]
                 mapping_method = resolved.get("method", "curated")
                 attrs = attr_mapper.attrs_for(node)
-                mapped = attr_mapper.map_specs(specs, node)
+                mapped = attr_mapper.map_specs(specs, node, platform=platform)
+                # Second pass for what the alias table could not place: ask the
+                # local model, restricted to the attributes this category
+                # declares. Values are always the scraped ones.
+                if os.environ.get("ATTR_AGENT", "1") != "0" and mapped.get("unmapped"):
+                    try:
+                        import _category_agent as _ca
+                        extra = _ca.map_attributes(
+                            mapped["unmapped"],
+                            [a["attribute"] for a in attrs],
+                            _clean(p.get("title")),
+                        )
+                        for k, v in extra.items():
+                            mapped["attributes"].setdefault(k, v)
+                    except Exception:  # noqa: BLE001 - never fail a row over the agent
+                        pass
                 # Keep what the page actually said, and where each value landed.
                 if specs:
                     spec_records.append({
@@ -395,7 +412,7 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
                 # so they must still be computed when the category is unknown.
                 # With node="" attrs_for() returns [] and map_specs yields the
                 # fixed columns only.
-                mapped = attr_mapper.map_specs(specs, "")
+                mapped = attr_mapper.map_specs(specs, "", platform=platform)
                 mapped["attributes"] = {}
                 stats["unmapped"] += 1
                 if not src_cat:

@@ -27,7 +27,6 @@
     "net quantity": "net quantity (Unit Value)",
     "quantity": "net quantity (Unit Value)",
     "unit count": "net quantity (Unit Value)",
-    "number of packs": "pack count",
     "pack of": [
       "net quantity (Unit Value)",
       "pack count"
@@ -64,7 +63,6 @@
       "net volume"
     ],
     "sku": [],
-    "lid material": "material",
     "body material": "material",
     "outer material": [
       "material",
@@ -94,34 +92,59 @@
     "product care instructions": "care instructions",
     "care instruction": "care instructions",
     "washing instructions": "wash care",
-    "item volume": "capacity",
     "volume": "capacity",
     "capacity name": "capacity",
-    "item package quantity": "net quantity",
     "pack size": "net quantity",
     "country of publication": "country of origin",
     "country of assembly": "country of origin",
     "item condition": "condition",
     "style name": "model or style",
     "model number": "model or style",
-    "asin": "",
-    "manufacturer": "",
-    "packer contact information": "",
-    "best sellers rank": "",
-    "customer reviews": "",
-    "material features": "",
-    "material feature": "",
-    "is the item dishwasher safe?": "",
-    "is the item microwaveable?": "",
-    "recommended uses for product": "",
-    "specific uses for product": "",
     "shape": "shape",
-    "enclosure material": "material",
     "number of items": "net quantity",
     "special feature": "",
-    "product features": "",
-    "manufacture year": ""
+    "product features": ""
   },
   "_comment_units": "unit companions handled automatically (product_weight_unit etc.)",
-  "_comment_marketplace": "Amazon/Meesho field vocabulary added for the L2 export; targets only apply when the L3/L4 declares them."
+  "_comment_marketplace": "Amazon/Meesho field vocabulary added for the L2 export; targets only apply when the L3/L4 declares them.",
+  "platform_aliases": {
+    "amazon": {
+      "asin": "",
+      "manufacturer": "",
+      "packer contact information": "",
+      "manufacturer contact information": "",
+      "best sellers rank": "",
+      "customer reviews": "",
+      "is the item dishwasher safe?": "",
+      "is the item microwaveable?": "",
+      "manufacture year": "",
+      "recommended uses for product": "",
+      "specific uses for product": "",
+      "material features": "",
+      "material feature": "",
+      "item volume": "capacity",
+      "item package quantity": "net quantity",
+      "enclosure material": "material",
+      "product dimensions": "product dimensions",
+      "item dimensions l x w x thickness": "product dimensions",
+      "item dimensions l x w x h": "product dimensions",
+      "outputcapacity": "capacity",
+      "number of packs": "net quantity",
+      "blade material": "material",
+      "lid material": "material",
+      "operation mode": "model or style",
+      "theme": ""
+    },
+    "flipkart": {
+      "capacity": "capacity",
+      "seller": "",
+      "flipkart assured": "",
+      "product dimensions": "product dimensions"
+    },
+    "meesho": {
+      "product dimensions": "product dimensions",
+      "country of origin": "country of origin"
+    }
+  },
+  "_comment_platform": "platform_aliases override/extend the global aliases for one marketplace only, so an Amazon tweak can never change Flipkart/Meesho output."
 }
