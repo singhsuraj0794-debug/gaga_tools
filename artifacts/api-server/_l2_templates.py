@@ -290,15 +290,20 @@ def import_templates(src: Path, db: Path = DB_PATH, store: Path = FILE_DIR,
         # is at least as good as the current one.
         rank = {"ok": 0, "warning": 1, "unmapped": 2, "invalid": 3}
         cur = conn.execute(
-            "select validation_status, spec_category_count, column_count, version "
+            "select validation_status, spec_category_count, column_count, version, source_name "
             "from templates where slug = ? and active = 1 order by version desc limit 1",
             (slug,),
         ).fetchone()
         new_rank = rank.get(status, 3)
+        same_source = cur is not None and cur["source_name"] == f.name
         if active == 0:
             make_active, keep_note = False, "not activated (category unresolved)"
         elif cur is None:
             make_active, keep_note = True, "activated (first version)"
+        elif same_source and new_rank <= rank.get(cur["validation_status"], 3):
+            # The user re-saved THIS template file: their update wins even if it
+            # carries fewer attribute columns than a version we enriched.
+            make_active, keep_note = True, f"activated (updated {f.name}, v{cur['version']} superseded)"
         elif new_rank < rank.get(cur["validation_status"], 3):
             make_active, keep_note = True, f"activated (better than v{cur['version']})"
         elif new_rank == rank.get(cur["validation_status"], 3) and (
