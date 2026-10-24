@@ -261,7 +261,25 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     out_dir.mkdir(parents=True, exist_ok=True)
     batch_id = batch_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    data = prepare(products)          # category mapping + attributes (single source of truth)
+    # Local category agent first (Qwen2.5-14B + EmbeddingGemma). It only overrides
+    # a row when it has a validated taxonomy node; otherwise the rule-based
+    # mapping stands and a gap is reported.
+    rulings, gaps = {}, []
+    try:
+        from _category_agent import apply_to_prepare
+        agent_out = apply_to_prepare(products)
+        for p in products:
+            r = agent_out.get(id(p))
+            if not r:
+                continue
+            if r.get("path"):
+                rulings[id(p)] = r
+            elif r.get("gap"):
+                gaps.append(r["gap"])
+    except Exception as exc:  # noqa: BLE001
+        print(f"category agent skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+    data = prepare(products, rulings=rulings)   # category mapping + attributes
     rows = data["rows"]
     logged = log_decisions(rows)
 
@@ -327,6 +345,17 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         results.append(info)
 
     review_dir = out_dir / "Review_Required"
+    if gaps:
+        review_dir.mkdir(parents=True, exist_ok=True)
+        gw = Workbook(); gws = gw.active; gws.title = "Taxonomy Gaps"
+        gws.append(["Product", "Source category", "Suggested branch", "Nearest candidates"])
+        for g in gaps:
+            gws.append([g.get("title"), g.get("source_category"), g.get("suggested_branch"),
+                        " | ".join(g.get("shortlist") or [])])
+        for col, w in zip("ABCD", (58, 52, 52, 90)):
+            gws.column_dimensions[col].width = w
+        gws.freeze_panes = "A2"
+        gw.save(review_dir / "Taxonomy_Gaps.xlsx")
     if review:
         review_dir.mkdir(parents=True, exist_ok=True)
         wb = Workbook()
@@ -348,6 +377,8 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
         "products": len(rows),
         "decisions_logged": logged,
+        "agent_rulings": len(rulings),
+        "taxonomy_gaps": len(gaps),
         "exported_products": sum(r["rows"] for r in results),
         "review_products": len(review),
         "exported_by_level": {f"L{k}": v for k, v in sorted(level_counts.items(), reverse=True)},

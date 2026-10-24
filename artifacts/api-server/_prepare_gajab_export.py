@@ -283,7 +283,7 @@ def _error_row(idx: int, raw) -> dict:
     return row
 
 
-def prepare(products: list[dict]) -> dict:
+def prepare(products: list[dict], rulings: dict | None = None) -> dict:
     catalog = load_catalog()
     attr_mapper = SpecAttributeMapper(catalog)
     cat_mapper = CategoryMapper()
@@ -312,6 +312,19 @@ def prepare(products: list[dict]) -> dict:
                 else p.get("sourceCategoryPath")
             )
             resolved = cat_mapper.resolve(platform, src_cat, title=_clean(p.get("title")))
+            # An external classifier (the local category agent) may have chosen a
+            # better node for this exact product. Trust it only when the path is a
+            # real taxonomy node; attributes are then recomputed for that node.
+            ruling = (rulings or {}).get(id(p))
+            if ruling and ruling.get("path") and ruling["path"] in cat_mapper._by_full:
+                node = cat_mapper._by_full[ruling["path"]]
+                resolved = {
+                    "full": node["full"], "l1": node.get("l1"), "l2": node.get("l2"),
+                    "l3": node.get("l3"), "l4": node.get("l4"), "level": 4,
+                    "confidence": ruling.get("confidence", 0.0),
+                    "method": ruling.get("method", "agent"), "review": False,
+                    "candidates": [],
+                }
             specs = _normalise_specs(p.get("specifications"))
             # The scraper ALSO reports size/weight at the top level of the
             # product. Feed them in under canonical keys so the mandatory
@@ -420,8 +433,8 @@ def prepare(products: list[dict]) -> dict:
                 "Package  Height *": dim_parts[2] if len(dim_parts) > 2 else "",
                 "Package  Width  *": dim_parts[1] if len(dim_parts) > 1 else "",
                 "Package  Length *": dim_parts[0] if dim_parts else "",
-                "Relationship *": "Simple",
-                "Parent  Sku*": _clean(p.get("sku")) or _sku_for(p, idx),
+                "Relationship *": _clean(p.get("relationship")) or "Simple",
+                "Parent  Sku*": _clean(p.get("parent_sku")) or _clean(p.get("sku")) or _sku_for(p, idx),
                 "Variantion  Name": (_clean(p.get("variants")) if not isinstance(p.get("variants"), list)
                                      else ", ".join(_as_list(p.get("variants")))),
                 # The scraped number is the marketplace's selling/transfer
