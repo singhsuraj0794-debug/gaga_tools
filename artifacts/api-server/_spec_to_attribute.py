@@ -529,6 +529,7 @@ class SpecAttributeMapper:
             # capacity (Unit Value)/(UOM) instead of being dropped.
             target = by_name.get(key)
             pair_base = key if key in pairs else None
+            combined_key = key if key in _COMBINED_DIM_KEYS else None
             drop_key = False
             if target is None and key in aliases:
                 cands = aliases[key]
@@ -546,6 +547,9 @@ class SpecAttributeMapper:
                     if nk in pairs:
                         pair_base = nk
                         break
+                    if nk in _COMBINED_DIM_KEYS:
+                        combined_key = nk
+                        break
             if target is not None:
                 snapped = self._match_valid(target, val)
                 out[target["attribute"]] = snapped or coerce_value(target, val)
@@ -554,6 +558,15 @@ class SpecAttributeMapper:
             if drop_key:
                 used.add(key)
                 continue
+
+            # an alias can point at a combined size field ('item dimensions');
+            # route it through the axis parser + cm conversion
+            if combined_key and combined_key != key:
+                axes = _split_axes(val, dim_unit or "cm")
+                if axes:
+                    combined.append((_COMBINED_DIM_KEYS[combined_key], axes))
+                    used.add(key)
+                    continue
 
             # unit pair: 'capacity' -> capacity (Unit Value) + capacity (UOM)
             if pair_base in pairs:
