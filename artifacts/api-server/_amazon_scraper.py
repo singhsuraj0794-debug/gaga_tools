@@ -63,6 +63,7 @@ EMPTY_RESULT = {
     "meta_description": None,
     "images": [],
     "price": None,
+    "mrp": None,
     "dimensions": None,
     "weight": None,
     "gst": None,
@@ -102,6 +103,21 @@ EXTRACT_JS = r"""() => {
       if (t) { price = t; break; }
     }
   }
+  // List price (the export's mandatory MRP). Amazon renders it as a struck-through
+  // price next to the deal price; prefer the basis/list price over the savings text.
+  let mrp = null;
+  for (const sel of [
+    '#corePriceDisplay_desktop_feature_div .a-text-price .a-offscreen',
+    '#corePrice_feature_div .a-text-price .a-offscreen',
+    '#listPrice',
+    'span.basisPrice .a-offscreen',
+    '#priceblock_listprice',
+  ]) {
+    const t = txt(q(sel));
+    if (t && /[₹$€£]/.test(t)) { mrp = t; break; }
+  }
+  if (mrp && price && mrp.replace(/[^0-9.]/g, '') === price.replace(/[^0-9.]/g, '')) mrp = null;
+
   const avail = txt(q('#availability'));
   // Availability was computed and then discarded, so an out-of-stock listing came
   // back looking identical to a scrape that simply failed to find a price.
@@ -232,7 +248,7 @@ EXTRACT_JS = r"""() => {
     }
   }
 
-  return { title, price, images, bullets, description, meta_description, specs, sourceCategoryPath, unavailable };
+  return { title, price, mrp, images, bullets, description, meta_description, specs, sourceCategoryPath, unavailable };
 }"""
 
 
@@ -727,6 +743,8 @@ def _result_from_dom(data: dict) -> dict:
 
     if data.get("unavailable"):
         result["unavailable"] = True
+    if data.get("mrp"):
+        result["mrp"] = _clean(data.get("mrp"))
     price = data.get("price")
     if price:
         result["price"] = _clean(price)

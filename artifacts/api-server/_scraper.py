@@ -348,6 +348,7 @@ def _try_next_data(html: str) -> dict | None:
         "meta_description": _clean(description[:2000]) if description else None,
         "images": _filter_live_images(imgs)[:10],
         "price": str(price) if price else None,
+        "mrp": _extract_mrp(html),
         "dimensions": _find_spec(specs, ["dimension", "size"]),
         "weight": _find_spec(specs, ["weight"]),
         "gst": _find_spec(specs, ["gst", "tax"]),
@@ -416,11 +417,34 @@ def _try_jsonld(html: str) -> dict | None:
             "meta_description": _clean(desc[:2000]) if desc else None,
             "images": _filter_live_images(imgs if imgs else _extract_images_from_html(html))[:10],
             "price": str(price) if price else None,
+            "mrp": _extract_mrp(html),
             "dimensions": None,
             "weight": None,
             "gst": None,
             "hsn": None,
         }
+    return None
+
+
+
+def _extract_mrp(html: str) -> str | None:
+    """Strikethrough / list price for the listing template's Mrp Price column.
+
+    Flipkart embeds it in the page state as "mrp":32999 (verified on a live PDP);
+    other layouts expose strikedPrice / strikeThroughPrice / a JSON-LD
+    priceSpecification with ListPrice. Only a positive number is accepted - a
+    missing MRP must stay blank rather than be guessed from the selling price.
+    """
+    for pat in (r'"mrp"\s*:\s*"?([\d.]+)',
+                r'"strikedPrice"\s*:\s*"?([\d.]+)',
+                r'"strikeThroughPrice"\s*:\s*"?([\d.]+)',
+                r'"ListPrice"\s*:\s*"?([\d.]+)'):
+        for m in re.finditer(pat, html):
+            try:
+                if float(m.group(1)) > 0:
+                    return m.group(1)
+            except ValueError:
+                continue
     return None
 
 
@@ -457,6 +481,7 @@ def _regex_fallback(html: str) -> dict:
         "description": None,
         "images": _filter_live_images(imgs)[:10],
         "price": price,
+        "mrp": _extract_mrp(html),
         "dimensions": None,
         "weight": None,
         "gst": None,

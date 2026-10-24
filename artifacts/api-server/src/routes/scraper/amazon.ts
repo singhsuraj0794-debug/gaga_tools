@@ -130,6 +130,8 @@ interface AmazonDetailedProduct {
   source_catalog_name?: string | null;
   variants: string | null;
   price: string | null;
+  /** Strikethrough/list price; the export's mandatory Mrp Price column. */
+  mrp?: string | null;
   url: string;
   status: string;
   error: string | null;
@@ -238,6 +240,7 @@ async function scrapeAmazonProduct(url: string): Promise<AmazonDetailedProduct> 
       source_category_path: result.source_category_path || null,
       variants: null,
       price: result.price || null,
+      mrp: result.mrp || null,
       url,
       status: "success",
       error: null,
