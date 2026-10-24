@@ -221,9 +221,10 @@ class Progress:
 
     RANGES = {
         "Preparing": (0, 2),
-        "Category agent": (2, 75),
-        "Mapping attributes": (75, 80),
-        "Writing L2 workbooks": (80, 97),
+        "Category agent": (2, 70),
+        "Mapping attributes": (70, 75),
+        "Attribute agent": (75, 90),
+        "Writing L2 workbooks": (90, 97),
         "Packaging": (97, 100),
     }
 
@@ -362,7 +363,18 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     if progress:
         progress.write("Mapping attributes", done=0, total=len(products),
                        detail="resolving attributes per L4")
-    data = prepare(products, rulings=rulings)   # category mapping + attributes
+    if progress:
+        progress.write("Attribute agent", done=0, total=len(products),
+                       detail="matching leftover specs on the GPU")
+    data = prepare(
+        products, rulings=rulings,
+        on_progress=(lambda done, total: progress.write(
+            "Mapping attributes", done=done, total=total,
+            detail="resolving attributes per L4") if progress else None),
+        on_attr_progress=(lambda done, total: progress.write(
+            "Attribute agent", done=done, total=total,
+            detail="matching leftover specs") if progress else None),
+    )   # category mapping + attributes
     rows = data["rows"]
     logged = log_decisions(rows)
 

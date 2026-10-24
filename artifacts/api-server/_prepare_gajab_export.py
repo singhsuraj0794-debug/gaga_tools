@@ -285,7 +285,8 @@ def _error_row(idx: int, raw) -> dict:
     return row
 
 
-def prepare(products: list[dict], rulings: dict | None = None) -> dict:
+def prepare(products: list[dict], rulings: dict | None = None,
+            on_progress=None, on_attr_progress=None) -> dict:
     catalog = load_catalog()
     attr_mapper = SpecAttributeMapper(catalog)
     cat_mapper = CategoryMapper()
@@ -293,6 +294,10 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
     rows: list[dict] = []
     # raw specs per product, persisted at the end (audit + alias growth)
     spec_records: list[dict] = []
+    # products whose specs the alias table could not place - resolved in one
+    # parallel pass after the main loop (a per-product LLM call in the loop made
+    # the export look frozen at "Mapping attributes 0/N").
+    attr_pending: list[tuple] = []
     # per-spec column metadata (attribute name, leaf, type, mandatory, valid)
     # so each sheet's headers keep the template's "attribute" spelling
     col_meta: dict[str, dict] = {}
@@ -366,21 +371,6 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
                 mapping_method = resolved.get("method", "curated")
                 attrs = attr_mapper.attrs_for(node)
                 mapped = attr_mapper.map_specs(specs, node, platform=platform)
-                # Second pass for what the alias table could not place: ask the
-                # local model, restricted to the attributes this category
-                # declares. Values are always the scraped ones.
-                if os.environ.get("ATTR_AGENT", "1") != "0" and mapped.get("unmapped"):
-                    try:
-                        import _category_agent as _ca
-                        extra = _ca.map_attributes(
-                            mapped["unmapped"],
-                            [a["attribute"] for a in attrs],
-                            _clean(p.get("title")),
-                        )
-                        for k, v in extra.items():
-                            mapped["attributes"].setdefault(k, v)
-                    except Exception:  # noqa: BLE001 - never fail a row over the agent
-                        pass
                 # Keep what the page actually said, and where each value landed.
                 if specs:
                     spec_records.append({
@@ -504,14 +494,53 @@ def prepare(products: list[dict], rulings: dict | None = None) -> dict:
                 v = vals.get(a["attribute"])
                 if v not in (None, ""):
                     row["spec::" + a["specification"]] = v
+            if attrs and mapped.get("unmapped"):
+                attr_pending.append((row, attrs, mapped, _clean(p.get("title"))))
 
             rows.append(row)
+            if on_progress:
+                try:
+                    on_progress(idx + 1, len(products))
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001 — one bad row must not
             # abort the workbook; emit a flagged row and keep going
             stats["errors"] = stats.get("errors", 0) + 1
             err = _error_row(idx, p)
             err["Review Notes"] = f"row {idx + 1} failed: {type(exc).__name__}: {exc}"[:300]
             rows.append(err)
+
+    # ── attribute agent: one parallel pass over everything still unmatched ──
+    if attr_pending and os.environ.get("ATTR_AGENT", "1") != "0":
+        try:
+            import _category_agent as _ca
+            if _ca.available():
+                from concurrent.futures import ThreadPoolExecutor
+                workers = max(1, int(os.environ.get("ATTR_AGENT_WORKERS", "4")))
+                total = len(attr_pending)
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = [
+                        pool.submit(_ca.map_attributes, mapped["unmapped"],
+                                    [a["attribute"] for a in attrs], title)
+                        for (_row, attrs, mapped, title) in attr_pending
+                    ]
+                    for done, (fut, entry) in enumerate(zip(futures, attr_pending), start=1):
+                        row, attrs, mapped, _title = entry
+                        extra = fut.result() or {}
+                        if extra:
+                            by_attr = {a["attribute"]: a for a in attrs}
+                            for attr, val in extra.items():
+                                a = by_attr.get(attr)
+                                if a and val:
+                                    row["spec::" + a["specification"]] = val
+                                    mapped["attributes"][attr] = val
+                        if on_attr_progress:
+                            try:
+                                on_attr_progress(done, total)
+                            except Exception:
+                                pass
+        except Exception:  # noqa: BLE001 - never fail an export over the agent
+            pass
 
     if spec_records:
         try:
