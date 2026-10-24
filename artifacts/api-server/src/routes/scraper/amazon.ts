@@ -3,7 +3,7 @@ import { logger } from "../../lib/logger.js";
 import ExcelJS from "exceljs";
 import * as xlsx from "xlsx";
 import multer from "multer";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -18,6 +18,22 @@ const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRAPER_SCRIPT = path.resolve(__dirname, "_amazon_scraper.py");
+
+
+/** Queue a finished scrape job for background enrichment (category + attributes).
+ *  Detached on purpose: scraping must not wait for the GPU queue. */
+function enqueueEnrichment(platform: string, jobId: string): void {
+  try {
+    const child = spawn(pythonBin(),
+      [path.resolve(__dirname, "_enrich_queue.py"), "enqueue",
+       "--platform", platform, "--job", jobId],
+      { cwd: __dirname, stdio: "ignore", windowsHide: true, detached: true });
+    child.unref();
+    logger.info({ platform, jobId }, "queued for background enrichment");
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, "enrichment enqueue failed");
+  }
+}
 
 const router = Router();
 
@@ -39,6 +55,7 @@ async function runAmazonJob(job: ScrapeJob<AmazonDetailedProduct>, urls: string[
     return product;
   });
   job.status = "completed";
+  enqueueEnrichment("amazon", job.id);
   job.completed = job.products.length;
   amazonJobs.persist(job, true);
 }

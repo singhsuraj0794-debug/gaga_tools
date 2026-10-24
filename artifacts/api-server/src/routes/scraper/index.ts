@@ -44,6 +44,22 @@ function newJobId(): string {
   return crypto.randomBytes(8).toString("hex");
 }
 
+
+/** Queue a finished scrape job for background enrichment (category + attributes).
+ *  Detached on purpose: scraping must not wait for the GPU queue. */
+function enqueueEnrichment(platform: string, jobId: string): void {
+  try {
+    const child = spawn(pythonBin(),
+      [path.resolve(__dirname, "_enrich_queue.py"), "enqueue",
+       "--platform", platform, "--job", jobId],
+      { cwd: __dirname, stdio: "ignore", windowsHide: true, detached: true });
+    child.unref();
+    logger.info({ platform, jobId }, "queued for background enrichment");
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, "enrichment enqueue failed");
+  }
+}
+
 async function runFlipkartJob(job: ScrapeJob<FlipkartDetailedProduct>, urls: string[]): Promise<void> {
   const done = new Set(job.products.map((p) => (p as any).url));
   const pending = urls.filter((u) => !done.has(u));
@@ -57,6 +73,7 @@ async function runFlipkartJob(job: ScrapeJob<FlipkartDetailedProduct>, urls: str
   job.status = "completed";
   job.completed = job.products.length;
   flipkartJobs.persist(job, true);
+  enqueueEnrichment("flipkart", job.id);
 }
 
 flipkartJobs.load();
@@ -518,6 +535,46 @@ router.post("/export-l2/:jobId/cancel", (req: Request, res: Response): void => {
     fs.writeFileSync(p.progress, JSON.stringify(cur), "utf-8");
   } catch { /* ignore */ }
   res.json({ status: "cancelled" });
+});
+
+
+// ── background enrichment queue (category + attributes) ────────────────────
+const ENRICH_QUEUE_SCRIPT = path.resolve(__dirname, "_enrich_queue.py");
+
+router.get("/enrich/status", async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { stdout } = await execFileAsync(
+      pythonBin(), [ENRICH_QUEUE_SCRIPT, "status", "--json"], { timeout: 20_000 },
+    );
+    res.json(JSON.parse(stdout));
+  } catch (err: any) {
+    res.json({ pending: 0, running: 0, done: 0, failed: 0, error: err?.message });
+  }
+});
+
+/** Queue a finished scrape job (or an explicit product array) for enrichment. */
+router.post("/enrich/enqueue", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { platform = "", jobId = "", products } = req.body || {};
+    const args = [ENRICH_QUEUE_SCRIPT, "enqueue", "--platform", String(platform)];
+    let tmpFile = "";
+    if (Array.isArray(products) && products.length) {
+      tmpFile = path.join(os.tmpdir(), `enrich-${Date.now()}.json`);
+      fs.writeFileSync(tmpFile, JSON.stringify({ products }), "utf-8");
+      args.push("--products", tmpFile);
+    } else if (jobId) {
+      args.push("--job", String(jobId));
+    } else {
+      res.status(400).json({ error: "jobId or products required" });
+      return;
+    }
+    const { stdout } = await execFileAsync(pythonBin(), args, { timeout: 120_000 });
+    if (tmpFile) { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } }
+    res.json({ queued: Number((stdout.match(/queued (\d+)/) || [])[1] || 0) });
+  } catch (err: any) {
+    logger.error({ err: err?.message }, "enrich enqueue failed");
+    res.status(500).json({ error: err?.message || String(err) });
+  }
 });
 
 /** Synchronous variant (used by scripts/tests). The UI uses /export-l2/start. */

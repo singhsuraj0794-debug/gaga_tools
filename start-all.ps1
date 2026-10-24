@@ -34,6 +34,7 @@ Stage "all: scraper done"
 if (-not (Test-PortOpen $PgPort) -or -not (Test-PortOpen $PostgrestPort) -or -not (Test-PortOpen $ShimPort)) {
     & "$PSScriptRoot\start-db.ps1"
 & "$PSScriptRoot\start-category-agent.ps1"
+& "$PSScriptRoot\start-enrich-worker.ps1"
 }
 Stage "all: db done"
 Stage "all: agent"

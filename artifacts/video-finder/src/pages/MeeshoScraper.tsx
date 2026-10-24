@@ -22,6 +22,7 @@ import { API_BASE } from "@/lib/api";
 import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
 import { exportGajabWorkbook, exportL2WithProgress, cancelL2Export, type L2ExportProgress } from "@/lib/gajabExport";
 import { ExportProgress } from "@/components/ExportProgress";
+import { EnrichmentProgress } from "@/components/EnrichmentProgress";
 
 
 interface MeeshoDetailedProduct {
@@ -1057,6 +1058,7 @@ export default function MeeshoScraper() {
           </CardContent>
         </Card>
       </div>
-    </div>
+          <EnrichmentProgress />
+</div>
   );
 }

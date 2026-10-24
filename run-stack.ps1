@@ -81,6 +81,12 @@ while ($true) {
     # it is down, so a missed restart only costs accuracy, never the batch.
     if (-not (Test-PortOpen $AgentPort)) { Start-Starter "start-category-agent.ps1" }
 
+    # Background enrichment worker: scraping must not wait for it, so a missed
+    # restart only delays category/attribute mapping.
+    $enricher = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+                  Where-Object { $_.CommandLine -like '*_enrich_queue.py*worker*' })
+    if ($enricher.Count -eq 0) { Start-Starter "start-enrich-worker.ps1" }
+
     if (-not (Test-PortOpen $ApiPort) -or -not (Test-PortOpen $ScraperPort)) {
         Write-Host "[run-stack] API ($ApiPort) or scraper ($ScraperPort) is down - restarting"
         Start-Starter "start-prelisting-tunnel.ps1"
