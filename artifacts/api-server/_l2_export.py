@@ -158,19 +158,25 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
             value = cat_value if name == "Category  Name *" else row.get(name, "")
             sheet.cell(row=r, column=col + 1).value = value
 
-        # Attributes: each spec key is "<leaf> | <attribute>" for the node the
-        # mapper resolved (L4, or L3/L2 when the finer level is unknown). Match it
-        # against whichever spec group the template has - never cross-fill,
-        # because prepare() only emits keys for the resolved node.
+        # Attributes. The spec key looks like "<node> | <attribute>", but <node>
+        # is whatever the ATTRIBUTE CATALOG calls that row (it can be the L2, e.g.
+        # "Kitchen Accessories | color", even when the product sits in the
+        # "Choppers" group). So the group is chosen from the ROW's own category,
+        # not from the key prefix, and the attribute name picks the column.
+        target = None
+        for cand in reversed(segs[1:]):          # L4 -> L3 -> L2
+            target = spec_groups.get(cand.lower())
+            if target:
+                break
         for key, value in row.items():
             if not key.startswith("spec::") or value in (None, ""):
                 continue
             spec = key[len("spec::"):]
-            attr_leaf, _, attr = spec.partition("|")
-            group = spec_groups.get(attr_leaf.strip().lower())
+            attr_leaf, sep, attr = spec.partition("|")
+            group = target or spec_groups.get(attr_leaf.strip().lower())
             if not group:
                 continue
-            col = group.get(_norm(attr))
+            col = group.get(_norm(attr if sep else spec))
             if col is None:
                 continue
             sheet.cell(row=r, column=col + 1).value = value
