@@ -195,11 +195,28 @@ def enrich_one(product: dict, platform: str) -> dict | None:
             "attributes": attributes, "method": method, "confidence": conf}
 
 
+def acquire_singleton():
+    """Only ONE worker may consume the queue (two doubles the CPU taken from Chrome)."""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.CreateMutexW(None, False, "Global\\gajab_enrich_worker")
+        if kernel32.GetLastError() == 183:      # ERROR_ALREADY_EXISTS
+            return None
+        return handle
+    except Exception:
+        return True                              # non-Windows: no guard
+
+
 def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
            idle_sleep: int = 20) -> int:
     """Consume the queue until empty. One process, WORKERS threads."""
     from concurrent.futures import ThreadPoolExecutor
     import _enrich_cache
+
+    if not once and acquire_singleton() is None:
+        print("enrich worker: another instance is already running", flush=True)
+        return 0
 
     totals = counts(db)
     total = totals["pending"] + totals["running"]
