@@ -21,7 +21,7 @@ import {
 import { Link } from "wouter";
 import { API_BASE } from "@/lib/api";
 import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
-import { exportGajabWorkbook } from "@/lib/gajabExport";
+import { exportGajabWorkbook, exportL2Workbooks } from "@/lib/gajabExport";
 
 
 interface AmazonDetailedProduct {
@@ -485,6 +485,21 @@ export default function AmazonScraper() {
       console.error("Export error:", error);
       const detail = error instanceof Error ? error.message : String(error);
       alert(`Export failed${detail ? `:\n${detail}` : ""}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  /** L2 template export: one workbook per L2 (+ Review_Required), delivered as a zip. */
+  const handleExportL2 = async () => {
+    if (products.length === 0) return;
+    setIsExporting(true);
+    try {
+      await exportL2Workbooks("amazon", products, "amazon-l2-templates.zip");
+    } catch (error) {
+      console.error("L2 export error:", error);
+      const detail = error instanceof Error ? error.message : String(error);
+      alert(`L2 export failed${detail ? `:\n${detail}` : ""}`);
     } finally {
       setIsExporting(false);
     }
@@ -1064,6 +1079,14 @@ export default function AmazonScraper() {
                         <Download className="h-4 w-4 mr-2" />
                       )}
                       Export to Excel
+                    </Button>
+                    <Button
+                      onClick={handleExportL2}
+                      disabled={isExporting}
+                      variant="outline"
+                      title="One workbook per L2, built from the registered listing templates"
+                    >
+                      Export by L2 template
                     </Button>
                     <Button
                       variant="ghost"

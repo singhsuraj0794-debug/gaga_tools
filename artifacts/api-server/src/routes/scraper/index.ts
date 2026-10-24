@@ -26,6 +26,8 @@ const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRAPER_SCRIPT = path.resolve(__dirname, "_scraper.py");
+// L2 template export: one workbook per L2, built from the centralized registry.
+const L2_EXPORT_SCRIPT = path.resolve(__dirname, "_l2_export.py");
 
 const router = Router();
 const RAPID_API_KEY = process.env.RAPIDAPI_KEY;
@@ -373,6 +375,52 @@ router.post("/category-summary", async (req: Request, res: Response): Promise<vo
   } catch (err: any) {
     logger.error({ err }, "Category summary failed");
     res.status(500).json({ error: "Category summary failed: " + err.message });
+  }
+});
+
+/** POST /api/scraper/export-l2 — export by L2 listing template.
+ *
+ * Products are grouped by the L2 of their approved L4 and written into a copy of
+ * that L2's registered template; the batch (plus Review_Required) comes back as
+ * a zip. The legacy /export (one workbook, sheet per L4) is untouched.
+ */
+router.post("/export-l2", async (req: Request, res: Response): Promise<void> => {
+  const tmpJob = path.join(os.tmpdir(), `l2-export-${Date.now()}.json`);
+  const outDir = path.join(os.tmpdir(), `l2-out-${Date.now()}`);
+  try {
+    const { products, platform = "", filename } = req.body || {};
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+    fs.writeFileSync(tmpJob, JSON.stringify({ products }), "utf-8");
+    const { stdout } = await execFileAsync(
+      pythonBin(),
+      [L2_EXPORT_SCRIPT, "--job", tmpJob, "--platform", String(platform),
+       "--out", outDir, "--zip"],
+      { timeout: 1800000, maxBuffer: 32 * 1024 * 1024 },
+    );
+    const zipPath = `${outDir}.zip`;
+    if (!fs.existsSync(zipPath)) {
+      res.status(500).json({ error: "export produced no archive", log: stdout.slice(-2000) });
+      return;
+    }
+    logger.info({ products: products.length, platform }, "L2 export built");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename || `l2-export-${platform || "batch"}-${Date.now()}.zip`}"`,
+    );
+    fs.createReadStream(zipPath).pipe(res);
+  } catch (err: any) {
+    logger.error({ err: err?.message, stderr: err?.stderr?.slice?.(-1500) }, "L2 export failed");
+    if (!res.headersSent) res.status(500).json({ error: "L2 export failed: " + (err?.message || err) });
+  } finally {
+    setTimeout(() => {
+      try { fs.unlinkSync(tmpJob); } catch { /* best effort */ }
+      try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { fs.unlinkSync(`${outDir}.zip`); } catch { /* best effort */ }
+    }, 60_000);
   }
 });
 

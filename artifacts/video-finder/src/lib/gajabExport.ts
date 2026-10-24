@@ -16,6 +16,58 @@ export class ExportError extends Error {
   }
 }
 
+
+/** Hand a blob to the browser as a download. */
+function saveBlob(blob: Blob, filename: string): void {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  window.URL.revokeObjectURL(objectUrl);
+  document.body.removeChild(a);
+}
+
+/**
+ * Export by L2 listing template: the server groups the batch by L2, fills a copy
+ * of each L2's registered template (attributes per L4), and returns a zip that
+ * also contains Review_Required/Unmapped_Products.xlsx.
+ */
+export async function exportL2Workbooks(
+  platform: string,
+  products: unknown[],
+  filename: string,
+): Promise<void> {
+  const url = `${API_BASE}/api/scraper/export-l2`;
+  let lastError: ExportError | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url, withApiHeaders({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ products, platform }),
+      }));
+    } catch (err) {
+      throw new ExportError(err instanceof Error ? err.message : String(err), 0);
+    }
+    if (response.ok) {
+      saveBlob(await response.blob(), filename);
+      return;
+    }
+    let detail = "";
+    try { detail = (await response.text()).trim(); } catch { /* ignore */ }
+    lastError = new ExportError(
+      detail.slice(0, 400) || response.statusText || "no response body",
+      response.status,
+    );
+    if (!RETRYABLE.has(response.status) || attempt === 1) break;
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+  throw lastError ?? new ExportError("Export failed", 0);
+}
+
 /**
  * POST a scraped batch to `/api/scraper/<platform>/export` and hand the
  * resulting workbook to the browser. Throws an ExportError carrying the
@@ -48,15 +100,7 @@ export async function exportGajabWorkbook(
     }
 
     if (response.ok) {
-      const blob = await response.blob();
-      const objectUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(objectUrl);
-      document.body.removeChild(a);
+      saveBlob(await response.blob(), filename);
       return;
     }
 

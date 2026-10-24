@@ -174,6 +174,17 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
     }
 
 
+def zip_dir(out_dir: Path) -> Path:
+    """Bundle the batch (L2 workbooks + Review_Required + export_log) for download."""
+    import zipfile
+    archive = out_dir.with_suffix(".zip")
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(out_dir.rglob("*")):
+            if f.is_file():
+                zf.write(f, f.relative_to(out_dir))
+    return archive
+
+
 def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
                  platform: str = "") -> dict:
     out_dir = Path(out_dir)
@@ -277,6 +288,7 @@ def main() -> int:
     ap.add_argument("--out", default="")
     ap.add_argument("--platform", default="")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--zip", action="store_true", help="also write <out>.zip")
     args = ap.parse_args()
 
     payload = json.loads(Path(args.job).read_text(encoding="utf-8"))
@@ -296,6 +308,8 @@ def main() -> int:
               f"template v{f['template_version']} ({f['template_source']})")
     if manifest["review_products"]:
         print(f"  review -> {out / 'Review_Required' / 'Unmapped_Products.xlsx'}")
+    if args.zip:
+        print(f"zip: {zip_dir(out)}")
     return 0
 
 
