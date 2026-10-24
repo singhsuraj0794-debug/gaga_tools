@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
+import sqlite3
 import json
 import re
 import shutil
@@ -47,6 +49,10 @@ from _prepare_gajab_export import (  # noqa: E402
 )
 
 EXPORT_ROOT = Path(r"C:\gajab\Scraper_Exports")
+# Audit store for category decisions (spec 3.2: decisions must be stored so they
+# can be audited and reused). Reuse happens through the curated map that
+# apply_mapping_review.py writes back after a human confirms a row.
+DECISIONS_DB = Path(os.environ.get("L2_DECISIONS_DB", r"C:\gajab\templates\decisions.db"))
 REQUIRED_FIXED = ("Sku *", "Product  Name *", "Mrp  Price *", "Transfer  Price *",
                   "Product Image 1 *")
 
@@ -185,6 +191,56 @@ def zip_dir(out_dir: Path) -> Path:
     return archive
 
 
+def _title_key(title: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).split())
+
+
+def log_decisions(rows: list[dict], db: Path = DECISIONS_DB) -> int:
+    """Record every product → L4 decision (audit trail, one row per product)."""
+    try:
+        db.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db)
+        conn.execute("""
+            create table if not exists category_decisions (
+                platform    text,
+                source_path text,
+                title_key   text,
+                l4_path     text,
+                method      text,
+                confidence  real,
+                status      text,
+                uses        integer not null default 1,
+                first_seen  text,
+                last_seen   text,
+                primary key (platform, source_path, title_key)
+            )""")
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        n = 0
+        for row in rows:
+            path = row.get("Mapped Category Path", "")
+            if not path:
+                continue
+            conn.execute(
+                """insert into category_decisions
+                   (platform, source_path, title_key, l4_path, method, confidence, status,
+                    uses, first_seen, last_seen)
+                   values (?,?,?,?,?,?,?,1,?,?)
+                   on conflict(platform, source_path, title_key) do update set
+                     l4_path=excluded.l4_path, method=excluded.method,
+                     confidence=excluded.confidence, status=excluded.status,
+                     uses=category_decisions.uses + 1, last_seen=excluded.last_seen""",
+                (row.get("_platform", ""), row.get("Source Category", ""),
+                 _title_key(row.get("Product  Name *", "")), path,
+                 row.get("_method", ""), float(row.get("_confidence") or 0),
+                 row.get("Mapping Status", ""), now, now),
+            )
+            n += 1
+        conn.commit(); conn.close()
+        return n
+    except Exception:
+        return 0
+
+
 def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
                  platform: str = "") -> dict:
     out_dir = Path(out_dir)
@@ -193,6 +249,7 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
 
     data = prepare(products)          # category mapping + attributes (single source of truth)
     rows = data["rows"]
+    logged = log_decisions(rows)
 
     exportable: dict[str, list[dict]] = OrderedDict()
     review: list[dict] = []
@@ -272,6 +329,7 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         "batch_id": batch_id,
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
         "products": len(rows),
+        "decisions_logged": logged,
         "exported_products": sum(r["rows"] for r in results),
         "review_products": len(review),
         "files": results,
