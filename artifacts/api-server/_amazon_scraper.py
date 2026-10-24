@@ -23,7 +23,11 @@ logger = logging.getLogger(__name__)
 
 from _spec_to_attribute import _split_axes  # noqa: E402
 
-PROXY = os.environ.get("SCRAPER_PROXY", "")
+# AMAZON_PROXY routes ONLY Amazon traffic through a second egress (e.g. another
+# machine on the Tailscale network whose ISP Amazon has not blocked). It falls
+# back to SCRAPER_PROXY so the old Webshare setup still works when set.
+AMAZON_PROXY = os.environ.get("AMAZON_PROXY", "")
+PROXY = AMAZON_PROXY or os.environ.get("SCRAPER_PROXY", "")
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "")
 # scrape.do — residential-proxy fetcher. The local IP is blocked by Amazon
 # (both curl_cffi and Playwright get the "to discuss automated access" page),
@@ -366,9 +370,14 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
     """
     use_cdp = False
     cdp_url = SCRAPE_CDP_URL
+    if AMAZON_PROXY:
+        # The shared Chromes are pinned to this machine's egress, which Amazon
+        # blocks. With a dedicated proxy we launch our own browser through it
+        # instead of borrowing one.
+        use_cdp = False
     try:
         import urllib.request
-        for candidate in CDP_URLS:
+        for candidate in ([] if AMAZON_PROXY else CDP_URLS):
             try:
                 urllib.request.urlopen(f"{candidate}/json/version", timeout=5)
                 cdp_url = candidate
@@ -395,6 +404,7 @@ def _try_playwright(url: str, ua: str = "") -> dict | None:
                 browser = p.chromium.launch(
                     headless=True,
                     args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+                    **({"proxy": {"server": AMAZON_PROXY}} if AMAZON_PROXY else {}),
                 )
                 context = browser.new_context(
                     user_agent=ua or USER_AGENTS[0],
