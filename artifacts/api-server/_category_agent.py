@@ -255,7 +255,7 @@ def available() -> bool:
     return True
 
 
-def apply_to_prepare(products: list[dict]) -> dict:
+def apply_to_prepare(products: list[dict], on_progress=None) -> dict:
     """Classify a batch; returns {id(product) -> result}. Used by the exporter."""
     if not available():
         print("category agent unavailable - keeping rule-based mapping", file=sys.stderr)
@@ -271,6 +271,11 @@ def apply_to_prepare(products: list[dict]) -> dict:
                 out[futures[fut]] = fut.result()
             except Exception as exc:  # noqa: BLE001
                 print(f"agent: {type(exc).__name__}: {exc}", file=sys.stderr)
+            if on_progress:
+                try:
+                    on_progress(k + 1, len(products))
+                except Exception:
+                    pass
     print(f"agent classified {len(out)}/{len(products)} in {time.time()-t0:.0f}s", file=sys.stderr)
     return out
 

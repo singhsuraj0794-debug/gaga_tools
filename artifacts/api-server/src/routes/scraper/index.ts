@@ -21,6 +21,7 @@ import { pythonBin } from "../../lib/py";
 import { runBatched } from "../../lib/scrapeBatch";
 import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
 import crypto from "node:crypto";
+import { spawn, type ChildProcess } from "node:child_process";
 
 const execFileAsync = promisify(execFile);
 
@@ -380,12 +381,125 @@ router.post("/category-summary", async (req: Request, res: Response): Promise<vo
   }
 });
 
-/** POST /api/scraper/export-l2 — export by L2 listing template.
- *
- * Products are grouped by the L2 of their approved L4 and written into a copy of
- * that L2's registered template; the batch (plus Review_Required) comes back as
- * a zip. The legacy /export (one workbook, sheet per L4) is untouched.
- */
+
+// ── L2 export jobs: background run + live progress ─────────────────────────
+// The category agent costs seconds per product, so an export can take minutes
+// to hours. The work runs as a detached python process that writes progress.json
+// (stage, done/total, percent); the UI polls it and downloads the zip at the end.
+const EXPORT_ROOT = process.env.GAJAB_EXPORT_DIR || "C:\\gajab\\Scraper_Exports";
+const L2_JOBS_DIR = path.join(EXPORT_ROOT, "_jobs");
+const l2Jobs = new Map<string, { child?: ChildProcess; startedAt: number }>();
+
+function l2JobPaths(jobId: string) {
+  const dir = path.join(L2_JOBS_DIR, jobId);
+  return { dir, job: path.join(dir, "job.json"), out: path.join(dir, "out"),
+           zip: path.join(dir, "out.zip"), progress: path.join(dir, "progress.json"),
+           log: path.join(dir, "export.log") };
+}
+
+function readL2Progress(jobId: string): any {
+  const { progress, zip, log } = l2JobPaths(jobId);
+  let p: any = { state: "unknown", stage: "Starting", percent: 0, done: 0, total: 0 };
+  try { p = JSON.parse(fs.readFileSync(progress, "utf-8")); } catch { /* not written yet */ }
+  p.ready = fs.existsSync(zip);
+  p.jobId = jobId;
+  if (p.state === "unknown" && !l2Jobs.has(jobId)) {
+    p.state = "failed";
+    p.error = "job not found";
+  }
+  if (p.state === "running" && !l2Jobs.has(jobId)) {
+    // process is gone but never finished (crash / machine restart)
+    p.state = "failed";
+    p.error = p.error || "export process stopped";
+  }
+  if (p.state === "failed" && !p.error) {
+    try {
+      const tail = fs.readFileSync(log, "utf-8").split("\n").slice(-6).join("\n").slice(-600);
+      p.error = tail || "export failed";
+    } catch { /* ignore */ }
+  }
+  return p;
+}
+
+router.post("/export-l2/start", async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { products, platform = "" } = req.body || {};
+    if (!Array.isArray(products) || products.length === 0) {
+      res.status(400).json({ error: "products array required" });
+      return;
+    }
+    const jobId = crypto.randomBytes(8).toString("hex");
+    const p = l2JobPaths(jobId);
+    fs.mkdirSync(p.dir, { recursive: true });
+    fs.writeFileSync(p.job, JSON.stringify({ products }), "utf-8");
+    fs.writeFileSync(p.progress, JSON.stringify({
+      state: "running", stage: "Starting", percent: 0, done: 0, total: products.length,
+      detail: "queued",
+    }), "utf-8");
+
+    const logFd = fs.openSync(p.log, "w");
+    const child = spawn(
+      pythonBin(),
+      [L2_EXPORT_SCRIPT, "--job", p.job, "--platform", String(platform),
+       "--out", p.out, "--zip", "--progress", p.progress],
+      { cwd: __dirname, stdio: ["ignore", logFd, logFd], windowsHide: true },
+    );
+    l2Jobs.set(jobId, { child, startedAt: Date.now() });
+    child.on("exit", (code) => {
+      // python writes its own failure state; this covers a hard crash
+      try {
+        const cur = JSON.parse(fs.readFileSync(p.progress, "utf-8"));
+        if (cur.state === "running") {
+          cur.state = "failed";
+          cur.error = `export process exited with code ${code}`;
+          fs.writeFileSync(p.progress, JSON.stringify(cur), "utf-8");
+        }
+      } catch { /* ignore */ }
+      setTimeout(() => l2Jobs.delete(jobId), 10 * 60 * 1000);
+    });
+
+    logger.info({ jobId, products: products.length, platform }, "L2 export started");
+    res.json({ jobId, total: products.length });
+  } catch (err: any) {
+    logger.error({ err: err?.message }, "L2 export start failed");
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+router.get("/export-l2/:jobId", (req: Request, res: Response): void => {
+  res.json(readL2Progress(req.params.jobId as string));
+});
+
+router.get("/export-l2/:jobId/download", (req: Request, res: Response): void => {
+  const jobId = req.params.jobId as string;
+  const { zip } = l2JobPaths(jobId);
+  if (!fs.existsSync(zip)) {
+    res.status(409).json({ error: "export not ready" });
+    return;
+  }
+  const name = (req.query.name as string) || `l2-export-${jobId}.zip`;
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
+  fs.createReadStream(zip).pipe(res);
+});
+
+router.post("/export-l2/:jobId/cancel", (req: Request, res: Response): void => {
+  const jobId = req.params.jobId as string;
+  const job = l2Jobs.get(jobId);
+  if (job?.child) {
+    try { job.child.kill(); } catch { /* ignore */ }
+  }
+  const p = l2JobPaths(jobId);
+  try {
+    const cur = JSON.parse(fs.readFileSync(p.progress, "utf-8"));
+    cur.state = "cancelled";
+    cur.error = "cancelled by user";
+    fs.writeFileSync(p.progress, JSON.stringify(cur), "utf-8");
+  } catch { /* ignore */ }
+  res.json({ status: "cancelled" });
+});
+
+/** Synchronous variant (used by scripts/tests). The UI uses /export-l2/start. */
 router.post("/export-l2", async (req: Request, res: Response): Promise<void> => {
   const tmpJob = path.join(os.tmpdir(), `l2-export-${Date.now()}.json`);
   const outDir = path.join(os.tmpdir(), `l2-out-${Date.now()}`);

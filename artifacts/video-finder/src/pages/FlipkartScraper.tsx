@@ -42,7 +42,8 @@ async function fetchRetry(input: RequestInfo, init: RequestInit = {}, retries = 
 }
 import { API_BASE } from "@/lib/api";
 import { CategorySummary, useCategorySummary } from "@/components/CategorySummary";
-import { exportGajabWorkbook, exportL2Workbooks } from "@/lib/gajabExport";
+import { exportGajabWorkbook, exportL2WithProgress, cancelL2Export, type L2ExportProgress } from "@/lib/gajabExport";
+import { ExportProgress } from "@/components/ExportProgress";
 
 
 interface FlipkartDetailedProduct {
@@ -88,6 +89,7 @@ export default function FlipkartScraper() {
   const [isScraping, setIsScraping] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [l2Progress, setL2Progress] = useState<L2ExportProgress | null>(null);
   const catSummary = useCategorySummary("flipkart", products);
   const [uploadStatus, setUploadStatus] = useState<{ total: number; valid: number } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -339,19 +341,24 @@ export default function FlipkartScraper() {
     }
   };
 
-  /** L2 template export: one workbook per L2 (+ Review_Required), delivered as a zip. */
+  /** L2 template export: background job + live progress. */
   const handleExportL2 = async () => {
     if (products.length === 0) return;
     setIsExporting(true);
     try {
-      await exportL2Workbooks("flipkart", products, "flipkart-l2-templates.zip");
+      await exportL2WithProgress("flipkart", products, "flipkart-l2-templates.zip", setL2Progress);
     } catch (error) {
       console.error("L2 export error:", error);
       const detail = error instanceof Error ? error.message : String(error);
       alert(`L2 export failed${detail ? `:\n${detail}` : ""}`);
     } finally {
       setIsExporting(false);
+      setTimeout(() => setL2Progress(null), 15000);
     }
+  };
+
+  const handleCancelL2 = () => {
+    if (l2Progress?.jobId) void cancelL2Export(l2Progress.jobId);
   };
 
   const handleReset = () => {
@@ -717,7 +724,7 @@ export default function FlipkartScraper() {
                       {products.length} Product{products.length !== 1 ? "s" : ""} Scraped{isScraping && batchProgress ? ` (${batchProgress.current}/${batchProgress.total})` : ""}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       onClick={handleExport}
                       disabled={isExporting}
@@ -738,6 +745,7 @@ export default function FlipkartScraper() {
                     >
                       Export by L2 template
                     </Button>
+                    <ExportProgress progress={l2Progress} onCancel={handleCancelL2} />
                     <Button
                       variant="ghost"
                       size="sm"

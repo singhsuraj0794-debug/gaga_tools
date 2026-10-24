@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+from datetime import datetime
 import os
 import sqlite3
 import json
@@ -205,6 +206,69 @@ def zip_dir(out_dir: Path) -> Path:
     return archive
 
 
+class Progress:
+    """Atomic progress file the API and the UI poll.
+
+    Stage weights are chosen so the bar moves honestly: the category agent is by
+    far the slowest part of a real batch, so it owns most of the range.
+    """
+
+    RANGES = {
+        "Preparing": (0, 2),
+        "Category agent": (2, 75),
+        "Mapping attributes": (75, 80),
+        "Writing L2 workbooks": (80, 97),
+        "Packaging": (97, 100),
+    }
+
+    def __init__(self, path: str | None, total: int):
+        self.path = Path(path) if path else None
+        self.total = max(1, total)
+        self.state = "running"
+        self.stage = "Preparing"
+        self.done = 0
+
+    def _percent(self, stage: str, done: int, total: int) -> int:
+        lo, hi = self.RANGES.get(stage, (0, 100))
+        frac = (done / total) if total else 0.0
+        return int(round(lo + (hi - lo) * max(0.0, min(1.0, frac))))
+
+    def write(self, stage: str | None = None, done: int | None = None,
+              total: int | None = None, detail: str = "", state: str | None = None,
+              result: dict | None = None, error: str = "") -> None:
+        if self.path is None:
+            return
+        if stage:
+            self.stage = stage
+        if done is not None:
+            self.done = done
+        if total is not None:
+            self.total = max(1, total)
+        if state:
+            self.state = state
+        payload = {
+            "state": self.state,
+            "stage": self.stage,
+            "done": self.done if self.stage not in ("Preparing", "Packaging") else 0,
+            "total": self.total if self.stage not in ("Preparing", "Packaging") else 0,
+            "percent": (100 if self.state == "done" else
+                        self._percent(self.stage, self.done, self.total)),
+            "detail": detail,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        if result is not None:
+            payload["result"] = result
+        if error:
+            payload["error"] = error
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(self.path)
+        except Exception:
+            pass
+
+
 def _title_key(title: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).split())
 
@@ -256,7 +320,7 @@ def log_decisions(rows: list[dict], db: Path = DECISIONS_DB) -> int:
 
 
 def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
-                 platform: str = "") -> dict:
+                 platform: str = "", progress: "Progress | None" = None) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     batch_id = batch_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -265,9 +329,19 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     # a row when it has a validated taxonomy node; otherwise the rule-based
     # mapping stands and a gap is reported.
     rulings, gaps = {}, []
+    if progress:
+        progress.write("Preparing", detail="loading templates and taxonomy")
     try:
         from _category_agent import apply_to_prepare
-        agent_out = apply_to_prepare(products)
+        if progress:
+            progress.write("Category agent", done=0, total=len(products),
+                           detail="classifying products on the GPU")
+        agent_out = apply_to_prepare(
+            products,
+            on_progress=(lambda done, total: progress.write(
+                "Category agent", done=done, total=total, detail="classifying products")
+                if progress else None),
+        )
         for p in products:
             r = agent_out.get(id(p))
             if not r:
@@ -279,6 +353,9 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     except Exception as exc:  # noqa: BLE001
         print(f"category agent skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
 
+    if progress:
+        progress.write("Mapping attributes", done=0, total=len(products),
+                       detail="resolving attributes per L4")
     data = prepare(products, rulings=rulings)   # category mapping + attributes
     rows = data["rows"]
     logged = log_decisions(rows)
@@ -313,7 +390,8 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
 
     level_counts = Counter(int(r.get("_level") or 0) for g in exportable.values() for r in g)
     results, missing_templates = [], []
-    for l2, group in exportable.items():
+    total_groups = max(1, len(exportable))
+    for gi, (l2, group) in enumerate(exportable.items()):
         template = get_template(l2)
         if not template:
             missing_templates.append(l2)
@@ -338,6 +416,9 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         while target.exists():
             target = out_dir / f"{leaf}_{n}.xlsx"
             n += 1
+        if progress:
+            progress.write("Writing L2 workbooks", done=gi, total=total_groups,
+                           detail=f"{_leaf_of(l2)} ({len(group)} rows)")
         info = _write_group_rows(group, l2, template, target)
         info.update({"l2": l2, "template_version": template["version"],
                      "template_source": template["source_name"],
@@ -373,6 +454,9 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         ws.freeze_panes = "A2"
         wb.save(review_dir / "Unmapped_Products.xlsx")
 
+    if progress:
+        progress.write("Packaging", detail="building the zip")
+
     manifest = {
         "batch_id": batch_id,
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
@@ -388,6 +472,12 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         "categories": {k: len(v) for k, v in exportable.items()},
     }
     (out_dir / "export_log.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    if progress:
+        progress.write("Done", state="done", detail="batch complete", result={
+            k: manifest[k] for k in ("batch_id", "products", "exported_products",
+                                     "review_products", "agent_rulings", "taxonomy_gaps",
+                                     "exported_by_level", "files")
+        })
     return manifest
 
 
@@ -398,6 +488,7 @@ def main() -> int:
     ap.add_argument("--platform", default="")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--zip", action="store_true", help="also write <out>.zip")
+    ap.add_argument("--progress", default="", help="write a JSON progress file here")
     args = ap.parse_args()
 
     payload = json.loads(Path(args.job).read_text(encoding="utf-8"))
@@ -407,7 +498,12 @@ def main() -> int:
         products = products[: args.limit]
 
     out = Path(args.out) if args.out else EXPORT_ROOT / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    manifest = export_batch(products, out, platform=args.platform)
+    progress = Progress(args.progress or None, len(products))
+    try:
+        manifest = export_batch(products, out, platform=args.platform, progress=progress)
+    except Exception as exc:  # noqa: BLE001
+        progress.write("Failed", state="failed", error=f"{type(exc).__name__}: {exc}")
+        raise
     print(json.dumps({k: manifest[k] for k in
                       ("batch_id", "products", "exported_products", "review_products",
                        "missing_templates")}, indent=2))
