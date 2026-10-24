@@ -39,7 +39,9 @@ sys.path.insert(0, str(HERE))
 
 DB_PATH = Path(os.environ.get("SPEC_STORE_DB", r"C:\gajab\templates\product_specs.db"))
 PROGRESS = Path(os.environ.get("ENRICH_PROGRESS", r"C:\gajab\enrich_progress.json"))
-WORKERS = max(1, int(os.environ.get("ENRICH_WORKERS", "2")))
+# 1 worker by default: the box is a 6-core CPU and Chrome needs the cores while
+# scraping. The queue is a background nicety, not a race.
+WORKERS = max(1, int(os.environ.get("ENRICH_WORKERS", "1")))
 BATCH = max(1, int(os.environ.get("ENRICH_BATCH", "8")))
 
 QUEUE_SCHEMA = """
@@ -99,6 +101,30 @@ def enqueue(platform: str, products: list[dict], db: Path = DB_PATH) -> int:
     conn.commit()
     conn.close()
     return len(rows)
+
+
+def scrape_busy() -> bool:
+    """True while any scrape job is running or pending.
+
+    Enrichment must yield to scraping: both compete for the same 6 cores, and
+    running them together made scraping ~3.5x slower (8.2s vs 2.3s per product).
+    """
+    try:
+        for plat in ("flipkart", "meesho", "amazon"):
+            d = HERE / f"{plat}_jobs"
+            if not d.is_dir():
+                continue
+            files = sorted(d.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)[:4]
+            for f in files:
+                try:
+                    j = json.loads(f.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if j.get("status") in ("running", "pending"):
+                    return True
+    except Exception:
+        pass
+    return False
 
 
 def _write_progress(**kw) -> None:
@@ -183,6 +209,12 @@ def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
                     updated_at=now(), detail="starting")
 
     while True:
+        if wait and not once and scrape_busy():
+            _write_progress(state="paused", queued=counts(db)["pending"], done=done,
+                            total=total, updated_at=now(),
+                            detail="paused - scraping in progress")
+            time.sleep(idle_sleep)
+            continue
         conn = connect(db)
         rows = conn.execute(
             "select id, platform, payload from enrich_queue where state='pending' order by id limit ?",
