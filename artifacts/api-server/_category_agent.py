@@ -220,6 +220,18 @@ def _branches(paths: list[str]) -> list[str]:
 
 
 def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
+    # The curated keyword map comes FIRST: it is the only signal that survives a
+    # lying marketplace breadcrumb. Flipkart sellers file e.g. a fuel transfer
+    # pump under "Musical Instruments"; the embedding shortlist then follows that
+    # breadcrumb and the agent happily picks the branch, which is how 29 pumps
+    # ended up in the instruments workbook.
+    try:
+        from _category_keywords import match_target
+        hit = match_target(p.get("title") or "")
+        if hit and hit[1] in set(paths):
+            return {"path": hit[1], "confidence": 0.95, "method": "title-keyword"}
+    except Exception:
+        pass
     text = product_text(p)
     q = _embed([text])[0]
     sims = emb @ q
