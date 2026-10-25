@@ -281,36 +281,40 @@ def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
 
 ATTR_SYSTEM = (
     "You map marketplace product specifications onto the attributes of one category. "
-    "You are given the ALLOWED attribute names and a list of specifications that did not match. "
-    "For each specification choose the allowed attribute whose meaning matches, or null when none does. "
-    "Never invent an attribute name and never guess a value: copy the scraped value. "
-    "Answer as JSON only: {\"mappings\": [{\"key\": \"...\", \"attribute\": \"<allowed name or null>\", "
-    "\"value\": \"...\"}]}."
+    "You are given the ALLOWED attribute names and specifications that did not match. "
+    "For each specification key choose the allowed attribute whose meaning matches, "
+    "or an empty string when none does. Never invent an attribute name. "
+    "Answer as JSON only, one entry per key, no values and no commentary: "
+    "{\"m\": {\"<specification key>\": \"<allowed attribute name or empty>\"}}."
 )
 
 
 def map_attributes(unmapped: list[dict], declared: list[str], title: str = "") -> dict:
     """Second pass: let the model place the specs the alias table could not.
 
-    Only attribute names the category actually declares are accepted, and the
-    value is always the scraped one - the model may not invent specifications.
+    Only attribute names the category declares are accepted, and the VALUE is
+    always the scraped one (the model never sees a value in its answer) - it may
+    not invent specifications.
+
+    The answer is a compact key -> attribute map. Asking for an array of
+    {key, attribute, value} objects cost ~200 generated tokens, i.e. 25-45s per
+    product at ~6 tok/s - the single biggest enrichment cost.
     """
     if not unmapped or not declared:
         return {}
     allowed = {a.strip().lower(): a for a in declared}
-    # Keep the answer short: this runs per product and generation is the cost
-    # (a 200-token reply at 5 tok/s is 40s on its own).
     items = [{"key": str(u.get("key") or ""), "value": str(u.get("value") or "")[:120]}
              for u in unmapped[:8]]
+    values = {it["key"]: it["value"] for it in items}
     user = (f"Allowed attributes: {', '.join(declared)}\n"
-            f"Product: {title[:160]}\n"
-            f"Unmatched specifications: {json.dumps(items, ensure_ascii=False)}")
+            f"Product: {title[:140]}\n"
+            f"Specifications: {json.dumps(items, ensure_ascii=False)}")
     try:
         r = requests.post(f"{CHAT_URL}/v1/chat/completions", timeout=TIMEOUT, json={
             "messages": [{"role": "system", "content": ATTR_SYSTEM},
                          {"role": "user", "content": user}],
             "temperature": 0,
-            "max_tokens": 220,
+            "max_tokens": 130,
             "response_format": {"type": "json_object"},
         })
         r.raise_for_status()
@@ -321,13 +325,13 @@ def map_attributes(unmapped: list[dict], declared: list[str], title: str = "") -
         data = json.loads(m.group(0))
     except Exception:
         return {}
+    mapping = data.get("m") if isinstance(data.get("m"), dict) else {}
     out: dict[str, str] = {}
-    for item in (data.get("mappings") or []):
-        attr = item.get("attribute")
+    for key, attr in mapping.items():
         if not isinstance(attr, str) or not attr.strip():
             continue
         target = allowed.get(attr.strip().lower())
-        value = str(item.get("value") or "").strip()
+        value = values.get(str(key), "")
         if target and value:
             out[target] = value
     return out
