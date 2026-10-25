@@ -395,7 +395,13 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     # ready when it has a cache row. (Watching queue/spool counters raced with the
     # worker's claim/ingest cycle and made the export re-run the agents inline.)
     wait_seconds = float(os.environ.get("ENRICH_WAIT_SECONDS", "300"))
-    missing = [p for p in products if id(p) not in rulings]
+    # A blocked/failed scrape has no data to classify, so it can never get a
+    # ruling. Counting it here made the counter freeze at "8063/8080" and stall
+    # the export for the whole wait budget (18 such products in the 8,080 row
+    # Flipkart catalogue = a permanent 17 short).
+    missing = [p for p in products if id(p) not in rulings
+               and (p.get("status") or "success") == "success"]
+    enrich_total = len(missing) + sum(1 for p in products if id(p) in rulings)
     if missing and wait_seconds > 0:
         try:
             import _enrich_cache
@@ -421,7 +427,7 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
                     break
                 if progress:
                     progress.write("Waiting for enrichment",
-                                   done=len(products) - len(missing), total=len(products),
+                                   done=enrich_total - len(missing), total=enrich_total,
                                    detail=f"{len(missing)} product(s) still enriching")
                 time.sleep(2)
         except Exception as exc:  # noqa: BLE001
