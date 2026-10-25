@@ -338,6 +338,32 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     out_dir.mkdir(parents=True, exist_ok=True)
     batch_id = batch_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # Local category agent first (Qwen2.5-14B + EmbeddingGemma). It only overrides
+    # a row when it has a validated taxonomy node; otherwise the rule-based
+    # mapping stands and a gap is reported.
+    rulings, gaps, attr_rulings = {}, [], {}
+    cached_hits = 0
+    if progress:
+        progress.write("Preparing", detail="loading templates and taxonomy")
+    # Persistent answers first: a product already classified by an earlier run
+    # needs neither GPU pass. This is what makes a restart cheap.
+    try:
+        import _enrich_cache
+        cached = _enrich_cache.get_many(platform or "", [str(p.get("id") or p.get("sku") or "")
+                                                         for p in products])
+        for p in products:
+            pid = str(p.get("id") or p.get("sku") or "")
+            hit = cached.get(pid)
+            if not hit:
+                continue
+            if hit.get("l4_path"):
+                rulings[id(p)] = {"path": hit["l4_path"], "confidence": hit.get("confidence", 0.0),
+                                  "method": hit.get("method") or "cached"}
+            if hit.get("attributes"):
+                attr_rulings[id(p)] = hit["attributes"]
+            cached_hits += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"enrich-cache read skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
     # If the background worker is still chewing on these products, wait for it:
     # the work is already queued, so re-running the agents here would pay for it
     # twice (and make the export feel slow, which is exactly what we removed).
@@ -373,32 +399,6 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         except Exception as exc:  # noqa: BLE001
             print(f"enrich wait skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
 
-    # Local category agent first (Qwen2.5-14B + EmbeddingGemma). It only overrides
-    # a row when it has a validated taxonomy node; otherwise the rule-based
-    # mapping stands and a gap is reported.
-    rulings, gaps, attr_rulings = {}, [], {}
-    cached_hits = 0
-    if progress:
-        progress.write("Preparing", detail="loading templates and taxonomy")
-    # Persistent answers first: a product already classified by an earlier run
-    # needs neither GPU pass. This is what makes a restart cheap.
-    try:
-        import _enrich_cache
-        cached = _enrich_cache.get_many(platform or "", [str(p.get("id") or p.get("sku") or "")
-                                                         for p in products])
-        for p in products:
-            pid = str(p.get("id") or p.get("sku") or "")
-            hit = cached.get(pid)
-            if not hit:
-                continue
-            if hit.get("l4_path"):
-                rulings[id(p)] = {"path": hit["l4_path"], "confidence": hit.get("confidence", 0.0),
-                                  "method": hit.get("method") or "cached"}
-            if hit.get("attributes"):
-                attr_rulings[id(p)] = hit["attributes"]
-            cached_hits += 1
-    except Exception as exc:  # noqa: BLE001
-        print(f"enrich-cache read skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
     try:
         from _category_agent import apply_to_prepare
         if progress:
