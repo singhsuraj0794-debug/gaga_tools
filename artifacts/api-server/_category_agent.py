@@ -56,8 +56,10 @@ SYSTEM = (
     "Choose the single candidate that best describes what the product IS. "
     "Use the product name, brand, seller category and specifications. "
     "Never invent a category and never choose a candidate that only shares a word. "
-    "Answer with JSON only: {\"id\": <candidate number>, \"confidence\": <0-1>, \"reason\": \"<12 words>\"}. "
-    "If no candidate is a reasonable fit, answer {\"id\": -1, \"confidence\": <0-1>, \"reason\": \"<12 words>\"}."
+    # Output is the whole cost: at ~6 tokens/s a 50-token explanation adds ~8s per
+    # product. The index alone is enough (confidence comes from the similarity).
+    "Answer with JSON only: {\"id\": <candidate number>}. "
+    "If no candidate is a reasonable fit: {\"id\": -1}."
 )
 
 
@@ -153,7 +155,7 @@ def _ask(candidates: list[str], text: str) -> tuple[int, float, str]:
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": user}],
         "temperature": 0,
-        "max_tokens": 64,
+        "max_tokens": 12,
         "response_format": {"type": "json_object"},
     })
     r.raise_for_status()
@@ -166,9 +168,7 @@ def _ask(candidates: list[str], text: str) -> tuple[int, float, str]:
     except json.JSONDecodeError:
         return -1, 0.0, "invalid json"
     idx = int(d.get("id", -1))
-    conf = float(d.get("confidence") or 0.0)
-    reason = str(d.get("reason") or "")[:120]
-    return idx, conf, reason
+    return idx, 1.0 if idx >= 0 else 0.0, ""
 
 
 SUGGEST_SYSTEM = (
@@ -246,6 +246,8 @@ def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
 
     if 0 <= idx < len(candidates):
         path = candidates[idx]
+        if conf <= 0 and scores:
+            conf = float(scores[idx]) if idx < len(scores) else 0.0
         # An intermediate node has no attribute group in the L2 template (groups
         # are L4 leaves), so a product parked on an L3 exports with every
         # attribute blank. Ask once more among its children.
