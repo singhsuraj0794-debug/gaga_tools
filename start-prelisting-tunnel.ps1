@@ -75,7 +75,11 @@ if ($llama) {
         Write-Host "Starting llama.cpp embedding server on $LlamaPort ..."
         Start-Bg -FilePath $llamaExe -Arguments @(
             "-hf", "unsloth/embeddinggemma-2-GGUF:UD-Q4_K_XL",
-            "--embedding", "-ngl", "99", "--port", "$LlamaPort", "--host", "127.0.0.1"
+            # CPU ONLY (-ngl 0). EmbeddingGemma is used for a single short text per
+            # product (the 2,913-path taxonomy matrix is cached), while its ~1.5 GB
+            # of VRAM was pushing the 14B category agent into CPU offload - prefill
+            # collapsed to ~40 tok/s and one decision took 18s+.
+            "--embedding", "-ngl", "0", "--port", "$LlamaPort", "--host", "127.0.0.1"
         ) -WorkingDirectory $ApiDir -LogName "llama-embed.log" | Out-Null
         # Wait until the embedding server answers /health before the analysis
         # server makes embedding calls (else the first call would fall back to
