@@ -291,8 +291,11 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
     # workbook. The title always names the product, so anchor on it.
     ("fuel_transfer_pump", ["fuel transfer pump", "oil transfer pump", "fuel pump kit",
                             "fuel transfer pipe", "oil transfer pipe", "siphon pump",
-                            "fuel siphon", "oil siphon"],
+                            "fuel siphon", "oil siphon", "transfer pump", "fuel pump",
+                            "oil pump kit"],
      "Automobile Accessories > Spares > Car Spare Parts > Vehicle Oil Pump Kit"),
+    ("night_lamp", ["night lamp", "night light", "panda lamp"],
+     "Home & Kitchen > Home Decor > Lights & Lamps > Table Lamp"),
 ]
 
 
