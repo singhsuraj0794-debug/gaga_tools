@@ -80,6 +80,9 @@ while ($true) {
     # Category agent (Qwen2.5-14B on the GPU): the export falls back to rules if
     # it is down, so a missed restart only costs accuracy, never the batch.
     if (-not (Test-PortOpen $AgentPort)) { Start-Starter "start-category-agent.ps1" }
+    # The embedding server lives in the prelisting starter (with CLIP/analysis),
+    # so it was never revived on its own - and the category agent needs it.
+    if (-not (Test-PortOpen $EmbedPort)) { Start-Starter "start-prelisting-tunnel.ps1" }
 
     # Background enrichment worker: scraping must not wait for it, so a missed
     # restart only delays category/attribute mapping.

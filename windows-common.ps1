@@ -20,6 +20,7 @@ $ApiPort          = 8090
 $ClipPort         = 8001
 $AnalysisPort     = 8003
 $AgentPort        = 8082   # Qwen2.5-14B category agent (llama.cpp, GPU)
+$EmbedPort        = 8081   # EmbeddingGemma (llama.cpp, CPU) - taxonomy shortlist
 $ChromeScraperPort = 9223   # product scraping, via the Webshare proxy
 $LocalProxyPort    = 9224   # local auth-forwarding proxy for Webshare
 $ChromeExtractPort = 9225   # link extraction, no proxy
