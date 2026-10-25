@@ -43,6 +43,10 @@ PROGRESS = Path(os.environ.get("ENRICH_PROGRESS", r"C:\gajab\enrich_progress.jso
 # scraping. The queue is a background nicety, not a race.
 WORKERS = max(1, int(os.environ.get("ENRICH_WORKERS", "1")))
 BATCH = max(1, int(os.environ.get("ENRICH_BATCH", "8")))
+# The API drops {"platform","products"} files here as products are scraped; the
+# worker ingests them into the queue. A spool file is cheaper and more reliable
+# than spawning a python process per flush.
+SPOOL_DIR = Path(os.environ.get("ENRICH_SPOOL_DIR", r"C:\gajab\enrich_spool"))
 # Enrichment is meant to run WHILE scraping (GPU idle, products arrive). Set
 # ENRICH_PAUSE_ON_SCRAPE=1 to make it yield completely instead.
 PAUSE_ON_SCRAPE = os.environ.get("ENRICH_PAUSE_ON_SCRAPE", "0") == "1"
@@ -104,6 +108,28 @@ def enqueue(platform: str, products: list[dict], db: Path = DB_PATH) -> int:
     conn.commit()
     conn.close()
     return len(rows)
+
+
+def ingest_spool(db: Path = DB_PATH) -> int:
+    """Move spooled products into the queue. Returns how many were added."""
+    added = 0
+    try:
+        if not SPOOL_DIR.is_dir():
+            return 0
+        for f in sorted(SPOOL_DIR.glob("*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                added += enqueue(str(data.get("platform") or ""), data.get("products") or [], db)
+            except Exception:
+                pass
+            finally:
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return added
 
 
 def scrape_busy() -> bool:
@@ -221,6 +247,7 @@ def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
         print("enrich worker: another instance is already running", flush=True)
         return 0
 
+    ingest_spool(db)
     totals = counts(db)
     total = totals["pending"] + totals["running"]
     done = 0
@@ -229,6 +256,7 @@ def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
                     updated_at=now(), detail="starting")
 
     while True:
+        ingest_spool(db)
         if wait and not once and PAUSE_ON_SCRAPE and scrape_busy():
             _write_progress(state="paused", queued=counts(db)["pending"], done=done,
                             total=total, updated_at=now(),

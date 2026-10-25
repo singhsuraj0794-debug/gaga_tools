@@ -1,23 +1,18 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
-import os from "node:os";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-import { pythonBin } from "./py";
 import { logger } from "./logger.js";
 
 /**
  * Per-product enrichment queueing.
  *
  * Category + attribute mapping must run WHILE scraping (the GPU is idle then),
- * not when the export is requested. Every scraped product is buffered and
- * flushed in small batches - one python process per product would cost more than
- * the agent itself.
+ * not when the export is requested. Each scraped product is buffered and written
+ * to a SPOOL FILE that the background worker ingests; no child process is spawned
+ * per flush (that failed silently and is slow).
  */
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SCRIPT = path.resolve(__dirname, "_enrich_queue.py");
+const SPOOL_DIR = process.env.ENRICH_SPOOL_DIR || "C:\\gajab\\enrich_spool";
 const BUFFER = new Map<string, any[]>();
-const FLUSH_AT = 10;
+const FLUSH_AT = 5;
 
 export function flushEnrichment(platform: string, force = false): void {
   const buf = BUFFER.get(platform);
@@ -25,15 +20,15 @@ export function flushEnrichment(platform: string, force = false): void {
   const batch = buf.splice(0, buf.length);
   if (!batch.length) return;
   try {
-    const tmp = path.join(os.tmpdir(), `enrich-${platform}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
-    fs.writeFileSync(tmp, JSON.stringify({ products: batch }), "utf-8");
-    const child = spawn(pythonBin(), [SCRIPT, "enqueue", "--platform", platform, "--products", tmp],
-      { cwd: __dirname, stdio: "ignore", windowsHide: true, detached: true });
-    child.on("exit", () => { try { fs.unlinkSync(tmp); } catch { /* ignore */ } });
-    child.unref();
-    logger.info({ platform, products: batch.length }, "queued for background enrichment");
+    fs.mkdirSync(SPOOL_DIR, { recursive: true });
+    const name = `${platform}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`;
+    const tmp = path.join(SPOOL_DIR, `.${name}.tmp`);
+    const final = path.join(SPOOL_DIR, name);
+    fs.writeFileSync(tmp, JSON.stringify({ platform, products: batch }), "utf-8");
+    fs.renameSync(tmp, final);          // atomic: the worker never sees a half file
+    logger.info({ platform, products: batch.length }, "spooled for background enrichment");
   } catch (err: any) {
-    logger.warn({ err: err?.message }, "enrichment flush failed");
+    logger.warn({ err: err?.message }, "enrichment spool failed");
   }
 }
 
