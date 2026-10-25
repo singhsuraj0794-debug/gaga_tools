@@ -377,6 +377,8 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         try:
             import _enrich_cache, _enrich_queue
             deadline = time.time() + wait_seconds
+            idle_polls = 0
+            last_progress = -1
             while time.time() < deadline:
                 more = _enrich_cache.get_many(platform or "", [str(p.get("id") or p.get("sku") or "") for p in missing])
                 for p in list(missing):
@@ -399,8 +401,17 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
                 # agents inline.
                 spool_dir = Path(os.environ.get("ENRICH_SPOOL_DIR", r"C:\gajab\enrich_spool"))
                 spool = len(list(spool_dir.glob("*.json"))) if spool_dir.is_dir() else 0
+                progress_now = len(products) - len(missing)
+                if progress_now != last_progress:
+                    idle_polls, last_progress = 0, progress_now
+                else:
+                    idle_polls += 1
                 if qn["pending"] + qn["running"] == 0 and spool == 0:
-                    break
+                    # Nothing is in flight. Give the worker a couple of polls (it may
+                    # be between passes), then stop waiting rather than block an export
+                    # when enrichment is simply disabled.
+                    if idle_polls >= 2:
+                        break
                 if progress:
                     progress.write("Waiting for enrichment",
                                    done=len(products) - len(missing), total=len(products),
