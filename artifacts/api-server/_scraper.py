@@ -469,21 +469,16 @@ def _try_jsonld(html: str) -> dict | None:
 
 
 _MRP_JS = """() => {
-  // Flipkart renders prices as leaf divs/spans with inline styles; the struck
-  // (list) price carries text-decoration: line-through. Document order puts the
-  // product's own price block first (₹93 then ₹499), so take the first struck
-  // price AFTER the first selling price, limited to the next few price nodes so a
-  // recommendation carousel cannot win.
-  const struck = (e) => (getComputedStyle(e).textDecorationLine || '').includes('line-through');
-  const re = /^[\u20b9]\s?[\d,]+$/;
-  const leaves = [...document.querySelectorAll('div, span')]
-      .filter(e => e.children.length === 0 && re.test((e.textContent || '').trim().replace(/\u00a0/g, ' ')));
-  const firstSell = leaves.findIndex(e => !struck(e));
-  if (firstSell < 0) return null;
-  for (let i = firstSell + 1; i < Math.min(leaves.length, firstSell + 6); i++) {
-    if (struck(leaves[i])) return leaves[i].textContent.trim().replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
-  }
-  return null;
+  // Flipkart renders the PDP price block as: "91% | 999 | \u20b993".
+  // The struck-through MRP has NO rupee sign (it is a bare number), so a
+  // currency-based selector never matches. Match the discount block instead and
+  // sanity-check that the list price is higher than the selling price.
+  const t = (document.body.innerText || '').replace(/\u00a0/g, ' ');
+  const m = t.match(/(\d{1,3})%\s+([\d,]{2,9})\s+\u20b9\s*([\d,]+)/);
+  if (!m) return null;
+  const mrp = m[2].replace(/,/g, '');
+  const price = m[3].replace(/,/g, '');
+  return Number(mrp) > Number(price) ? mrp : null;
 }"""
 
 
@@ -495,6 +490,11 @@ def _extract_mrp(html: str) -> str | None:
     priceSpecification with ListPrice. Only a positive number is accepted - a
     missing MRP must stay blank rather than be guessed from the selling price.
     """
+    m = re.search(r'id="__gajab_mrp__"[^>]*>([^<]+)<', html)
+    if m:
+        val = re.sub(r"[^\d.]", "", m.group(1))
+        if val and float(val) > 0:
+            return val
     for pat in (r'"mrp"\s*:\s*"?([\d.]+)',
                 r'"strikedPrice"\s*:\s*"?([\d.]+)',
                 r'"strikeThroughPrice"\s*:\s*"?([\d.]+)',
