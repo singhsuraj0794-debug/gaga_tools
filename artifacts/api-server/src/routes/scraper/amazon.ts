@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { runLocalScraper, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
+import { queueForEnrichment, flushEnrichment } from "../../lib/enrichQueue";
 import { runBatched } from "../../lib/scrapeBatch";
 import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
 import crypto from "node:crypto";
@@ -20,20 +21,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRAPER_SCRIPT = path.resolve(__dirname, "_amazon_scraper.py");
 
 
-/** Queue a finished scrape job for background enrichment (category + attributes).
- *  Detached on purpose: scraping must not wait for the GPU queue. */
-function enqueueEnrichment(platform: string, jobId: string): void {
-  try {
-    const child = spawn(pythonBin(),
-      [path.resolve(__dirname, "_enrich_queue.py"), "enqueue",
-       "--platform", platform, "--job", jobId],
-      { cwd: __dirname, stdio: "ignore", windowsHide: true, detached: true });
-    child.unref();
-    logger.info({ platform, jobId }, "queued for background enrichment");
-  } catch (err: any) {
-    logger.warn({ err: err?.message }, "enrichment enqueue failed");
-  }
-}
 
 const router = Router();
 
@@ -50,12 +37,13 @@ async function runAmazonJob(job: ScrapeJob<AmazonDetailedProduct>, urls: string[
   await runBatched(pending, async (url) => {
     const product = await scrapeAmazonProduct(url);
     job.products.push(product);
+    queueForEnrichment("amazon", product);
     job.completed = job.products.length;
     amazonJobs.persist(job);
     return product;
   });
   job.status = "completed";
-  enqueueEnrichment("amazon", job.id);
+  flushEnrichment("amazon", true);
   job.completed = job.products.length;
   amazonJobs.persist(job, true);
 }

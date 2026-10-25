@@ -43,6 +43,9 @@ PROGRESS = Path(os.environ.get("ENRICH_PROGRESS", r"C:\gajab\enrich_progress.jso
 # scraping. The queue is a background nicety, not a race.
 WORKERS = max(1, int(os.environ.get("ENRICH_WORKERS", "1")))
 BATCH = max(1, int(os.environ.get("ENRICH_BATCH", "8")))
+# Enrichment is meant to run WHILE scraping (GPU idle, products arrive). Set
+# ENRICH_PAUSE_ON_SCRAPE=1 to make it yield completely instead.
+PAUSE_ON_SCRAPE = os.environ.get("ENRICH_PAUSE_ON_SCRAPE", "0") == "1"
 
 QUEUE_SCHEMA = """
 create table if not exists enrich_queue (
@@ -226,7 +229,7 @@ def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
                     updated_at=now(), detail="starting")
 
     while True:
-        if wait and not once and scrape_busy():
+        if wait and not once and PAUSE_ON_SCRAPE and scrape_busy():
             _write_progress(state="paused", queued=counts(db)["pending"], done=done,
                             total=total, updated_at=now(),
                             detail="paused - scraping in progress")

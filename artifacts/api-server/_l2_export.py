@@ -338,6 +338,41 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
     out_dir.mkdir(parents=True, exist_ok=True)
     batch_id = batch_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # If the background worker is still chewing on these products, wait for it:
+    # the work is already queued, so re-running the agents here would pay for it
+    # twice (and make the export feel slow, which is exactly what we removed).
+    wait_seconds = float(os.environ.get("ENRICH_WAIT_SECONDS", "900"))
+    missing = [p for p in products if id(p) not in rulings]
+    if missing and wait_seconds > 0:
+        try:
+            import _enrich_cache, _enrich_queue
+            deadline = time.time() + wait_seconds
+            while time.time() < deadline:
+                more = _enrich_cache.get_many(platform or "", [str(p.get("id") or p.get("sku") or "") for p in missing])
+                for p in list(missing):
+                    pid = str(p.get("id") or p.get("sku") or "")
+                    hit = more.get(pid)
+                    if not hit:
+                        continue
+                    if hit.get("l4_path"):
+                        rulings[id(p)] = {"path": hit["l4_path"], "confidence": hit.get("confidence", 0.0),
+                                          "method": hit.get("method") or "cached"}
+                    if hit.get("attributes"):
+                        attr_rulings[id(p)] = hit["attributes"]
+                    missing.remove(p)
+                if not missing:
+                    break
+                qn = _enrich_queue.counts()
+                if qn["pending"] + qn["running"] == 0:
+                    break
+                if progress:
+                    progress.write("Waiting for enrichment",
+                                   done=len(products) - len(missing), total=len(products),
+                                   detail=f"{len(missing)} product(s) still enriching")
+                time.sleep(3)
+        except Exception as exc:  # noqa: BLE001
+            print(f"enrich wait skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
+
     # Local category agent first (Qwen2.5-14B + EmbeddingGemma). It only overrides
     # a row when it has a validated taxonomy node; otherwise the rule-based
     # mapping stands and a gap is reported.

@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { runLocalScraper, runLocalExtract, runLocalExtractPage, runLocalExtractStore, hasLocalScraper } from "../../lib/localScraper.js";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
+import { queueForEnrichment, flushEnrichment } from "../../lib/enrichQueue";
 import { runBatched } from "../../lib/scrapeBatch";
 
 const execFileAsync = promisify(execFile);
@@ -18,20 +19,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRAPER_SCRIPT = path.resolve(__dirname, "_meesho_scraper.py");
 
 
-/** Queue a finished scrape job for background enrichment (category + attributes).
- *  Detached on purpose: scraping must not wait for the GPU queue. */
-function enqueueEnrichment(platform: string, jobId: string): void {
-  try {
-    const child = spawn(pythonBin(),
-      [path.resolve(__dirname, "_enrich_queue.py"), "enqueue",
-       "--platform", platform, "--job", jobId],
-      { cwd: __dirname, stdio: "ignore", windowsHide: true, detached: true });
-    child.unref();
-    logger.info({ platform, jobId }, "queued for background enrichment");
-  } catch (err: any) {
-    logger.warn({ err: err?.message }, "enrichment enqueue failed");
-  }
-}
 
 const router = Router();
 
@@ -383,7 +370,7 @@ async function scrapePass(job: ScrapeJob, urls: string[]): Promise<boolean> {
       const product = await scrapeProduct(url);
       const idx = job.products.findIndex((p) => p.url === url);
       if (idx >= 0) job.products[idx] = product;
-      else job.products.push(product);
+      else { job.products.push(product); queueForEnrichment("meesho", product); }
       job.completed = job.products.length;
       persistJob(job);
     }));
@@ -430,7 +417,7 @@ async function runScrapeJob(job: ScrapeJob, urls: string[]): Promise<void> {
     }
   }
   job.status = "completed";
-  enqueueEnrichment("meesho", job.id);
+  flushEnrichment("meesho", true);
   job.completed = job.products.length;
   persistJob(job, true);
 }

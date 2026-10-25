@@ -19,6 +19,7 @@ import type { EcommerceProduct } from "@workspace/api-zod";
 import { sendGajabExport, sendGajabSummary } from "./gajabExport";
 import { pythonBin } from "../../lib/py";
 import { runBatched, scrapeLoad, scrapeConcurrency } from "../../lib/scrapeBatch";
+import { queueForEnrichment, flushEnrichment } from "../../lib/enrichQueue";
 import { JobStore, type ScrapeJob } from "../../lib/scrapeJobStore.js";
 import crypto from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -60,6 +61,7 @@ function enqueueEnrichment(platform: string, jobId: string): void {
   }
 }
 
+
 async function runFlipkartJob(job: ScrapeJob<FlipkartDetailedProduct>, urls: string[]): Promise<void> {
   const done = new Set(job.products.map((p) => (p as any).url));
   const pending = urls.filter((u) => !done.has(u));
@@ -68,12 +70,13 @@ async function runFlipkartJob(job: ScrapeJob<FlipkartDetailedProduct>, urls: str
     job.products.push(product);
     job.completed = job.products.length;
     flipkartJobs.persist(job);
+    queueForEnrichment("flipkart", product);   // enrich while the next one scrapes
     return product;
   });
   job.status = "completed";
   job.completed = job.products.length;
   flipkartJobs.persist(job, true);
-  enqueueEnrichment("flipkart", job.id);
+  flushEnrichment("flipkart", true);
 }
 
 flipkartJobs.load();
