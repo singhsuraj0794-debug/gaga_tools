@@ -41,7 +41,7 @@ DB_PATH = Path(os.environ.get("SPEC_STORE_DB", r"C:\gajab\templates\product_spec
 PROGRESS = Path(os.environ.get("ENRICH_PROGRESS", r"C:\gajab\enrich_progress.json"))
 # 1 worker by default: the box is a 6-core CPU and Chrome needs the cores while
 # scraping. The queue is a background nicety, not a race.
-WORKERS = max(1, int(os.environ.get("ENRICH_WORKERS", "1")))
+WORKERS = max(1, int(os.environ.get("ENRICH_WORKERS", "2")))
 BATCH = max(1, int(os.environ.get("ENRICH_BATCH", "8")))
 # The API drops {"platform","products"} files here as products are scraped; the
 # worker ingests them into the queue. A spool file is cheaper and more reliable
@@ -225,7 +225,10 @@ def enrich_one(product: dict, platform: str) -> dict | None:
         if r:
             path, method, conf = r["full"], r.get("method", "rules"), r.get("confidence", 0.0)
     if not path:
-        return None
+        # Cache the REFUSAL as well. Without this the product stays "un-enriched"
+        # and every export re-runs the whole agent cascade (3-4 LLM calls) for it.
+        return {"platform": platform, "product_id": _pid(product), "l4_path": "",
+                "attributes": {}, "method": "no-category", "confidence": 0.0}
 
     attributes: dict[str, str] = {}
     try:

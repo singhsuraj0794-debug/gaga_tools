@@ -359,6 +359,10 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
             if hit.get("l4_path"):
                 rulings[id(p)] = {"path": hit["l4_path"], "confidence": hit.get("confidence", 0.0),
                                   "method": hit.get("method") or "cached"}
+            else:
+                # a cached "no category" decision: keep the rule-based mapping but
+                # do NOT run the agent again (that cascade is what made exports slow)
+                rulings[id(p)] = {"path": ""}
             if hit.get("attributes"):
                 attr_rulings[id(p)] = hit["attributes"]
             cached_hits += 1
