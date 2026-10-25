@@ -38,6 +38,7 @@ from collections import Counter, OrderedDict, defaultdict
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -133,6 +134,7 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
     attrs_written = 0
     no_group = 0
     audit: list[dict] = []
+    attr_long: list[tuple] = []
     start_row = sheet.max_row + 1 if sheet.max_row >= 2 else 3
     if start_row < 3:
         start_row = 3
@@ -188,6 +190,8 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
                 continue
             sheet.cell(row=r, column=col + 1).value = value
             attrs_written += 1
+            attr_long.append((row.get("Sku *", ""), row.get("Product  Name *", ""),
+                              leaf or "(category)", (attr if sep else spec).strip(), value))
 
         # per-row audit: which attributes this product got (the sheet itself puts
         # them thousands of columns away, under its own Specifications group)
@@ -217,6 +221,22 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
                 continue
             if row.get(f"spec::{a['specification']}") in (None, ""):
                 missing_required[f"attr: {a['attribute']}"] += 1
+
+    # The template puts each product's specifications thousands of columns to
+    # the right (col ~1600 in Home Decor), under its own "Specifications - <L4>"
+    # group, so a filled sheet looks empty at a glance. Add a plain long-format
+    # sheet so the attributes can actually be read: Sku | Attribute | Value.
+    if attr_long:
+        extra = wb.create_sheet("Attributes", 1)   # right after the data sheet
+        extra.append(["Sku", "Product Name", "Specification Group", "Attribute", "Value"])
+        for rec in attr_long:
+            extra.append(list(rec))
+        for i, w in enumerate((22, 60, 34, 30, 50), start=1):
+            extra.column_dimensions[chr(64 + i)].width = w
+        for c in extra[1]:
+            c.font = Font(bold=True)
+        extra.freeze_panes = "A2"
+        extra.auto_filter.ref = f"A1:E{len(attr_long) + 1}"
 
     wb.save(out_file)
     return {
