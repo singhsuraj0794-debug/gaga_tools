@@ -187,6 +187,26 @@ _WEIGHT_TO_KG = {
 }
 
 
+def _dim_cm(v):
+    """Package Height/Width/Length take a bare integer in centimetres.
+
+    The template's unit is implied, so a scraped "21 cm" must be written as 21,
+    not "21 cm" (a text value with a unit breaks the numeric upload). Values are
+    already normalised to cm upstream by _clean_axis.
+    """
+    s = _clean(v)
+    if not s:
+        return ""
+    m = re.search(r"([0-9]+(?:[.,][0-9]+)?)", s)
+    if not m:
+        return ""
+    x = float(m.group(1).replace(",", "."))
+    if x <= 0:
+        return ""
+    n = int(round(x))
+    return n if n > 0 else 1
+
+
 def _to_kg(v) -> str:
     """'300 Grams' -> '0.3'   '1 kg' -> '1'   '200 Milligrams' -> '0.0002'.
 
@@ -459,9 +479,9 @@ def prepare(products: list[dict], rulings: dict | None = None,
                 "Quantity *": _clean(p.get("quantity")) or "1",
                 "Low  Stock  Alert": "",
                 "Package  Weight *": _to_kg(fixed.get("weight")),
-                "Package  Height *": dim_parts[2] if len(dim_parts) > 2 else "",
-                "Package  Width  *": dim_parts[1] if len(dim_parts) > 1 else "",
-                "Package  Length *": dim_parts[0] if dim_parts else "",
+                "Package  Height *": _dim_cm(dim_parts[2]) if len(dim_parts) > 2 else "",
+                "Package  Width  *": _dim_cm(dim_parts[1]) if len(dim_parts) > 1 else "",
+                "Package  Length *": _dim_cm(dim_parts[0]) if dim_parts else "",
                 "Relationship *": _clean(p.get("relationship")) or "Simple",
                 "Parent  Sku*": _clean(p.get("parent_sku")) or _clean(p.get("sku")) or _sku_for(p, idx),
                 "Variantion  Name": (_clean(p.get("variants")) if not isinstance(p.get("variants"), list)
