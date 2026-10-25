@@ -61,15 +61,20 @@ def _backfill_source_category(result: dict, url: str, ua: str) -> None:
 def scrape(url: str, attempt: int = 1, max_attempts: int = 3) -> dict:
     ua = USER_AGENTS[(attempt - 1) % len(USER_AGENTS)]
 
+    # Browser FIRST: only the rendered DOM carries the struck-through MRP and the
+    # client-side breadcrumb. The cheap direct fetch often succeeds but has neither,
+    # which is why exports had blank MRP and source categories.
+    html = _try_playwright(url, ua)
+    if html:
+        result = _parse_html(html, url)
+        if result.get("status") == "success":
+            return result
     html = _try_direct(url, ua)
     if html:
         result = _parse_html(html, url)
         if result.get("status") == "success" and not result.get("source_category_path"):
             _backfill_source_category(result, url, ua)
         return result
-    html = _try_playwright(url, ua)
-    if html:
-        return _parse_html(html, url)
 
     if attempt < max_attempts:
         delay = attempt * 5
