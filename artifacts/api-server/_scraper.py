@@ -196,6 +196,15 @@ def _try_playwright(url: str, ua: str = "") -> str:
             if bc:
                 html += ('<script id="__gajab_src_category__" type="application/json">'
                          + json.dumps(bc) + '</script>')
+            # The rendered DOM carries the struck-through MRP as inline styles
+            # (text-decoration: line-through). The page JSON often has no "mrp"
+            # key at all, so read it from the DOM while the page is alive.
+            try:
+                mrp_txt = page.evaluate(_MRP_JS)
+                if mrp_txt:
+                    html += f'<script id="__gajab_mrp__">{mrp_txt}</script>'
+            except Exception:
+                pass
             ctx.close()
             if owns_browser:
                 browser.close()
@@ -451,6 +460,26 @@ def _try_jsonld(html: str) -> dict | None:
         }
     return None
 
+
+
+
+_MRP_JS = """() => {
+  const re = /^[\u20b9]\s?[\d,]+$/;
+  const struck = (e) => (getComputedStyle(e).textDecorationLine || '').includes('line-through');
+  const leaves = [...document.querySelectorAll('div, span')].filter(e =>
+      e.children.length === 0 && re.test((e.textContent || '').trim()));
+  const price = leaves.find(e => !struck(e));
+  if (!price) return null;
+  // walk up from the selling price and take the first struck price in the same block
+  let node = price.parentElement;
+  for (let i = 0; i < 6 && node; i++) {
+    const hit = [...node.querySelectorAll('div, span')]
+        .filter(e => e.children.length === 0 && struck(e) && re.test((e.textContent || '').trim()))[0];
+    if (hit) return hit.textContent.trim();
+    node = node.parentElement;
+  }
+  return null;
+}"""
 
 
 def _extract_mrp(html: str) -> str | None:
