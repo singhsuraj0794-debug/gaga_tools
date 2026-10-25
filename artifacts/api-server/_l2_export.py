@@ -132,6 +132,7 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
     missing_required = Counter()
     attrs_written = 0
     no_group = 0
+    audit: list[dict] = []
     start_row = sheet.max_row + 1 if sheet.max_row >= 2 else 3
     if start_row < 3:
         start_row = 3
@@ -188,6 +189,26 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
             sheet.cell(row=r, column=col + 1).value = value
             attrs_written += 1
 
+        # per-row audit: which attributes this product got (the sheet itself puts
+        # them thousands of columns away, under its own Specifications group)
+        got = {}
+        for key, value in row.items():
+            if key.startswith("spec::") and value not in (None, ""):
+                got[key[len("spec::"):].split("|")[-1].strip()] = value
+        missing_mandatory = [
+            a["attribute"] for a in attr_mapper.attrs_for(path)
+            if a.get("mandatory") and row.get(f"spec::{a['specification']}") in (None, "")
+        ]
+        audit.append({
+            "Sku": row.get("Sku *", ""),
+            "Product Name": row.get("Product  Name *", ""),
+            "Category": path,
+            "L4 group used": leaf if leaf.lower() in spec_groups else "(no group in template)",
+            "Attributes Written": len(got),
+            "Attributes": "; ".join(f"{k}={v}" for k, v in list(got.items())[:12]),
+            "Missing Mandatory": "; ".join(missing_mandatory[:8]),
+        })
+
         for name in REQUIRED_FIXED:
             if not str(row.get(name, "") or "").strip():
                 missing_required[name] += 1
@@ -203,6 +224,7 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
         "rows": len(rows),
         "attributes_written": attrs_written,
         "rows_without_attribute_group": no_group,
+        "audit": audit,
         "spec_groups_available": len(spec_leaves),
         "missing_required": dict(missing_required.most_common(12)),
     }
@@ -617,6 +639,23 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         results.append(info)
 
     review_dir = out_dir / "Review_Required"
+    audit_rows = [r for f in results for r in f.get("audit") or []]
+    for f in results:
+        f.pop("audit", None)   # keep export_log.json small
+    if audit_rows:
+        review_dir.mkdir(parents=True, exist_ok=True)
+        aw = Workbook(); aws = aw.active; aws.title = "Attribute Report"
+        cols = ["Sku", "Product Name", "Category", "L4 group used",
+                "Attributes Written", "Attributes", "Missing Mandatory"]
+        aws.append(cols)
+        for r in audit_rows:
+            aws.append([r.get(c, "") for c in cols])
+        for col, w in zip("ABCDEFG", (20, 52, 60, 34, 12, 90, 40)):
+            aws.column_dimensions[col].width = w
+        aws.freeze_panes = "A2"
+        aws.auto_filter.ref = f"A1:G{len(audit_rows)+1}"
+        aw.save(review_dir / "Attribute_Report.xlsx")
+
     if gaps:
         review_dir.mkdir(parents=True, exist_ok=True)
         gw = Workbook(); gws = gw.active; gws.title = "Taxonomy Gaps"
