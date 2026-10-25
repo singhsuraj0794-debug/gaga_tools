@@ -81,6 +81,23 @@ def load_targets() -> list[str]:
     return sorted(p for p in ids if p not in prefixes)
 
 
+_NODES_CACHE: list[str] | None = None
+
+
+def all_nodes() -> list[str]:
+    """Every taxonomy node (incl. intermediate ones) - used to drill down."""
+    global _NODES_CACHE
+    if _NODES_CACHE is None:
+        tax = json.loads(TAXONOMY.read_text(encoding="utf-8"))
+        _NODES_CACHE = list((tax.get("ids") or {}))
+    return _NODES_CACHE
+
+
+def children_of(path: str) -> list[str]:
+    pre = path + " > "
+    return [n for n in all_nodes() if n.startswith(pre)]
+
+
 # ── embeddings ─────────────────────────────────────────────────────────────
 def _embed(texts: list[str]) -> np.ndarray:
     out = []
@@ -227,6 +244,16 @@ def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
 
     if 0 <= idx < len(candidates):
         path = candidates[idx]
+        # An intermediate node has no attribute group in the L2 template (groups
+        # are L4 leaves), so a product parked on an L3 exports with every
+        # attribute blank. Ask once more among its children.
+        kids = children_of(path)
+        if kids:
+            kidx, kconf, kreason = _ask(kids[:TOP_K], text)
+            if 0 <= kidx < len(kids[:TOP_K]):
+                path = kids[kidx]
+                conf = kconf or conf
+                reason = f"{reason} / {kreason}"
         return {"path": path, "level": len(path.split(" > ")),
                 "confidence": round(conf, 3), "reason": reason,
                 "method": "agent", "gap": None,

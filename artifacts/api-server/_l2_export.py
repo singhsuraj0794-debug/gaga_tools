@@ -130,6 +130,7 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
     attr_mapper = SpecAttributeMapper(load_catalog())
     missing_required = Counter()
     attrs_written = 0
+    no_group = 0
     start_row = sheet.max_row + 1 if sheet.max_row >= 2 else 3
     if start_row < 3:
         start_row = 3
@@ -168,6 +169,10 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
             target = spec_groups.get(cand.lower())
             if target:
                 break
+        if not target:
+            # category has no Specifications group in this template (an L3/L2 that
+            # the template does not break down) - the row is exported, but blank.
+            no_group += 1
         for key, value in row.items():
             if not key.startswith("spec::") or value in (None, ""):
                 continue
@@ -196,6 +201,7 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
         "file": str(out_file),
         "rows": len(rows),
         "attributes_written": attrs_written,
+        "rows_without_attribute_group": no_group,
         "spec_groups_available": len(spec_leaves),
         "missing_required": dict(missing_required.most_common(12)),
     }
