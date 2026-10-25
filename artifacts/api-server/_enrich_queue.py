@@ -144,7 +144,7 @@ def reap_stale(db: Path = DB_PATH, minutes: int = 5, max_tries: int = 3) -> int:
         n = conn.execute(
             """update enrich_queue set state='pending', updated_at=?
                 where (state='running' and updated_at < ?)
-                   or (state='failed' and tries < ?)""",
+                   or (state='failed' and tries < ? and coalesce(error,'') not like '%no category%')""",
             (now(), cutoff, max_tries)).rowcount
         conn.commit(); conn.close()
         return n
@@ -194,6 +194,7 @@ def counts(db: Path = DB_PATH) -> dict:
         "running": q("select count(*) from enrich_queue where state='running'"),
         "done": q("select count(*) from enrich_queue where state='done'"),
         "failed": q("select count(*) from enrich_queue where state='failed'"),
+        "skipped": q("select count(*) from enrich_queue where state='skipped'"),
     }
     conn.close()
     return out
@@ -323,7 +324,14 @@ def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
         results = []
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             for rid, err in pool.map(_do, rows):
-                results.append((rid, "done" if err is None else "failed", err))
+                if err is None:
+                    results.append((rid, "done", None))
+                elif err == "no category":
+                    # deterministic: this product has no mappable category, so a
+                    # retry would spin forever (and keep the bar non-zero)
+                    results.append((rid, "skipped", err))
+                else:
+                    results.append((rid, "failed", err))
         conn = connect(db)
         conn.executemany(
             "update enrich_queue set state=?, error=?, tries=tries+1, updated_at=? where id=?",
