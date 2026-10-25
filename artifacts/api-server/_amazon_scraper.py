@@ -116,6 +116,13 @@ EXTRACT_JS = r"""() => {
     const t = txt(q(sel));
     if (t && /[₹$€£]/.test(t)) { mrp = t; break; }
   }
+  // Amazon renders "M.R.P.: ₹499.00" in the price block; the struck-price
+  // selectors above miss it on some layouts, so fall back to the text.
+  if (!mrp) {
+    const t = (document.body.innerText || '').replace(/\u00a0/g, ' ');
+    const mm = t.match(/M\.R\.P\.?:?\s*[\u20b9]\s*([\d,]+(?:\.\d+)?)/i);
+    if (mm) mrp = '\u20b9' + mm[1];
+  }
   if (mrp && price && mrp.replace(/[^0-9.]/g, '') === price.replace(/[^0-9.]/g, '')) mrp = null;
 
   const avail = txt(q('#availability'));
