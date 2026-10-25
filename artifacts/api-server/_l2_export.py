@@ -393,7 +393,13 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
                 if not missing:
                     break
                 qn = _enrich_queue.counts()
-                if qn["pending"] + qn["running"] == 0:
+                # Products can still be sitting in the spool (written by the scraper
+                # every 5 products, ingested by the worker each pass). Treating an
+                # empty queue as "done" made the export jump the gun and re-run the
+                # agents inline.
+                spool_dir = Path(os.environ.get("ENRICH_SPOOL_DIR", r"C:\gajab\enrich_spool"))
+                spool = len(list(spool_dir.glob("*.json"))) if spool_dir.is_dir() else 0
+                if qn["pending"] + qn["running"] == 0 and spool == 0:
                     break
                 if progress:
                     progress.write("Waiting for enrichment",
