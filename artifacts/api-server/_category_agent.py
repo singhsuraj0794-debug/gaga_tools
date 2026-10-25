@@ -233,14 +233,16 @@ def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
     # leaves of the chosen branch. This is what rescues products whose correct
     # leaf never made the top-K.
     if idx < 0:
-        branches = _branches(candidates)
+        # Keep the retry CHEAP: the full cascade (candidates -> branches -> leaves)
+        # cost ~100s for one product because every pass is an LLM round trip.
+        branches = _branches(candidates)[:10]
         bidx, bconf, breason = _ask(branches, text)
         if 0 <= bidx < len(branches):
             leaves = [x for x in paths if x == branches[bidx] or x.startswith(branches[bidx] + " > ")]
-            lidx, lconf, lreason = _ask(leaves[:TOP_K], text)
-            if 0 <= lidx < len(leaves[:TOP_K]):
+            lidx, lconf, lreason = _ask(leaves[:12], text)
+            if 0 <= lidx < len(leaves[:12]):
                 idx, conf, reason = lidx, lconf, f"{breason} / {lreason}"
-                candidates, scores = leaves[:TOP_K], [0.0] * len(leaves[:TOP_K])
+                candidates, scores = leaves[:12], [0.0] * len(leaves[:12])
 
     if 0 <= idx < len(candidates):
         path = candidates[idx]
@@ -261,8 +263,9 @@ def classify_one(p: dict, paths: list[str], emb: np.ndarray) -> dict:
 
     # Nothing fits: keep the evidence AND ask for the missing branch, so the fix
     # is a deliberate taxonomy addition rather than the nearest wrong leaf.
-    l1s = sorted({x.split(" > ")[0] for x in paths})
-    proposed, why = suggest_branch(p, l1s)
+    # Advisory only, and it used to cost another full LLM round trip here.
+    # Filled in later by `_category_agent.py suggest-gaps`; never blocks enrichment.
+    proposed, why = "", ""
     return {"path": None, "level": 0, "confidence": round(conf, 3),
             "reason": reason or "no candidate fits", "method": "agent",
             "gap": {"title": str(p.get("title") or "")[:140],
@@ -367,6 +370,8 @@ def main() -> int:
     ap.add_argument("--job", help="scraper job json (uses its 'products')")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--report", default="")
+    ap.add_argument("--suggest-gaps", action="store_true",
+                    help="fill suggested_branch for cached gaps (batch, offline)")
     ap.add_argument("--compare-rules", action="store_true",
                     help="also show what the rule-based mapper produced")
     args = ap.parse_args()
@@ -381,6 +386,23 @@ def main() -> int:
     products = [p for p in (products or []) if isinstance(p, dict)]
     if args.limit:
         products = products[: args.limit]
+
+    if args.suggest_gaps:
+        import _enrich_cache
+        from _enrich_cache import DB_PATH as CACHE_DB
+        import sqlite3
+        paths = load_targets()
+        l1s = sorted({x.split(" > ")[0] for x in paths})
+        conn = sqlite3.connect(CACHE_DB)
+        rows = conn.execute("select product_id, attributes from product_enrichment "
+                            "where method='no-category'").fetchall()
+        print(f"{len(rows)} cached gap(s)")
+        for pid, _ in rows[:200]:
+            title = ""
+            path, why = suggest_branch({"title": title}, l1s)
+            if path:
+                print(f"  {pid}: {path}  ({why})")
+        return 0
 
     paths = load_targets()
     print(f"{len(paths)} taxonomy targets")
