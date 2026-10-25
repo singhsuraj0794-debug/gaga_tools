@@ -132,6 +132,26 @@ def ingest_spool(db: Path = DB_PATH) -> int:
     return added
 
 
+def reap_stale(db: Path = DB_PATH, minutes: int = 5, max_tries: int = 3) -> int:
+    """Requeue rows a killed worker left in 'running' (and retryable failures).
+
+    Without this, a deploy/restart mid-batch strands those products forever: they
+    are neither pending nor done, so nothing ever picks them up again.
+    """
+    cutoff = (dt.datetime.now() - dt.timedelta(minutes=minutes)).isoformat(timespec="seconds")
+    try:
+        conn = connect(db)
+        n = conn.execute(
+            """update enrich_queue set state='pending', updated_at=?
+                where (state='running' and updated_at < ?)
+                   or (state='failed' and tries < ?)""",
+            (now(), cutoff, max_tries)).rowcount
+        conn.commit(); conn.close()
+        return n
+    except Exception:
+        return 0
+
+
 def scrape_busy() -> bool:
     """True while any scrape job is running or pending.
 
@@ -248,6 +268,9 @@ def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
         return 0
 
     ingest_spool(db)
+    requeued = reap_stale(db)
+    if requeued:
+        print(f"enrich worker: requeued {requeued} stale row(s)", flush=True)
     totals = counts(db)
     total = totals["pending"] + totals["running"]
     done = 0
@@ -257,6 +280,7 @@ def worker(db: Path = DB_PATH, once: bool = False, wait: bool = False,
 
     while True:
         ingest_spool(db)
+        reap_stale(db)
         if wait and not once and PAUSE_ON_SCRAPE and scrape_busy():
             _write_progress(state="paused", queued=counts(db)["pending"], done=done,
                             total=total, updated_at=now(),
