@@ -284,6 +284,15 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Grocery > Food & Nutrition > Spices, Condiments & Sauces > Spices & Masalas"),
     ("pulse_rajma", ["rajma", "kidney beans"],
      "Grocery > Food & Nutrition > Staples > Pulses"),
+    # ── Fluid transfer pumps ───────────────────────────────────────────────
+    # Flipkart sellers file these under whatever breadcrumb they picked (seen:
+    # "Musical Instruments > Musical Instruments Accessories", "Kitchen
+    # Accessories"), so 29 fuel pumps were exported into the instruments
+    # workbook. The title always names the product, so anchor on it.
+    ("fuel_transfer_pump", ["fuel transfer pump", "oil transfer pump", "fuel pump kit",
+                            "fuel transfer pipe", "oil transfer pipe", "siphon pump",
+                            "fuel siphon", "oil siphon"],
+     "Automobile Accessories > Spares > Car Spare Parts > Vehicle Oil Pump Kit"),
 ]
 
 
