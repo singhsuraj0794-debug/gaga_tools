@@ -464,19 +464,19 @@ def _try_jsonld(html: str) -> dict | None:
 
 
 _MRP_JS = """() => {
-  const re = /^[\u20b9]\s?[\d,]+$/;
+  // Flipkart renders prices as leaf divs/spans with inline styles; the struck
+  // (list) price carries text-decoration: line-through. Document order puts the
+  // product's own price block first (₹93 then ₹499), so take the first struck
+  // price AFTER the first selling price, limited to the next few price nodes so a
+  // recommendation carousel cannot win.
   const struck = (e) => (getComputedStyle(e).textDecorationLine || '').includes('line-through');
-  const leaves = [...document.querySelectorAll('div, span')].filter(e =>
-      e.children.length === 0 && re.test((e.textContent || '').trim()));
-  const price = leaves.find(e => !struck(e));
-  if (!price) return null;
-  // walk up from the selling price and take the first struck price in the same block
-  let node = price.parentElement;
-  for (let i = 0; i < 6 && node; i++) {
-    const hit = [...node.querySelectorAll('div, span')]
-        .filter(e => e.children.length === 0 && struck(e) && re.test((e.textContent || '').trim()))[0];
-    if (hit) return hit.textContent.trim();
-    node = node.parentElement;
+  const re = /^[\u20b9]\s?[\d,]+$/;
+  const leaves = [...document.querySelectorAll('div, span')]
+      .filter(e => e.children.length === 0 && re.test((e.textContent || '').trim().replace(/\u00a0/g, ' ')));
+  const firstSell = leaves.findIndex(e => !struck(e));
+  if (firstSell < 0) return null;
+  for (let i = firstSell + 1; i < Math.min(leaves.length, firstSell + 6); i++) {
+    if (struck(leaves[i])) return leaves[i].textContent.trim().replace(/\u00a0/g, ' ').replace(/\s+/g, ' ');
   }
   return null;
 }"""
