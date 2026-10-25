@@ -293,8 +293,10 @@ def map_attributes(unmapped: list[dict], declared: list[str], title: str = "") -
     if not unmapped or not declared:
         return {}
     allowed = {a.strip().lower(): a for a in declared}
-    items = [{"key": str(u.get("key") or ""), "value": str(u.get("value") or "")[:200]}
-             for u in unmapped[:12]]
+    # Keep the answer short: this runs per product and generation is the cost
+    # (a 200-token reply at 5 tok/s is 40s on its own).
+    items = [{"key": str(u.get("key") or ""), "value": str(u.get("value") or "")[:120]}
+             for u in unmapped[:8]]
     user = (f"Allowed attributes: {', '.join(declared)}\n"
             f"Product: {title[:160]}\n"
             f"Unmatched specifications: {json.dumps(items, ensure_ascii=False)}")
@@ -303,7 +305,7 @@ def map_attributes(unmapped: list[dict], declared: list[str], title: str = "") -
             "messages": [{"role": "system", "content": ATTR_SYSTEM},
                          {"role": "user", "content": user}],
             "temperature": 0,
-            "max_tokens": 400,
+            "max_tokens": 220,
             "response_format": {"type": "json_object"},
         })
         r.raise_for_status()

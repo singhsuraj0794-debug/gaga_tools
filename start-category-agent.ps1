@@ -8,7 +8,11 @@
 . "$PSScriptRoot\windows-common.ps1"
 
 $Model = "C:\gajab\models\Qwen2.5-14B-Instruct-Q4_K_M.gguf"
-$ContextSize = 4096
+# 2048 ctx x 2 slots: the prompts are a shortlist + one product, and the smaller
+# KV cache keeps all 14B layers on the GPU. At 4096x4 the box ran out of VRAM and
+# llama.cpp fell back to CPU (5-7 tok/s instead of ~25), making each decision 20s+.
+$ContextSize = 2048
+$ParallelSlots = 2
 
 if (Test-PortOpen $AgentPort) {
     Write-Host "Category agent already listening on $AgentPort"
@@ -33,6 +37,7 @@ Start-Bg -FilePath $exe -Arguments @(
     "-m", $Model,
     "-ngl", "99",
     "-c", "$ContextSize",
+    "--parallel", "$ParallelSlots",
     "--port", "$AgentPort",
     "--host", "127.0.0.1",
     "--jinja",
