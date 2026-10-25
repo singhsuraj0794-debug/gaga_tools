@@ -226,7 +226,7 @@ def _write_group_rows(rows: list[dict], l2_path: str, template: dict, out_file: 
     # the right (col ~1600 in Home Decor), under its own "Specifications - <L4>"
     # group, so a filled sheet looks empty at a glance. Add a plain long-format
     # sheet so the attributes can actually be read: Sku | Attribute | Value.
-    if attr_long:
+    if True:   # always, so a workbook never silently lacks the sheet
         extra = wb.create_sheet("Attributes", 1)   # right after the data sheet
         extra.append(["Sku", "Product Name", "Specification Group", "Attribute", "Value"])
         for rec in attr_long:
