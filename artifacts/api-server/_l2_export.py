@@ -565,6 +565,25 @@ def export_batch(products: list[dict], out_dir: Path, batch_id: str = "",
         # L4 is ideal, but a confident L3 (or L2) still belongs in its L2 template:
         # the attributes simply stop at that level. Only an L1-only or unmapped
         # product cannot be placed.
+        # A blocked page keeps the placeholder title "Blocked by Flipkart" and has
+        # no image/price at all. It used to be written into the L2 workbook as an
+        # empty row (10 of them in the 8,080 catalogue) - an upload landmine.
+        name = str(row.get("Product  Name *") or "").strip()
+        if name.lower().startswith("blocked by") or not row.get("Product Image 1 *"):
+            review.append({
+                "Platform": row.get("_platform", platform),
+                "Sku": row.get("Sku *", ""),
+                "Product Name": name,
+                "Source Category": row.get("Source Category", ""),
+                "Mapped Category Path": path,
+                "Mapping Status": status or "blocked",
+                "Method": row.get("_method", ""),
+                "Confidence": row.get("_confidence", ""),
+                "Level": str(level),
+                "Reason": "no product data (blocked page)",
+                "Suggested Alternatives": "",
+            })
+            continue
         if not path or not l2 or level < 2 or status == "unmapped":
             review.append({
                 "Platform": row.get("_platform", platform),
