@@ -194,6 +194,9 @@ async function scrapeProduct(url: string): Promise<MeeshoDetailedProduct> {
         source_catalog_name: localResult.source_catalog_name || null,
         variants: localResult.variants || null,
         price: localResult.price || null,
+        // mrp_details.mrp (the price-details tooltip figure). Omitting it here
+        // silently dropped the MRP the Python scraper had just returned.
+        mrp: localResult.mrp || null,
         url,
         status: "success",
         error: null,
@@ -207,7 +210,7 @@ async function scrapeProduct(url: string): Promise<MeeshoDetailedProduct> {
       return {
         id: "", title: "Failed to scrape", description: null, meta_description: null,
         imageUrl: null, images: [], hsn: null, gst: null, dimensions: null, weight: null,
-        specifications: null, variants: null, price: null, url,
+        specifications: null, variants: null, price: null, mrp: null, url,
         status: localResult.status || "failed",
         error: localResult.error || "Scraping failed",
       };
