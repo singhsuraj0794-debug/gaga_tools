@@ -26,8 +26,41 @@ from _spec_to_attribute import _split_axes  # noqa: E402
 # AMAZON_PROXY routes ONLY Amazon traffic through a second egress (e.g. another
 # machine on the Tailscale network whose ISP Amazon has not blocked). It falls
 # back to SCRAPER_PROXY so the old Webshare setup still works when set.
+def _load_dotenv() -> None:
+    """Read .env from this directory for any key the process env lacks.
+
+    The scraper is launched by several different processes (the API, the local
+    scraper server, the watchdog). Only some of them call Import-DotEnv, so
+    AMAZON_PROXY was missing whenever the API was (re)started another way and
+    Amazon silently scraped from this box's own IP - the block-prone path the
+    Mac proxy exists to avoid.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+_load_dotenv()
+
 AMAZON_PROXY = os.environ.get("AMAZON_PROXY", "")
 PROXY = AMAZON_PROXY or os.environ.get("SCRAPER_PROXY", "")
+if AMAZON_PROXY:
+    print(f"AMAZON: routing through proxy {AMAZON_PROXY}", flush=True)
+else:
+    print("AMAZON: no AMAZON_PROXY - using this host's own egress", flush=True)
 SCRAPING_SERVICE_URL = os.environ.get("SCRAPING_SERVICE_URL", "")
 # scrape.do — residential-proxy fetcher. The local IP is blocked by Amazon
 # (both curl_cffi and Playwright get the "to discuss automated access" page),
