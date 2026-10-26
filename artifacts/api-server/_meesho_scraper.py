@@ -215,7 +215,7 @@ CDP_CONNECT_TIMEOUT_MS = int(os.environ.get("MEESHO_CDP_CONNECT_TIMEOUT_MS", "80
 # once per product.
 _CDP_STATE: dict = {}
 _CDP_FAIL_LIMIT = 2
-_CDP_COOLDOWN_SECONDS = int(os.environ.get("MEESHO_CDP_COOLDOWN_SECONDS", "600"))
+_CDP_COOLDOWN_SECONDS = int(os.environ.get("MEESHO_CDP_COOLDOWN_SECONDS", "120"))
 
 
 def _cdp_candidates() -> list:
@@ -240,10 +240,19 @@ def _cdp_ok(cdp: str) -> None:
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch a product page via a shared Chrome over CDP (proxied, then direct)."""
+    """Fetch a product page via a shared Chrome over CDP (proxied, then direct).
+
+    Optimised for a DATA scrape: images/media/fonts/CSS are aborted (the price,
+    specs and images list all come from __NEXT_DATA__), and readiness is polled
+    with a cheap JS probe instead of re-serialising the whole DOM every 2s. The
+    old loop (20 x 2s sleep + page.content()) is why a Meesho product could take
+    20-40s.
+    """
     try:
         import time
         from playwright.sync_api import sync_playwright
+
+        BLOCKED_RESOURCES = {"image", "media", "font", "stylesheet"}
 
         for cdp in _cdp_candidates():
             try:
@@ -254,37 +263,57 @@ def _try_playwright(url: str) -> str:
                     ctx = browser.new_context()
                     page = ctx.new_page()
                     try:
-                        page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                        # Pause any autoplaying hero video — a playing video keeps
-                        # the page busy and can cover the DOM.
+                        def _route(route):
+                            try:
+                                if route.request.resource_type in BLOCKED_RESOURCES:
+                                    route.abort()
+                                else:
+                                    route.continue_()
+                            except Exception:
+                                pass
+
+                        try:
+                            page.route("**/*", _route)
+                        except Exception:
+                            pass
+
+                        page.goto(url, wait_until="domcontentloaded", timeout=25000)
                         try:
                             page.evaluate("""() => {
                                 document.querySelectorAll('video').forEach(v => {
-                                    try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; v.currentTime = 0; } catch (e) {}
+                                    try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; } catch (e) {}
                                 });
                             }""")
                         except Exception:
                             pass
-                        # Bail out fast on a block/error page (Meesho's is a few KB;
-                        # a real PDP is hundreds of KB) instead of polling 20x2s.
-                        for _ in range(20):
-                            time.sleep(2)
-                            html = page.content()
-                            if len(html) < 5000:
-                                if _ > 0:
-                                    break          # block page -> try the next Chrome
-                                continue
-                            has_product = (
-                                ("__NEXT_DATA__" in html and 'og:title' in html)
-                                or '"@type":"Product"' in html
-                                or '"@type": "Product"' in html
-                                or "window.__INITIAL_STATE__" in html
-                            )
-                            if has_product:
-                                _cdp_ok(cdp)
-                                return html
+
+                        # Cheap readiness probe: no HTML serialisation per poll.
+                        ready = False
+                        deadline = time.time() + 8
+                        delay = 0.25
+                        while time.time() < deadline:
+                            try:
+                                info = page.evaluate("""() => {
+                                    const el = document.getElementById('__NEXT_DATA__');
+                                    const html = document.documentElement ? document.documentElement.outerHTML : '';
+                                    const has = !!el || html.indexOf('"@type\":\"Product"') >= 0
+                                                || html.indexOf('"@type": "Product"') >= 0
+                                                || html.indexOf('window.__INITIAL_STATE__') >= 0;
+                                    return { size: html.length, has };
+                                }""") or {}
+                            except Exception:
+                                info = {}
+                            size = int(info.get("size") or 0)
+                            if size > 5000 and info.get("has"):
+                                ready = True
+                                break
+                            if size > 60000:
+                                break
+                            time.sleep(delay)
+                            delay = min(delay * 1.5, 1.0)
+
                         html = page.content()
-                        if len(html) > 20000:
+                        if (ready or len(html) > 20000):
                             _cdp_ok(cdp)
                             return html
                         _cdp_failed(cdp, f"no product data ({len(html)} bytes)")
