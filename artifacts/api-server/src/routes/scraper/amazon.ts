@@ -263,7 +263,14 @@ async function walkAmazonCatalogue(
   targetUrl: string,
   onProgress: (total: number, pages: number) => void = () => {},
 ): Promise<{ storeName: string; products: any[]; error: string }> {
-  const tunnel = (process.env.SCRAPER_TUNNEL_URL || "https://headphone-shudder-lavender.ngrok-free.dev").replace(/\/+$/, "");
+  // Prefer the LOCAL scraper server: the API and the scraper run on the same
+  // Windows box, so there is no reason to route the walk through a public
+  // tunnel. It used to default to the ngrok host, which now answers 403 (free
+  // plan bandwidth cap) — the Amazon scraper failed with "tunnel HTTP 403"
+  // while the scraper itself was perfectly healthy.
+  const localBase = (process.env.LOCAL_SCRAPER_URL || "").replace(/\/+$/, "");
+  const publicBase = (process.env.SCRAPER_TUNNEL_URL || "https://stock-laundry-likewise-facing.trycloudflare.com").replace(/\/+$/, "");
+  const tunnel = localBase || publicBase;
   // Chunk size trades wall-clock against the caller's 5-minute cap. The
   // extractor now waits for each page's grid to settle and retries an empty page
   // once, so a page costs ~10-18s: 10 pages stays comfortably inside the cap even
@@ -291,9 +298,11 @@ async function walkAmazonCatalogue(
         // down (the Windows host that serves it is off/asleep). Surface that
         // clearly instead of a bare "tunnel HTTP 404".
         if (r.status === 404 && /offline|ERR_NGROK_3200/i.test(bodyText)) {
-          lastErr = "Scraper host is OFFLINE — the ngrok tunnel is down. Start the Gajab stack on the Windows PC (desktop-deghg21).";
+          lastErr = "Scraper host is OFFLINE — start the Gajab stack on the Windows PC (desktop-deghg21).";
+        } else if (r.status === 403 && /ERR_NGROK_725|bandwidth/i.test(bodyText)) {
+          lastErr = "Scraper host is unreachable: the ngrok free plan hit its monthly bandwidth cap. The stack now uses the local scraper / Cloudflare tunnel instead.";
         } else {
-          lastErr = `tunnel HTTP ${r.status}`;
+          lastErr = `scraper HTTP ${r.status} (${tunnel})`;
         }
         break;
       }
