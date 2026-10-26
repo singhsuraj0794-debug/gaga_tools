@@ -100,7 +100,7 @@ def update_product(supabase_url: str, supabase_key: str, product_id: str,
 
 def main():
     if len(sys.argv) < 3:
-        supabase_url = os.environ.get("SUPABASE_URL", "https://headphone-shudder-lavender.ngrok-free.dev")
+        supabase_url = os.environ.get("SUPABASE_URL", "https://unneeded-taps-unharmed.ngrok-free.dev")
         supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or \
                        os.environ.get("VITE_SUPABASE_ANON_KEY", "")
     else:

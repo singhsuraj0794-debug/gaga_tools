@@ -36,7 +36,7 @@ $PostgrestPort = 3000
 $ShimPort      = 3001   # storage shim + /rest/v1 proxy - the single origin clients use
 
 # --- Tunnels -----------------------------------------------------------------
-$NgrokDomain = if ($env:GAJAB_NGROK_DOMAIN) { $env:GAJAB_NGROK_DOMAIN } else { "headphone-shudder-lavender.ngrok-free.dev" }
+$NgrokDomain = if ($env:GAJAB_NGROK_DOMAIN) { $env:GAJAB_NGROK_DOMAIN } else { "unneeded-taps-unharmed.ngrok-free.dev" }
 
 # --- Helpers -----------------------------------------------------------------
 

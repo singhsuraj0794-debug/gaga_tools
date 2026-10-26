@@ -118,7 +118,7 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Resume from saved progress")
     args = parser.parse_args()
 
-    supabase_url = os.environ.get("SUPABASE_URL", "https://headphone-shudder-lavender.ngrok-free.dev")
+    supabase_url = os.environ.get("SUPABASE_URL", "https://unneeded-taps-unharmed.ngrok-free.dev")
     supabase_key = os.environ.get("SUPABASE_KEY",
                                    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y")
 

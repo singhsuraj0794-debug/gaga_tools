@@ -14,7 +14,7 @@ import os
 import sys
 import urllib.request
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://headphone-shudder-lavender.ngrok-free.dev")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://unneeded-taps-unharmed.ngrok-free.dev")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 BUCKET = "monitoring"

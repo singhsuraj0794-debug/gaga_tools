@@ -9,7 +9,7 @@ from imagehash import phash
 import torch
 from transformers import AutoImageProcessor, AutoModel
 
-SUPABASE_URL = "https://headphone-shudder-lavender.ngrok-free.dev"
+SUPABASE_URL = "https://unneeded-taps-unharmed.ngrok-free.dev"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y"
 CACHE_FILE = os.path.join(os.path.dirname(__file__), ".duplicates_cache.json")
 

@@ -8,7 +8,7 @@ import Papa from "papaparse";
 // setPrelistingApiBase() (see PreListingValidator.tsx).
 const DEFAULT_API_BASE: string =
   (import.meta.env?.VITE_PRELISTING_API_URL as string | undefined) ||
-  "https://headphone-shudder-lavender.ngrok-free.dev";
+  "https://unneeded-taps-unharmed.ngrok-free.dev";
 
 /**
  * ngrok's free tier serves an interstitial HTML page to browser requests unless

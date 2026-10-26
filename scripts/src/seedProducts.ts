@@ -19,7 +19,7 @@ const execFileAsync = promisify(execFile);
 
 // ─── Config ───────────────────────────────────────────────────────────────
 
-const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://headphone-shudder-lavender.ngrok-free.dev";
+const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://unneeded-taps-unharmed.ngrok-free.dev";
 const SUPABASE_KEY =
   process.env.SUPABASE_KEY ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y";
 

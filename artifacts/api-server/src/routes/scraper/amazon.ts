@@ -269,7 +269,7 @@ async function walkAmazonCatalogue(
   // plan bandwidth cap) — the Amazon scraper failed with "tunnel HTTP 403"
   // while the scraper itself was perfectly healthy.
   const localBase = (process.env.LOCAL_SCRAPER_URL || "http://localhost:9000").replace(/\/+$/, "");
-  const publicBase = (process.env.SCRAPER_TUNNEL_URL || "https://stock-laundry-likewise-facing.trycloudflare.com").replace(/\/+$/, "");
+  const publicBase = (process.env.SCRAPER_TUNNEL_URL || "https://unneeded-taps-unharmed.ngrok-free.dev").replace(/\/+$/, "");
   const tunnel = localBase || publicBase;
   // Chunk size trades wall-clock against the caller's 5-minute cap. The
   // extractor now waits for each page's grid to settle and retries an empty page
