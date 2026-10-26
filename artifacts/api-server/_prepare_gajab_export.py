@@ -393,7 +393,8 @@ def prepare(products: list[dict], rulings: dict | None = None,
             if node is not None:
                 level = 4 if node.get("l4") else 3
                 full = node["full"]
-                if not _leaf_relates_to_title(node.get("l4") or "", p.get("title") or ""):
+                _trusted = str(ruling.get("method") or "") == "title-keyword"
+                if not _trusted and not _leaf_relates_to_title(node.get("l4") or "", p.get("title") or ""):
                     segs = [x.strip() for x in full.split(">") if x.strip()]
                     if len(segs) >= 4:
                         full = " > ".join(segs[:3])       # keep L1-L3
