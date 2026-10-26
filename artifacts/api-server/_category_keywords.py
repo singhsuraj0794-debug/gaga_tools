@@ -35,9 +35,15 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Kids & Baby > Baby Care > Feeding & Nursing > Baby Bottles"),
     ("water_bottle_school", ["school water bottle", "school bottle"],
      "Stationery > Office, School and College Supplies > School Supplies > Water Bottles"),
+    # Gajab has no water-bottle leaf (Bottle, Flasks & Thermoware only holds Can
+    # Cooler / Casserole / Cooler Bag), so bottles pin to the L3 instead of being
+    # forced into a wrong leaf - "Can Cooler" was matching every water bottle, and
+    # some bottles ended up in Grocery > Beverages because of the word "Energy".
     ("fridge_bottle", ["fridge bottle", "fridge water bottle", "apollo bottle",
-                       "gym bottle", "gallon bottle", "sports bottle", "water bottle"],
-     "Home & Kitchen > Kitchen Accessories > Bottle, Flasks & Thermoware > Can Cooler"),
+                       "gym bottle", "gallon bottle", "sports bottle", "water bottle",
+                       "bottle set", "3 in 1 bottle", "motivational bottle",
+                       "hydration bottle", "sipper bottle"],
+     "Home & Kitchen > Kitchen Accessories > Bottle, Flasks & Thermoware"),
     ("casserole", ["casserole", "casserol", "hot pot"],
      "Home & Kitchen > Kitchen Accessories > Bottle, Flasks & Thermoware > Casserole"),
     ("cooler_bag", ["cooler bag", "cooler box", "ice box", "insulated bag"],
