@@ -34,7 +34,9 @@ CACHE_FILE = os.path.join(os.path.dirname(__file__), ".product_cache.json")
 # Bump when the extraction logic changes: entries written by an older version are
 # dropped on load, otherwise a persistent cache keeps serving results produced by
 # code that no longer exists (this hid the source_category_path fix completely).
-CACHE_VERSION = "v4-no-empty-pages"
+# v5: products cached before mrp_details.mrp was read carry mrp=None, and a
+# re-scrape would serve those stale entries instead of the real MRP.
+CACHE_VERSION = "v5-mrp"
 _cache = {}  # url_hash -> product dict
 # The local scraper server is a ThreadingHTTPServer: several product scrapes run
 # at once (SCRAPE_CONCURRENCY) and each success mutates _cache and saves it.
@@ -620,7 +622,15 @@ def scrape_product(url: str, html: str = "") -> dict:
     name = product_data.get("name", "")
     description = product_data.get("description", "")
     price = product_data.get("price", 0)
-    original_price = product_data.get("original_price", 0)
+    # MRP lives in mrp_details.mrp - the figure behind the "price details" (i)
+    # tooltip. original_price is NOT always published, which is why most Meesho
+    # rows exported with a blank Mrp Price.
+    mrp_details = product_data.get("mrp_details") or {}
+    original_price = (
+        (mrp_details.get("mrp") if isinstance(mrp_details, dict) else None)
+        or product_data.get("original_price")
+        or 0
+    )
     discount = product_data.get("discount", 0)
     product_id = product_data.get("product_id", "")
     images = product_data.get("images", [])
