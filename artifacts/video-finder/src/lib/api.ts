@@ -9,7 +9,7 @@
 // the whole app down - not just this API. The box is now published through a
 // Cloudflare quick tunnel, which also serves /rest/v1 and /storage/v1 (port 9000
 // is the gateway), so ONE origin covers both the API and Supabase.
-const WINDOWS_API = "https://ala-venues-launch-reduction.trycloudflare.com";
+const WINDOWS_API = "https://stock-laundry-likewise-facing.trycloudflare.com";
 
 // Quick-tunnel URLs change whenever the tunnel restarts. Rather than needing a
 // redeploy every time, the base can be overridden at runtime: open the app once
