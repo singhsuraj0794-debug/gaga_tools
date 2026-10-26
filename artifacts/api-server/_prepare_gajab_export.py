@@ -377,6 +377,20 @@ def prepare(products: list[dict], rulings: dict | None = None,
             # better node for this exact product. Trust it only when the path is a
             # real taxonomy node; attributes are then recomputed for that node.
             ruling = (rulings or {}).get(id(p))
+            # A curated title anchor ALWAYS wins, even over a cached decision.
+            # The cache is keyed by product id and is served on every export, so a
+            # re-scrape would keep replaying a category chosen before the rule
+            # existed. Anchors are deterministic and high-precision, so checking
+            # them here makes every future scrape (and re-scrape) correct without
+            # a re-enrichment pass.
+            try:
+                from _category_keywords import match_target as _match_target
+                _kw = _match_target(p.get("title") or "")
+            except Exception:
+                _kw = None
+            if _kw and (not ruling or _kw[1] != ruling.get("path")):
+                ruling = {"path": _kw[1], "confidence": 0.95, "method": "title-keyword"}
+
             node = None
             _ruling_path = ""
             if ruling and ruling.get("path"):
