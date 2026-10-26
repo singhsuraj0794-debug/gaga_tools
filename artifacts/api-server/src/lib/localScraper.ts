@@ -1,6 +1,10 @@
 import axios from "axios";
 
-const LOCAL_SCRAPER_URL = process.env.LOCAL_SCRAPER_URL;
+// The scraper runs on the same box as the API, so default to it. It used to be
+// env-only (exported by windows-common.ps1); started any other way, EVERY scrape
+// silently took the fallback path and spawned a fresh Python process per
+// product - the "scraping is slow / products blocked" report.
+const LOCAL_SCRAPER_URL = process.env.LOCAL_SCRAPER_URL || "http://localhost:9000";
 
 /** True when the local scraper is reached over loopback (no proxy in between). */
 function isLoopbackLocalScraper(): boolean {
