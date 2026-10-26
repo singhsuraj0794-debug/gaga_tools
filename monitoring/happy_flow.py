@@ -286,7 +286,6 @@ def _do_bargain_flow(page, results: list):
     sub_steps.append({"check": "start_bargaining_button", "status": "pass", "detail": "Button found and clicked via JS dispatchEvent"})
     log("Step 4c — Start Bargaining clicked, waiting for bargain modal")
     time.sleep(3)
-    sub_steps.append({"check": "bargain_modal_opened", "status": "pass", "detail": "Waiting for bargain modal to render"})
 
     log("Step 4d — Setting offer price via slider")
     slider_result = {"found": False}
@@ -334,6 +333,14 @@ def _do_bargain_flow(page, results: list):
         if slider_result.get("found"):
             break
         time.sleep(1)
+    # The modal verdict now comes from the DOM (was: an unconditional "pass"
+    # after a 3s sleep, which hid a modal that never opened).
+    sub_steps.append({
+        "check": "bargain_modal_opened",
+        "status": "pass" if slider_result.get("found") else "degraded",
+        "detail": ("Price control rendered" if slider_result.get("found")
+                   else "No price slider/control found inside the bargain modal"),
+    })
     if not slider_result.get("found"):
         _capture_screenshot(page, f"{_STEP_PREFIX}slider_not_found")
         sub_steps.append({"check": "price_slider", "status": "degraded", "detail": "No slider input found, continuing"})
@@ -417,17 +424,51 @@ def _do_bargain_flow(page, results: list):
 
         time.sleep(2)
 
+    # "No counter-offer" is an INCOMPLETE flow, not a pass. It used to be recorded
+    # as pass ("awaiting manual acceptance"), so the bargain success rate was
+    # inflated by every flow that never actually reached an offer.
     if not accepted:
-        sub_steps.append({"check": "accept_offer", "status": "pass", "detail": "Offer sent to seller — awaiting manual acceptance"})
+        sub_steps.append({"check": "accept_offer", "status": "degraded",
+                          "detail": "No counter-offer within 30s - offer is pending, flow incomplete"})
+
+    # Derive the step verdict from what actually happened instead of hard-coding
+    # pass. A missing offer button means the user could not bargain at all.
+    def _sub(check: str) -> dict:
+        return next((x for x in sub_steps if x.get("check") == check), {})
+
+    offer_state = _sub("offer_button").get("status")
+    slider_state = _sub("price_slider").get("status")
+    offer_submitted = offer_state in ("pass", "degraded")   # degraded = JS fallback clicked
+
+    if offer_state == "fail" or not offer_submitted:
+        step_status = "fail"
+        failure_reason = "Offer could not be submitted (no offer button found on the page)"
+        issue_type = "product"
+    elif not accepted:
+        step_status = "degraded"
+        failure_reason = "Offer submitted but no counter-offer within 30s (flow incomplete)"
+        issue_type = "product"
+    elif slider_state == "degraded":
+        step_status = "degraded"
+        failure_reason = "Bargain completed but the price slider was not found (default price used)"
+        issue_type = "product"
+    else:
+        step_status = "pass"
+        failure_reason = None
+        issue_type = None
 
     bargain_duration = int((time.time() - t0) * 1000)
     ss_bargain = _capture_screenshot(page, f"{_STEP_PREFIX}bargain_complete")
     results.append({
         "step": _STEP_PREFIX + "bargain_flow",
         "duration_ms": bargain_duration,
-        "status": "pass",
+        "status": step_status,
         "sub_steps": sub_steps,
-        "detail": f"Bargain flow completed in {bargain_duration}ms ({len(sub_steps)} sub-steps)",
+        "failure_reason": failure_reason,
+        "issue_type": issue_type,
+        "detail": (f"Bargain flow {step_status} in {bargain_duration}ms "
+                   f"({len(sub_steps)} sub-steps, offer={offer_state}, "
+                   f"slider={slider_state}, accepted={accepted})"),
         "screenshot": ss_bargain,
     })
     _check_budget("bargain_flow", bargain_duration, results)
@@ -755,6 +796,9 @@ def _do_checkout_flow(page, results: list):
                    f"bargain={'pending' if bargain_in_progress else 'accepted'}"),
         "screenshot": ss_after_pay or ss_bargains,
         "failure_reason": failure_reason,
+        # Only a Pay click that produces no gateway is a site bug; an incomplete
+        # bargain (Pay correctly gated) is reported by the bargain step itself.
+        "issue_type": "product" if (pay_was_clicked and not razorpay_found) else None,
     })
     _check_budget("checkout_nav", duration, results)
 
@@ -846,7 +890,10 @@ def _check_budget(budget_key: str, duration_ms: int, results: list):
         # Slow, not broken: keep the verdict visible and record the overrun
         # explicitly, so a passing step downgraded for time is not mistaken for
         # a functional failure in the dashboard.
-        results[-1]["status"] = "degraded"
+        # Never upgrade a functional failure to "just slow": a broken flow that
+        # also missed its budget stays failed.
+        if results[-1].get("status") == "pass":
+            results[-1]["status"] = "degraded"
         results[-1]["budget_exceeded"] = {"budget_ms": budget_sec * 1000, "actual_ms": duration_ms}
         results[-1]["detail"] = (
             f"SLOW: {duration_ms/1000:.1f}s vs {budget_sec}s budget — "
