@@ -303,6 +303,8 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
     ("cosmetic_pouch", ["cosmetic pouch", "cosmetic bag", "makeup bag", "make up bag",
                         "makeup pouch", "cosmetic organizer bag", "toiletry bag", "wash bag"],
      "Fashion > Leather & Travel Products > Bags & Fashion Accessories > Pouch Potlis"),
+    ("shoe_pouch", ["shoe pouch", "shoe bag", "shoe cover bag", "shoe storage bag"],
+     "Fashion > Leather & Travel Products > Bags & Fashion Accessories > Pouch Potlis"),
 ]
 
 
