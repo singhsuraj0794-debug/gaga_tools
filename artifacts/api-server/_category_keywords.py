@@ -314,6 +314,12 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
     # There is no "party prop" leaf, so pin them to the party department (L3).
     ("money_gun", ["money gun", "cash cannon", "cash gun", "money cannon", "cash firing"],
      "Kids & Baby > Party Supplies > Party Supplies"),
+    # Adult car seat covers were filed under Baby Care > Baby Activity & Gear >
+    # Car Seat (a baby car seat). No car-interior leaf exists yet, so pin them to
+    # the automobile spares department rather than a baby department.
+    ("car_seat_cover", ["car seat cover", "car seat covers", "car seat cushion",
+                        "car seat protector", "car seat mat"],
+     "Automobile Accessories > Spares > Car Spare Parts"),
 ]
 
 
