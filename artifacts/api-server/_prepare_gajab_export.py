@@ -207,6 +207,37 @@ def _dim_cm(v):
     return n if n > 0 else 1
 
 
+
+_LEAF_STOP = {"the", "and", "for", "with", "set", "combo", "pack", "other", "general",
+              "misc", "miscellaneous", "accessory", "accessories", "product", "products"}
+
+
+def _leaf_relates_to_title(leaf: str, title: str) -> bool:
+    """True when the L4 leaf name is actually supported by the product title.
+
+    Cached/agent rulings were applied without any check, so a "Baby Nail Trimmer"
+    was exported as "Health & Safety > Nasal Aspirators", a "Baby Play Mat" as
+    "Cot Bassinet", a "Money Gun" as "Gaming > Controllers > Guns" and 51 "Laptop
+    Tables" as "Laptop Stand". When the leaf shares no word with the title we now
+    keep the L1-L3 (still a valid, uploadable category) rather than invent a leaf.
+    """
+    def toks(v):
+        out = set()
+        for t in re.findall(r"[a-z0-9]+", str(v or "").lower()):
+            if len(t) < 3 or t in _LEAF_STOP:
+                continue
+            if t.endswith("es") and len(t) > 4:
+                t = t[:-2]
+            elif t.endswith("s") and len(t) > 3:
+                t = t[:-1]
+            out.add(t)
+        return out
+    leaf_t = toks(leaf)
+    if not leaf_t:
+        return True
+    return bool(leaf_t & toks(title))
+
+
 def _to_kg(v) -> str:
     """'300 Grams' -> '0.3'   '1 kg' -> '1'   '200 Milligrams' -> '0.0002'.
 
@@ -346,13 +377,33 @@ def prepare(products: list[dict], rulings: dict | None = None,
             # better node for this exact product. Trust it only when the path is a
             # real taxonomy node; attributes are then recomputed for that node.
             ruling = (rulings or {}).get(id(p))
-            if ruling and ruling.get("path") and ruling["path"] in cat_mapper._by_full:
-                node = cat_mapper._by_full[ruling["path"]]
+            node = None
+            if ruling and ruling.get("path"):
+                if ruling["path"] in cat_mapper._by_full:
+                    node = cat_mapper._by_full[ruling["path"]]
+                else:
+                    # Accept a coarser L3 ruling (a curated keyword may deliberately
+                    # stop at L3 when the taxonomy has no leaf for the product).
+                    segs_r = [x.strip() for x in ruling["path"].split(">") if x.strip()]
+                    if len(segs_r) == 3 and any(
+                        k.startswith(ruling["path"] + " > ") for k in cat_mapper._by_full
+                    ):
+                        node = {"full": ruling["path"], "l1": segs_r[0], "l2": segs_r[1],
+                                "l3": segs_r[2], "l4": ""}
+            if node is not None:
+                level = 4 if node.get("l4") else 3
+                full = node["full"]
+                if not _leaf_relates_to_title(node.get("l4") or "", p.get("title") or ""):
+                    segs = [x.strip() for x in full.split(">") if x.strip()]
+                    if len(segs) >= 4:
+                        full = " > ".join(segs[:3])       # keep L1-L3
+                        level = 3
+                        node = {"full": full, "l1": segs[0], "l2": segs[1], "l3": segs[2], "l4": ""}
                 resolved = {
-                    "full": node["full"], "l1": node.get("l1"), "l2": node.get("l2"),
-                    "l3": node.get("l3"), "l4": node.get("l4"), "level": 4,
+                    "full": full, "l1": node.get("l1"), "l2": node.get("l2"),
+                    "l3": node.get("l3"), "l4": node.get("l4"), "level": level,
                     "confidence": ruling.get("confidence", 0.0),
-                    "method": ruling.get("method", "agent"), "review": False,
+                    "method": ruling.get("method", "agent"), "review": level < 4,
                     "candidates": [],
                 }
             specs = _normalise_specs(p.get("specifications"))

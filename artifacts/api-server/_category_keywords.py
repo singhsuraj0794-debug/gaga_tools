@@ -305,6 +305,15 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Fashion > Leather & Travel Products > Bags & Fashion Accessories > Pouch Potlis"),
     ("shoe_pouch", ["shoe pouch", "shoe bag", "shoe cover bag", "shoe storage bag"],
      "Fashion > Leather & Travel Products > Bags & Fashion Accessories > Pouch Potlis"),
+    # A laptop/study table is furniture, not a laptop accessory - 51 of them were
+    # exported in Computer - Accessories and Components as "Laptop Stand".
+    ("laptop_table", ["laptop table", "laptop desk", "study table", "bed table",
+                      "portable table", "foldable table"],
+     "Furniture > Home and Office Furniture > Study & Home Office Furniture > Computer Table"),
+    # Cash/money guns were landing in Electronics > Gaming > Controllers > Guns.
+    # There is no "party prop" leaf, so pin them to the party department (L3).
+    ("money_gun", ["money gun", "cash cannon", "cash gun", "money cannon", "cash firing"],
+     "Kids & Baby > Party Supplies > Party Supplies"),
 ]
 
 
@@ -313,7 +322,14 @@ def _load_taxonomy_paths() -> set:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return {p["full"] for p in data.get("paths", [])}
+        out = set()
+        for p in data.get("paths", []):
+            full = p["full"]
+            out.add(full)
+            segs = [x.strip() for x in full.split(">") if x.strip()]
+            for i in range(2, len(segs)):
+                out.add(" > ".join(segs[:i]))
+        return out
     except Exception:
         return set()
 
