@@ -12,7 +12,7 @@ import {
 // routing the dashboard through the tunnel meant our own outages blanked the
 // monitor and looked like "no data".
 const _SUPABASE_URL = "https://okxyskmjsmtykblrtmyi.supabase.co";
-const _SUPABASE_KEY = "sb_publishable_reTKPSKU-oZ9Xkc0IhW3sQ_Qw_9zxMARBp";
+const _SUPABASE_KEY = "sb_publishable_reTKPSKU-oZ9XkcfiTv96w_9zxMARBp";
 const REFRESH_INTERVAL = 30000;
 
 interface Run {
