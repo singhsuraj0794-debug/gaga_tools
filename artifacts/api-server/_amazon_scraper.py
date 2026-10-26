@@ -123,7 +123,20 @@ EXTRACT_JS = r"""() => {
     const mm = t.match(/M\.R\.P\.?:?\s*[\u20b9]\s*([\d,]+(?:\.\d+)?)/i);
     if (mm) mrp = '\u20b9' + mm[1];
   }
-  if (mrp && price && mrp.replace(/[^0-9.]/g, '') === price.replace(/[^0-9.]/g, '')) mrp = null;
+  // MRP must be a real struck price: never below the selling price. Some layouts
+  // put a per-unit figure (e.g. "\u20b916.58/count") in .a-text-price, which is
+  // how a \u20b9199 product came back with an MRP of \u20b916.58.
+  const _num = (v) => { const n = parseFloat(String(v || '').replace(/[^0-9.]/g, '')); return isNaN(n) ? 0 : n; };
+  if (mrp) {
+    const mp = _num(mrp), pp = _num(price);
+    if (!mp || (pp && mp < pp)) {
+      const t2 = (document.body.innerText || '').replace(/\u00a0/g, ' ');
+      const mm2 = t2.match(/M\.R\.P\.?:?\s*[\u20b9]\s*([\d,]+(?:\.\d+)?)/i);
+      const alt = mm2 ? _num(mm2[1]) : 0;
+      mrp = (alt && (!pp || alt >= pp)) ? ('\u20b9' + mm2[1]) : null;
+    }
+  }
+  if (mrp && price && _num(mrp) === _num(price)) mrp = null;
 
   const avail = txt(q('#availability'));
   // Availability was computed and then discarded, so an out-of-stock listing came
@@ -755,6 +768,18 @@ def _result_from_dom(data: dict) -> dict:
     price = data.get("price")
     if price:
         result["price"] = _clean(price)
+
+    # Final guard: an MRP below the selling price is never a real MRP (a per-unit
+    # price or a bundle figure slipped through). Drop it rather than export it.
+    def _num(v):
+        try:
+            m = re.search(r"-?[0-9]+(?:\.[0-9]+)?", str(v or "").replace(",", ""))
+            return float(m.group(0)) if m else None
+        except Exception:
+            return None
+    _mrp_n, _price_n = _num(result.get("mrp")), _num(result.get("price"))
+    if _mrp_n is not None and _price_n is not None and _mrp_n < _price_n:
+        result["mrp"] = None
 
     specs = data.get("specs") or {}
     if specs:
