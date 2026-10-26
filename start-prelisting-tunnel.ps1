@@ -116,9 +116,12 @@ Get-Process cloudflared -ErrorAction SilentlyContinue | ForEach-Object {
 }
 Start-Sleep -Seconds 2
 
-Write-Host "Starting cloudflared tunnel -> http://127.0.0.1:$ApiPort"
+# Tunnel the GATEWAY (port 9000), not the bare API (8090): the gateway also
+# proxies /rest/v1 and /storage/v1, so one public origin serves both the API
+# and Supabase for the frontend.
+Write-Host "Starting cloudflared tunnel -> http://127.0.0.1:$ScraperPort"
 Start-Process -FilePath $cloudflared.Source `
-    -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$ApiPort", "--no-autoupdate") `
+    -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$ScraperPort", "--no-autoupdate") `
     -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError "$log.err" | Out-Null
 
 Stage "cloudflared-launched"

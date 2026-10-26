@@ -1,3 +1,4 @@
+import { SUPABASE_BASE } from "../lib/api";
 import { useState, useEffect, useMemo } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -390,7 +391,7 @@ export default function MonitoringDashboard() {
   const [platform, setPlatform] = useState<"mweb" | "web" | "android">("mweb");
 
   async function fetchRuns() {
-    const url = import.meta.env.VITE_SUPABASE_URL || _SUPABASE_URL;
+    const url = SUPABASE_BASE || _SUPABASE_URL;
     const key = import.meta.env.VITE_SUPABASE_KEY || _SUPABASE_KEY;
     if (!url || !key) return;
     try {

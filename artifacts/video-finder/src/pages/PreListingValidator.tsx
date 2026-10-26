@@ -1,3 +1,4 @@
+import { SUPABASE_BASE } from "../lib/api";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -192,8 +193,7 @@ export default function PreListingValidator() {
   // newest match. Falls back to the legacy fixed name too.
   const discoverTunnelUrl = async () => {
     try {
-      const supabaseUrl = (import.meta.env?.VITE_SUPABASE_URL as string | undefined) ||
-        "https://headphone-shudder-lavender.ngrok-free.dev";
+      const supabaseUrl = SUPABASE_BASE;
       const supabaseKey = (import.meta.env?.VITE_SUPABASE_KEY as string | undefined) ||
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y";
       const ctrl = new AbortController();
