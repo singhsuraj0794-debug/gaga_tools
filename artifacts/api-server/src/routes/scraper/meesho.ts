@@ -82,8 +82,15 @@ try {
 }
 
 function _writeJob(job: ScrapeJob): void {
+  // Atomic write: a kill/crash mid-write used to leave a zero-padded file
+  // ("Unexpected token '\u0000'" on the next boot), which then blocked both the
+  // resume and the L2 export of that job. Write to a temp file and rename - the
+  // rename is atomic on NTFS, so the reader sees either the old or the new file.
+  const target = path.join(JOBS_DIR, `${job.id}.json`);
+  const tmp = `${target}.tmp`;
   try {
-    fs.writeFileSync(path.join(JOBS_DIR, `${job.id}.json`), JSON.stringify(job));
+    fs.writeFileSync(tmp, JSON.stringify(job));
+    fs.renameSync(tmp, target);
   } catch (err: any) {
     logger.warn({ id: job.id, err: err.message }, "failed to persist Meesho job");
   }
@@ -123,7 +130,20 @@ function loadJobs(): void {
   for (const f of files) {
     if (!f.endsWith(".json")) continue;
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(JOBS_DIR, f), "utf8")) as ScrapeJob;
+      const file = path.join(JOBS_DIR, f);
+      let text = fs.readFileSync(file, "utf8");
+      let raw: ScrapeJob;
+      try {
+        raw = JSON.parse(text) as ScrapeJob;
+      } catch (parseErr: any) {
+        // A zero-padded tail (crash during a non-atomic write) is recoverable:
+        // drop NULs and the truncated tail, then salvage the job.
+        const cleaned = text.replace(/\u0000+$/g, "").replace(/\u0000/g, "");
+        const end = cleaned.lastIndexOf("}");
+        raw = JSON.parse(end > 0 ? cleaned.slice(0, end + 1) : cleaned) as ScrapeJob;
+        fs.writeFileSync(file, JSON.stringify(raw), "utf8");
+        logger.warn({ file: f, err: parseErr.message }, "repaired corrupt Meesho job file");
+      }
       if (raw && raw.id) jobs.set(raw.id, raw);
     } catch (err: any) {
       logger.warn({ file: f, err: err.message }, "skipping unreadable Meesho job file");
