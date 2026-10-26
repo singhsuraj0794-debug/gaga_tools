@@ -378,6 +378,7 @@ def prepare(products: list[dict], rulings: dict | None = None,
             # real taxonomy node; attributes are then recomputed for that node.
             ruling = (rulings or {}).get(id(p))
             node = None
+            _ruling_path = ""
             if ruling and ruling.get("path"):
                 if ruling["path"] in cat_mapper._by_full:
                     node = cat_mapper._by_full[ruling["path"]]
@@ -400,6 +401,7 @@ def prepare(products: list[dict], rulings: dict | None = None,
                         full = " > ".join(segs[:3])       # keep L1-L3
                         level = 3
                         node = {"full": full, "l1": segs[0], "l2": segs[1], "l3": segs[2], "l4": ""}
+                _ruling_path = ruling["path"]
                 resolved = {
                     "full": full, "l1": node.get("l1"), "l2": node.get("l2"),
                     "l3": node.get("l3"), "l4": node.get("l4"), "level": level,
@@ -567,6 +569,10 @@ def prepare(products: list[dict], rulings: dict | None = None,
                 "_level": (resolved or {}).get("level", 0),
                 "_confidence": (resolved or {}).get("confidence", ""),
                 "_candidates": list((resolved or {}).get("candidates") or []),
+                # the ruling as the cache stated it (may be a finer L4 than the
+                # title-supported path we exported) so the write-back does not
+                # persist a truncated decision
+                "_ruling_path": _ruling_path,
             }
             for i in range(1, 11):
                 row[f"Product Image {i}" + (" *" if i == 1 else "")] = images[i - 1] if len(images) >= i else ""

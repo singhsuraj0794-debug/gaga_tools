@@ -352,6 +352,9 @@ def log_decisions(rows: list[dict], db: Path = DECISIONS_DB) -> int:
         n = 0
         for row in rows:
             path = row.get("Mapped Category Path", "")
+            # Never persist a path the exporter truncated for the title guard:
+            # re-saving the L3 write-off permanently demoted correct L4s.
+            path = row.get("_ruling_path") or path
             if not path:
                 continue
             conn.execute(
