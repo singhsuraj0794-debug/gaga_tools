@@ -980,13 +980,8 @@ const asNumber = (v: any): number => {
 
 /** The Price Mappings workbook, shared by /export (client rows) and /export-all
  *  (every mapped row). */
-function buildMappingsWorkbook(
-  mappings: any[],
-  products: Map<string, ProductInfo> = new Map(),
-): ExcelJS.Workbook {
-  const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet("Price Mappings");
-  worksheet.columns = [
+const MAPPING_COLUMNS: Array<Partial<ExcelJS.Column>> = [
+
     { header: "SKU", key: "sku", width: 26 },
     { header: "Product Code", key: "product_code", width: 22 },
     { header: "Gajab Product ID", key: "gajab_product_id", width: 30 },
@@ -1022,63 +1017,76 @@ function buildMappingsWorkbook(
     { header: "Meesho Unavailable", key: "meesho_unavailable", width: 20 },
     { header: "Mapped On", key: "mapped_on", width: 12 },
     { header: "Last Checked", key: "last_checked", width: 25 },
-  ];
+];
 
+function mappingOne(m: any, products: Map<string, ProductInfo>): any {
   const pct = (v: any) => (v != null ? Math.round(Number(v) * 100) + "%" : null);
-  for (const m of mappings) {
-    const p = products.get(m.gajab_product_id);
-    const price = p?.price || m.gajab_price;
-    const mrp = p?.mrp_price || "";
-    const priceN = asNumber(price);
-    const mrpN = asNumber(mrp);
-    const discount = priceN > 0 && mrpN > priceN
-      ? Math.round(((mrpN - priceN) / mrpN) * 100)
-      : null;
-    const platforms = [
-      m.amazon_url ? "Amazon" : null,
-      m.flipkart_url ? "Flipkart" : null,
-      m.meesho_url ? "Meesho" : null,
-    ].filter(Boolean);
-    worksheet.addRow({
-      // The real marketplace SKU (products.sku); the URL tail is a link code,
-      // not a SKU, so it gets its own column instead of masquerading as one.
-      sku: p?.sku || null,
-      product_code: skuOf(m.gajab_product_id, p?.url || m.gajab_url),
-      gajab_product_id: m.gajab_product_id,
-      gajab_title: p?.name || m.gajab_title,
-      category: p?.category || null,
-      brand: p?.brand || null,
-      seller: p?.seller || null,
-      mrp: mrp || null,
-      gajab_price: price,
-      discount: discount != null ? discount + "%" : null,
-      gajab_url: p?.url || m.gajab_url,
-      image_url: p?.image_url || m.gajab_image_url || null,
-      amazon_url: m.amazon_url,
-      amazon_price: m.amazon_price,
-      amazon_match_score: m.amazon_match_score,
-      amazon_dinov2: pct(m.amazon_dinov2),
-      amazon_clip: pct(m.amazon_clip),
-      amazon_match_tag: m.amazon_match_tag || null,
-      amazon_unavailable: m.amazon_unavailable ? "Yes" : "No",
-      flipkart_url: m.flipkart_url,
-      flipkart_price: m.flipkart_price,
-      flipkart_match_score: m.flipkart_match_score,
-      flipkart_dinov2: pct(m.flipkart_dinov2),
-      flipkart_clip: pct(m.flipkart_clip),
-      flipkart_match_tag: m.flipkart_match_tag || null,
-      flipkart_unavailable: m.flipkart_unavailable ? "Yes" : "No",
-      meesho_url: m.meesho_url,
-      meesho_price: m.meesho_price,
-      meesho_match_score: m.meesho_match_score,
-      meesho_dinov2: pct(m.meesho_dinov2),
-      meesho_clip: pct(m.meesho_clip),
-      meesho_match_tag: m.meesho_match_tag || null,
-      meesho_unavailable: m.meesho_unavailable ? "Yes" : "No",
-      mapped_on: platforms.join("+") || null,
-      last_checked: m.last_checked,
-    });
-  }
+  const p = products.get(m.gajab_product_id);
+  const price = p?.price || m.gajab_price;
+  const mrp = p?.mrp_price || "";
+  const priceN = asNumber(price);
+  const mrpN = asNumber(mrp);
+  const discount = priceN > 0 && mrpN > priceN
+    ? Math.round(((mrpN - priceN) / mrpN) * 100)
+    : null;
+  const platforms = [
+    m.amazon_url ? "Amazon" : null,
+    m.flipkart_url ? "Flipkart" : null,
+    m.meesho_url ? "Meesho" : null,
+  ].filter(Boolean);
+  return {
+    // The real marketplace SKU (products.sku); the URL tail is a link code,
+    // not a SKU, so it gets its own column instead of masquerading as one.
+    sku: p?.sku || null,
+    product_code: skuOf(m.gajab_product_id, p?.url || m.gajab_url),
+    gajab_product_id: m.gajab_product_id,
+    gajab_title: p?.name || m.gajab_title,
+    category: p?.category || null,
+    brand: p?.brand || null,
+    seller: p?.seller || null,
+    mrp: mrp || null,
+    gajab_price: price,
+    discount: discount != null ? discount + "%" : null,
+    gajab_url: p?.url || m.gajab_url,
+    image_url: p?.image_url || m.gajab_image_url || null,
+    amazon_url: m.amazon_url,
+    amazon_price: m.amazon_price,
+    amazon_match_score: m.amazon_match_score,
+    amazon_dinov2: pct(m.amazon_dinov2),
+    amazon_clip: pct(m.amazon_clip),
+    amazon_match_tag: m.amazon_match_tag || null,
+    amazon_unavailable: m.amazon_unavailable ? "Yes" : "No",
+    flipkart_url: m.flipkart_url,
+    flipkart_price: m.flipkart_price,
+    flipkart_match_score: m.flipkart_match_score,
+    flipkart_dinov2: pct(m.flipkart_dinov2),
+    flipkart_clip: pct(m.flipkart_clip),
+    flipkart_match_tag: m.flipkart_match_tag || null,
+    flipkart_unavailable: m.flipkart_unavailable ? "Yes" : "No",
+    meesho_url: m.meesho_url,
+    meesho_price: m.meesho_price,
+    meesho_match_score: m.meesho_match_score,
+    meesho_dinov2: pct(m.meesho_dinov2),
+    meesho_clip: pct(m.meesho_clip),
+    meesho_match_tag: m.meesho_match_tag || null,
+    meesho_unavailable: m.meesho_unavailable ? "Yes" : "No",
+    mapped_on: platforms.join("+") || null,
+    last_checked: m.last_checked,
+  };
+}
+
+function* mappingRowObjects(mappings: any[], products: Map<string, ProductInfo>): Generator<any> {
+  for (const m of mappings) yield mappingOne(m, products);
+}
+
+function buildMappingsWorkbook(
+  mappings: any[],
+  products: Map<string, ProductInfo> = new Map(),
+): ExcelJS.Workbook {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Price Mappings");
+  worksheet.columns = MAPPING_COLUMNS;
+  for (const row of mappingRowObjects(mappings, products)) worksheet.addRow(row);
 
   const headerRow = worksheet.getRow(1);
   headerRow.font = { bold: true };
@@ -1098,11 +1106,28 @@ async function sendMappingsWorkbook(res: Response, mappings: any[], filename: st
   } catch (err: any) {
     logger.warn({ err: err?.message }, "price-mapper export: product enrichment failed");
   }
-  const workbook = buildMappingsWorkbook(mappings, products);
+
+  // STREAM the workbook. Building it in memory (exceljs Workbook + a 45k-row
+  // sheet) outgrew the 1.5 GB Node heap and killed the server mid-download -
+  // the browser saw "connection reset", i.e. "Export failed".
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  await workbook.xlsx.write(res);
-  res.end();
+  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+    stream: res,
+    useStyles: true,
+    useSharedStrings: false,
+  });
+  const worksheet = workbook.addWorksheet("Price Mappings");
+  // widths only - the header row is written explicitly so it can be styled
+  worksheet.columns = MAPPING_COLUMNS.map((c) => ({ key: c.key, width: c.width }));
+  const header = worksheet.addRow(MAPPING_COLUMNS.map((c) => c.header));
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF6366F1" } };
+  header.commit();
+  for (const row of mappingRowObjects(mappings, products)) worksheet.addRow(row).commit();
+  await worksheet.commit();
+  await workbook.commit();
+  if (!res.writableEnded) res.end();
 }
 
 // POST /api/price-mapper/export — export the mappings the client sent
