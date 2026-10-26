@@ -320,6 +320,14 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
     ("car_seat_cover", ["car seat cover", "car seat covers", "car seat cushion",
                         "car seat protector", "car seat mat"],
      "Automobile Accessories > Spares > Car Spare Parts"),
+    # Shoe washing bags surfaced in Leather & Travel and Office Supplies.
+    ("shoe_wash_bag", ["shoe washing bag", "shoe wash bag", "shoe laundry bag",
+                       "shoe washing machine bag", "shoe cleaner bag"],
+     "Home & Kitchen > Household Care & Supplies > Housekeeping & Laundry"),
+    # Baby nail trimmers were split across Beauty > Skin Care and Hair Care.
+    ("baby_nail_trimmer", ["baby nail trimmer", "baby nail cutter", "baby nail file",
+                           "nail trimmer for baby", "baby nail clipper"],
+     "Kids & Baby > Baby Care > Health & Safety"),
 ]
 
 
