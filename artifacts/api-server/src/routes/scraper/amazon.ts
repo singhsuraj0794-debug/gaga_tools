@@ -268,7 +268,7 @@ async function walkAmazonCatalogue(
   // tunnel. It used to default to the ngrok host, which now answers 403 (free
   // plan bandwidth cap) — the Amazon scraper failed with "tunnel HTTP 403"
   // while the scraper itself was perfectly healthy.
-  const localBase = (process.env.LOCAL_SCRAPER_URL || "").replace(/\/+$/, "");
+  const localBase = (process.env.LOCAL_SCRAPER_URL || "http://localhost:9000").replace(/\/+$/, "");
   const publicBase = (process.env.SCRAPER_TUNNEL_URL || "https://stock-laundry-likewise-facing.trycloudflare.com").replace(/\/+$/, "");
   const tunnel = localBase || publicBase;
   // Chunk size trades wall-clock against the caller's 5-minute cap. The
