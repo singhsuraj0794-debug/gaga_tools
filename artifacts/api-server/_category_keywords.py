@@ -296,6 +296,13 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Automobile Accessories > Spares > Car Spare Parts > Vehicle Oil Pump Kit"),
     ("night_lamp", ["night lamp", "night light", "panda lamp"],
      "Home & Kitchen > Home Decor > Lights & Lamps > Table Lamp"),
+    ("duvet_clip", ["duvet clip", "duvet clips", "quilt clip", "quilt clips", "duvet cover clip",
+                    "duvet cover clips", "quilt cover pin", "quilt cover pins", "bedsheet holder",
+                    "bedsheet clip", "quilt holder", "duvet button", "duvet pins"],
+     "Home & Kitchen > Home Furnishing > Bed Linen, Blankets & Accessories > Duvet Cover"),
+    ("cosmetic_pouch", ["cosmetic pouch", "cosmetic bag", "makeup bag", "make up bag",
+                        "makeup pouch", "cosmetic organizer bag", "toiletry bag", "wash bag"],
+     "Fashion > Leather & Travel Products > Bags & Fashion Accessories > Pouch Potlis"),
 ]
 
 
