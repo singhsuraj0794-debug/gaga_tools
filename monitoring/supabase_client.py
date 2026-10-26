@@ -14,6 +14,10 @@ class SupabaseStore:
         self._run_at = datetime.now(timezone.utc).isoformat()
         # Shared run id so split jobs (india + browser) group as one run in the dashboard.
         self._run_id = os.environ.get("MONITOR_RUN_ID") or self._run_at
+        # Counts rows we failed to persist. A silent storage failure used to look
+        # exactly like "no traffic", which diluted the metrics it was meant to keep.
+        self.write_errors = 0
+        self.write_attempts = 0
         if not SUPABASE_URL or not SUPABASE_KEY:
             print("[SUPABASE] Skipping — missing SUPABASE_URL or SUPABASE_KEY")
             self._client = None
@@ -102,21 +106,32 @@ class SupabaseStore:
             "step_failed": step_failed,
             "duration_ms": duration_ms,
         }
-        if details:
-            row["details"] = details
+        # Stamp every row with the vantage point (india self-hosted vs US cloud) so
+        # a latency change can never be blamed on the site when it is the runner.
+        vantage = os.environ.get("MONITOR_VANTAGE")
+        if vantage or details:
+            merged = dict(details or {})
+            if vantage:
+                merged.setdefault("vantage", vantage)
+            row["details"] = merged
         if issue_type:
             row["issue_type"] = issue_type  # "product" = real bug, "infra" = timing/infra issue
-        try:
-            self._client.table("monitoring_runs").insert(row).execute()
-        except Exception as e:
-            if "details" in str(e) and details:
-                row.pop("details", None)
-                try:
-                    self._client.table("monitoring_runs").insert(row).execute()
-                except Exception as e2:
-                    print(f"[SUPABASE] Insert error (retry): {e2}")
-            else:
-                print(f"[SUPABASE] Insert error: {e}")
+        import time as _time
+        self.write_attempts += 1
+        for attempt in (1, 2):
+            try:
+                self._client.table("monitoring_runs").insert(row).execute()
+                return
+            except Exception as e:
+                msg = str(e)
+                if attempt == 1 and "details" in msg and details:
+                    row.pop("details", None)   # schema drift: keep the numbers
+                    continue
+                if attempt == 1:
+                    _time.sleep(0.5)
+                    continue
+                self.write_errors += 1
+                print(f"[SUPABASE] Insert error (giving up): {e}")
 
     def store_audit_results(self, page: str, metrics: dict, status: str):
         for metric, value in metrics.items():

@@ -1,4 +1,3 @@
-import { SUPABASE_BASE } from "../lib/api";
 import { useState, useEffect, useMemo } from "react";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,8 +8,11 @@ import {
   Smartphone, Monitor,
 } from "lucide-react";
 
-const _SUPABASE_URL = "https://unneeded-taps-unharmed.ngrok-free.dev";
-const _SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6ImdhamFiLWxvY2FsIiwiaWF0IjoxNzkyMjYwODIyLCJleHAiOjIxMDc2MjA4MjJ9.MFh31KWtIz71frM1boP1hy3jnCiDPPdyweD412CrX7Y";
+// Monitoring data lives in the hosted Supabase project, NOT on our Windows box:
+// routing the dashboard through the tunnel meant our own outages blanked the
+// monitor and looked like "no data".
+const _SUPABASE_URL = "https://okxyskmjsmtykblrtmyi.supabase.co";
+const _SUPABASE_KEY = "sb_publishable_reTKPSKU-oZ9Xkc0IhW3sQ_Qw_9zxMARBp";
 const REFRESH_INTERVAL = 30000;
 
 interface Run {
@@ -391,8 +393,8 @@ export default function MonitoringDashboard() {
   const [platform, setPlatform] = useState<"mweb" | "web" | "android">("mweb");
 
   async function fetchRuns() {
-    const url = SUPABASE_BASE || _SUPABASE_URL;
-    const key = import.meta.env.VITE_SUPABASE_KEY || _SUPABASE_KEY;
+    const url = import.meta.env.VITE_MONITOR_SUPABASE_URL || _SUPABASE_URL;
+    const key = import.meta.env.VITE_MONITOR_SUPABASE_KEY || _SUPABASE_KEY;
     if (!url || !key) return;
     try {
       const u = new URL(`${url}/rest/v1/monitoring_runs`);

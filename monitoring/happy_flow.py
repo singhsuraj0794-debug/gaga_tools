@@ -1259,6 +1259,19 @@ def _run_platform_flow(platform: str) -> list[dict]:
     log(f"Starting {platform} happy-flow check")
 
     session_state = _load_session()
+    if not session_state:
+        # Running the journey logged OUT makes every authenticated step fail, and
+        # those failures were stored as product failures - our own missing session
+        # masquerading as a site regression. Report one INFRA failure and stop.
+        log("No monitoring session available - skipping the authenticated journey (infra)")
+        return [{
+            "step": f"{step_prefix}session",
+            "duration_ms": 0,
+            "status": "fail",
+            "detail": "No saved login session available (file + Supabase Storage both missing)",
+            "failure_reason": "monitoring session missing",
+            "issue_type": "infra",
+        }]
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(

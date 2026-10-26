@@ -38,6 +38,9 @@ def main():
     print("=" * 60, flush=True)
 
     store = SupabaseStore()
+    # Where these numbers were measured from (india self-hosted vs US cloud).
+    # Without it a US latency spike reads as a site regression.
+    vantage = os.environ.get("MONITOR_VANTAGE", "unknown")
     t_start = time.time()
     failures = []
 
@@ -66,6 +69,9 @@ def main():
         if r["status"] == "fail":
             rca = generate_rca(f"server_{r['service']}", h_observed)
         store.store_result(
+            # A 5xx is the site's bug; a timeout/DNS error is usually infra.
+            issue_type=("product" if (r.get("status_code") or 0) >= 500 else "infra")
+                        if r["status"] != "pass" else None,
             page_or_flow=f"server/{r['service']}",
             metric="response_time_ms",
             value=float(r["duration_ms"]),
@@ -86,6 +92,8 @@ def main():
         a_details = explain(f"api_{r['api']}", r["status"], a_observed)
         a_rca = generate_rca(f"api_{r['api']}", a_observed) if r["status"] != "pass" else None
         store.store_result(
+            issue_type=("product" if (r.get("status_code") or 0) >= 500 else "infra")
+                        if r["status"] != "pass" else None,
             page_or_flow=f"api/{r['api']}",
             metric="response_time_ms",
             value=float(r["duration_ms"]),
@@ -98,6 +106,8 @@ def main():
             failures.append(f"API/{r['api']}: {r.get('error', 'error')}")
             send_alert(f"API {r['status']}: {r['api']}", format_rca_for_slack(a_rca, f"API/{r['api']}"))
         store.store_result(
+            issue_type=("product" if (r.get("status_code") or 0) >= 500 else "infra")
+                        if r["status"] != "pass" else None,
             page_or_flow=f"api/{r['api']}",
             metric="status_code",
             value=float(r.get("status_code") or 0),
@@ -107,7 +117,21 @@ def main():
 
     # ── Part 3: Lighthouse Audits ──
     print("\n--- Lighthouse Audits ---", flush=True)
-    audit_results = audit_all_pages() if RUN_LIGHTHOUSE else []
+    # A slow/failed Lighthouse run must not kill the whole monitor: previously the
+    # subprocess timeout escaped here, the job failed, and notify-failure paged
+    # Slack about a "site" problem that was really our audit tool.
+    try:
+        audit_results = audit_all_pages() if RUN_LIGHTHOUSE else []
+    except Exception as exc:  # noqa: BLE001
+        audit_results = []
+        print(f"[MONITOR] lighthouse failed: {type(exc).__name__}: {exc}", flush=True)
+        store.store_result(
+            page_or_flow="lighthouse", metric="audit_error", value=0.0,
+            status="degraded", issue_type="infra",
+            step_failed=f"lighthouse run failed: {type(exc).__name__}: {str(exc)[:120]}",
+            details={"vantage": vantage},
+        )
+        failures.append(f"Lighthouse: audit tool failed ({type(exc).__name__}) - infra, not the site")
     # Map the dashboard's page key to the audited URL so every Lighthouse row
     # can say exactly which URL scored badly.
     from config import URLS as _URLS
@@ -127,33 +151,34 @@ def main():
                 if m in v:
                     violated_metrics.add(m)
         print(f"  {page}: violations={violations} metrics={metrics}", flush=True)
+        # ONE row per metric per run. This used to write the metric row and then a
+        # second "degraded" row per violation (value=None), which doubled every
+        # failure in the dashboard and made the violation text live on a different
+        # row from the number it described.
         for metric_name, metric_value in metrics.items():
-            metric_status = "fail" if metric_name in violated_metrics else "pass"
+            violation = next((v for v in violations if metric_name in v), None)
+            metric_status = "fail" if violation else "pass"
             m_details = explain(f"lighthouse_{metric_name}", metric_status,
                                 f"{page_url or page}: {metric_name}={metric_value}")
             if page_url:
                 m_details["url"] = page_url
             m_details["page"] = page
+            if violation:
+                m_details["threshold_breach"] = violation
             store.store_result(
                 page_or_flow=page, metric=metric_name, value=metric_value, status=metric_status,
-                details=m_details,
+                step_failed=violation, details=m_details,
+                issue_type="infra" if violation else None,
             )
         if violations:
-            page_violations = [v for v in violations]
-            for v in violations:
-                metric_key = v.split("=")[0] if "=" in v else v
-                rca = generate_rca(f"lighthouse_{metric_key}", v)
-                lh_details = explain(f"lighthouse_{metric_key}", "degraded",
-                                     f"{page} ({page_url or 'n/a'}): {v}")
-                if page_url:
-                    lh_details["url"] = page_url
-                store.store_result(page_or_flow=page, metric=metric_key, value=None,
-                                   status="degraded", step_failed=v, details=lh_details)
-                failures.append(f"Lighthouse/{page}: {v}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
-                send_alert(
-                    f"Lighthouse audit issues: {page} ({page_url or 'n/a'})",
-                    format_rca_for_slack(rca, f"Lighthouse/{page}"),
-                )
+            # One alert per page, not one per metric: four breached metrics on the
+            # home page used to send four Slack messages for a single event.
+            rca = generate_rca(f"lighthouse_{page}", "; ".join(violations))
+            failures.append(f"Lighthouse/{page}: {'; '.join(violations)}\n  RCA: {rca['summary']}\n  Actions: {'; '.join(rca['actions'][:3])}")
+            send_alert(
+                f"Lighthouse audit issues: {page} ({page_url or 'n/a'})",
+                format_rca_for_slack(rca, f"Lighthouse/{page}"),
+            )
 
     # ── Part 4: Happy-Flow Check ──
     print("\n--- Happy-Flow Check ---", flush=True)
@@ -245,7 +270,15 @@ def main():
     print("\n--- Feature Element Checks ---", flush=True)
     if RUN_BROWSER:
         from feature_checks import run_feature_checks
-        feature_results = run_feature_checks()
+        try:
+            feature_results = run_feature_checks()
+        except Exception as exc:  # noqa: BLE001
+            feature_results = []
+            print(f"[MONITOR] feature checks failed: {type(exc).__name__}: {exc}", flush=True)
+            store.store_result(page_or_flow="feature/environment", metric="check_error", value=0.0,
+                               status="degraded", issue_type="infra",
+                               step_failed=f"{type(exc).__name__}: {str(exc)[:120]}")
+            failures.append("Feature checks: tool error (infra)")
     else:
         feature_results = []
     for r in feature_results:
@@ -291,6 +324,19 @@ def main():
     print(f"  Duration: {elapsed}ms", flush=True)
     print("=" * 60, flush=True)
 
+    # Storage health as a first-class metric: a lost write must be visible, not a
+    # silent hole in the dashboard.
+    if getattr(store, "write_errors", 0):
+        store.store_result(
+            page_or_flow="monitor",
+            metric="storage_write_errors",
+            value=float(getattr(store, "write_errors", 0)),
+            status="degraded" if getattr(store, "write_errors", 0) else "pass",
+            issue_type="infra",
+            details={"attempts": getattr(store, "write_attempts", 0),
+                     "run_id": store._run_id, "vantage": vantage},
+        )
+
     overall_status = "degraded" if failures else "pass"
     store.store_result(
         page_or_flow="monitor",
@@ -298,8 +344,10 @@ def main():
         value=float(elapsed),
         status=overall_status,
         duration_ms=elapsed,
-        details=explain("monitor_total_duration_ms", overall_status,
-                        f"{elapsed}ms total, {len(failures)} issue(s) this run"),
+        details={**explain("monitor_total_duration_ms", overall_status,
+                           f"{elapsed}ms total, {len(failures)} issue(s) this run"),
+                 "vantage": vantage,
+                 "storage_write_errors": getattr(store, "write_errors", 0)},
     )
     return 0
 

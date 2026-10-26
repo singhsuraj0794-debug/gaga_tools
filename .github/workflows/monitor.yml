@@ -6,8 +6,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Decide where each job can actually run. The India self-hosted runner is
+  # offline most of the time, and a job pinned to it simply never ran (11 hours
+  # of data in 7 days). Health/API checks fall back to a GitHub-hosted runner and
+  # record which vantage point produced the numbers.
+  runner-check:
+    runs-on: ubuntu-latest
+    outputs:
+      windows_online: ${{ steps.check.outputs.windows_online }}
+      linux_online: ${{ steps.check.outputs.linux_online }}
+      linux_labels: ${{ steps.check.outputs.linux_labels }}
+    steps:
+      - name: Check which self-hosted runners are online
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 monitoring/runner_status.py >> "$GITHUB_OUTPUT"
+
   monitor-india:
-    runs-on: [self-hosted, Linux]
+    needs: runner-check
+    runs-on: ${{ fromJSON(needs.runner-check.outputs.linux_labels) }}
     steps:
       - uses: actions/checkout@v5
 
@@ -19,27 +38,15 @@ jobs:
         env:
           MONITOR_MODE: health
           MONITOR_RUN_ID: ${{ github.run_id }}
+          # Which vantage point these latencies were measured from. A US run must
+          # never be compared against an India one.
+          MONITOR_VANTAGE: ${{ needs.runner-check.outputs.linux_online == 'true' && 'india' || 'us' }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-
-  runner-check:
-    runs-on: ubuntu-latest
-    outputs:
-      windows_online: ${{ steps.check.outputs.windows_online }}
-    steps:
-      - name: Check if Windows runner is online
-        id: check
-        run: |
-          online=$(curl -s -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runners?per_page=100" \
-            | python3 -c "import sys,json; rs=json.load(sys.stdin).get('runners',[]); print('true' if any(r.get('name')=='gajab-windows' and r.get('status')=='online' for r in rs) else 'false')")
-          echo "windows_online=$online" >> "$GITHUB_OUTPUT"
-          echo "Windows runner online: $online"
 
   lighthouse-india:
     needs: runner-check
@@ -66,6 +73,7 @@ jobs:
         env:
           MONITOR_MODE: lighthouse
           MONITOR_RUN_ID: ${{ github.run_id }}
+          MONITOR_VANTAGE: india
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -104,6 +112,7 @@ jobs:
         env:
           MONITOR_MODE: lighthouse
           MONITOR_RUN_ID: ${{ github.run_id }}
+          MONITOR_VANTAGE: us
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -135,25 +144,32 @@ jobs:
           playwright install-deps chromium
           playwright install chromium
 
-      - name: Download saved session from the local stack
+      - name: Download saved session
         run: |
-          # The session lives on the Windows box now (it is a Supabase Storage
-          # compatible origin served through the permanent tunnel), so this reads
-          # the local stack rather than supabase.co. The ngrok opt-out header is
-          # required or ngrok answers with its browser interstitial.
-          curl -s -o monitoring/.gajab_session.json \
-            -H "ngrok-skip-browser-warning: 1" \
-            "${{ secrets.SUPABASE_URL }}/storage/v1/object/public/monitoring/gajab_session.json" \
-            --max-time 20 || echo "No session file available"
-          if [ -f monitoring/.gajab_session.json ] && [ -s monitoring/.gajab_session.json ]; then
-            echo "Session restored ($(wc -c < monitoring/.gajab_session.json) bytes)"
-          fi
+          # The session is published to Supabase Storage on whichever stack the
+          # secrets point at; try that origin first, then the box tunnel, and make
+          # a missing session an INFRA condition (the run then records it instead
+          # of reporting a false product failure).
+          set +e
+          for base in "${{ secrets.SUPABASE_URL }}" \
+                      "https://unneeded-taps-unharmed.ngrok-free.dev"; do
+            code=$(curl -s -o monitoring/.gajab_session.json -w "%{http_code}" \
+              -H "ngrok-skip-browser-warning: 1" --max-time 20 \
+              "$base/storage/v1/object/public/monitoring/gajab_session.json")
+            if [ "$code" = "200" ] && [ -s monitoring/.gajab_session.json ]; then
+              echo "Session restored from $base ($(wc -c < monitoring/.gajab_session.json) bytes)"
+              exit 0
+            fi
+          done
+          rm -f monitoring/.gajab_session.json
+          echo "::warning::No saved session available - browser checks will report a session-missing INFRA failure, not a product failure"
 
       - name: Run monitor (happy flow + feature)
         run: python monitoring/run_monitor.py
         env:
           MONITOR_MODE: browser
           MONITOR_RUN_ID: ${{ github.run_id }}
+          MONITOR_VANTAGE: us
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -162,13 +178,15 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
 
   notify-failure:
-    if: ${{ always() && needs.result == 'failure' }}
+    # `needs.result` is not a thing; a job-level needs map must be inspected with
+    # contains(), otherwise this never fired.
+    if: ${{ always() && contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     needs: [monitor-india, runner-check, lighthouse-india, lighthouse-us, browser]
     steps:
       - name: Slack alert on workflow job failure
         run: |
           curl -s -X POST "$SLACK_WEBHOOK_URL" -H "Content-Type: application/json" \
-            -d "{\"text\":\"⚠️ *Synthetic Monitor job FAILED* (run ${{ github.run_number }}). A job crashed before run_monitor.py could write results. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+            -d "{\"text\":\"*Synthetic Monitor job FAILED* (run ${{ github.run_number }}). A job crashed before run_monitor.py could write results. Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
