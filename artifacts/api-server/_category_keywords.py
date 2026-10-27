@@ -352,6 +352,13 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Stationery > Office, School and College Supplies > School Supplies > Pencil Boxes"),
     ("card_holder", ["credit card holder", "card holder", "atm card holder", "debit card holder"],
      "Stationery > Office, School and College Supplies > Office Supplies > Card Holders"),
+    # Document folders were landing in Household Care > Kitchen Rack, and a kids'
+    # backpack in Laptop Accessories.
+    ("file_folder", ["file folder", "expanding folder", "document folder", "document file",
+                     "certificate folder", "paper organizer folder"],
+     "Stationery > Office, School and College Supplies > Office Supplies & Accessories > File Folders"),
+    ("backpack", ["backpack", "school bag", "kids bag", "college bag"],
+     "Fashion > Leather & Travel Products > Luggage & Travel > Backpacks"),
 ]
 
 
