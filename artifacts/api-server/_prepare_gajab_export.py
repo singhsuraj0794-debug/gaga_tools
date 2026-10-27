@@ -419,7 +419,9 @@ def prepare(products: list[dict], rulings: dict | None = None,
                     # at L3, or target an L3 node that has no leaves at all, such as
                     # Kids & Baby > Toys > Pretend Toys).
                     segs_r = [x.strip() for x in ruling["path"].split(">") if x.strip()]
-                    if len(segs_r) in (3, 4) and ruling["path"] in _taxonomy_nodes():
+                    # L2 targets are legitimate too (e.g. Sports & Fitness > Darts,
+                    # which has no leaves in the taxonomy file).
+                    if len(segs_r) in (2, 3, 4) and ruling["path"] in _taxonomy_nodes():
                         node = {"full": ruling["path"],
                                 "l1": segs_r[0], "l2": segs_r[1],
                                 "l3": segs_r[2] if len(segs_r) > 2 else "",
