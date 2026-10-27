@@ -368,8 +368,9 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
     # Foam/Nerf darts: no toy-gun leaf exists, and the Amazon breadcrumb put them
     # in "Musical Instruments Accessories". Sports & Fitness > Darts is the
     # closest real node.
-    ("toy_darts", ["foam dart", "suction bullet", "nerf gun bullet", "dart refill",
-                   "toy gun bullet", "foam bullet", "soft bullets", "nerf"],
+    ("toy_darts", ["foam dart", "suction bullet", "suction bullets", "nerf gun bullet",
+                   "dart refill", "toy gun bullet", "foam bullet", "foam bullets",
+                   "soft bullets", "bullets darts", "nerf", "darts", "dart"],
      "Sports & Fitness > Darts"),
 ]
 
