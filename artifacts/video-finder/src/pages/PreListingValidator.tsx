@@ -56,6 +56,7 @@ import {
   type ClipVerificationProduct,
   type CorrectTextResult,
   type HsnSuggestion,
+  DEFAULT_API_BASE,
 } from "@/lib/listingValidator";
 
 type Phase = "upload" | "validating" | "review";
@@ -244,9 +245,11 @@ export default function PreListingValidator() {
       if (!/^https?:\/\//i.test(discovered)) return;
       // Prefer the discovered URL when the saved one is empty, localhost, or stale.
       const current = getPrelistingApiBase();
-      // The permanent ngrok domain is the stable, preferred endpoint — never
-      // replace it with a transient Supabase-published quick-tunnel URL.
-      if (/ngrok-free\.dev|ngrok\.io/.test(current)) {
+      // Only the CURRENT built-in domain is the stable endpoint. Comparing against
+      // any *.ngrok-free.dev kept a dead older ngrok URL pinned forever (it was
+      // saved in localStorage before the domain changed), which made the page
+      // report "pre-listing validation is not reachable".
+      if (current === DEFAULT_API_BASE) {
         return;
       }
       const isDefault = /localhost|127\.0\.0\.1/.test(current) || !current;
@@ -275,9 +278,28 @@ export default function PreListingValidator() {
         setApiTestDetail(`API reachable but returned HTTP ${resp.status}`);
       }
     } catch (e: any) {
+      // The saved URL can be a dead domain from an older deploy. Fall back to the
+      // built-in default once and, if that answers, adopt it so the page recovers
+      // without the user pasting anything.
+      const fallback = DEFAULT_API_BASE;
+      if (base !== fallback) {
+        try {
+          const ctrl2 = new AbortController();
+          const t2 = setTimeout(() => ctrl2.abort(), 10000);
+          const r2 = await fetch(`${fallback}/api/products/status`, withApiHeaders({ signal: ctrl2.signal }));
+          clearTimeout(t2);
+          if (r2.ok) {
+            setApiUrl(fallback);
+            setPrelistingApiBase(fallback);
+            setApiTest("ok");
+            setApiTestDetail(`Connected (HTTP ${r2.status}) — recovered from a stale saved URL`);
+            return;
+          }
+        } catch { /* fall through to the failure badge */ }
+      }
       setApiTest("fail");
       const reason = e?.name === "AbortError" ? "timed out (10s)" : (e?.message || String(e));
-      setApiTestDetail(`Cannot reach API — ${reason}. Start the tunnel and paste its URL.`);
+      setApiTestDetail(`Cannot reach API — ${reason}. Check the tunnel (${fallback}).`);
     }
   };
 

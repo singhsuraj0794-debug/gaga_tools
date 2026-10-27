@@ -6,7 +6,7 @@ import Papa from "papaparse";
 // local machine serves (scraper + compute API through one stable URL), then
 // localhost for local dev. The app can override it at runtime via
 // setPrelistingApiBase() (see PreListingValidator.tsx).
-const DEFAULT_API_BASE: string =
+export const DEFAULT_API_BASE: string =
   (import.meta.env?.VITE_PRELISTING_API_URL as string | undefined) ||
   "https://unneeded-taps-unharmed.ngrok-free.dev";
 
