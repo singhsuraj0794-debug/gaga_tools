@@ -1649,17 +1649,49 @@ export default function PreListingValidator() {
       // Duplicate detection runs as a BACKGROUND JOB (the sheet can take
       // minutes; a synchronous request over the tunnel 503s past ~300s).
       const runDupJob = async (prods: any[]): Promise<any> => {
-        const { jobId, total } = await startSheetDuplicatesJob(prods);
-        const t0 = Date.now();
+        // The duplicate job lives in the API's memory. A deploy/restart (or a
+        // tunnel blip) made one failed poll abort the whole sheet with
+        // "TypeError: Failed to fetch". Now: tolerate consecutive poll failures
+        // for ~30s, and if the job is gone (404 after a restart) simply start it
+        // again instead of failing the user's run.
+        let restarts = 0;
         for (;;) {
-          await new Promise((r) => setTimeout(r, 3000));
-          const s: any = await getSheetDuplicatesJob(jobId);
-          if (s.status === "completed") return s;
-          if (s.status === "failed") throw new Error(s.error || "duplicate detection failed");
-          setDuplicateStatus(
-            s.progress || `Checking ${total} products... (${Math.round((Date.now() - t0) / 1000)}s)`,
-          );
-          if (Date.now() - t0 > 3600000) throw new Error("duplicate check timed out");
+          const { jobId, total } = await startSheetDuplicatesJob(prods);
+          const t0 = Date.now();
+          let blips = 0;
+          for (;;) {
+            await new Promise((r) => setTimeout(r, 3000));
+            let s: any;
+            try {
+              s = await getSheetDuplicatesJob(jobId);
+            } catch (err: any) {
+              const msg = String(err?.message || err);
+              const lost = /\b404\b|job not found/i.test(msg);
+              blips += 1;
+              if (lost && restarts < 2) {
+                restarts += 1;
+                setDuplicateStatus("Job lost after a server restart — re-running this batch...");
+                break;                       // break inner loop -> restart job
+              }
+              if (blips >= 10) throw err;    // ~30s of continuous failures
+              setDuplicateStatus(`Connection blip (${blips}/10) — retrying...`);
+              continue;
+            }
+            blips = 0;
+            if (s.status === "completed") return s;
+            if (s.status === "failed") {
+              if (restarts < 2) {
+                restarts += 1;
+                setDuplicateStatus("Duplicate job failed — retrying this batch...");
+                break;
+              }
+              throw new Error(s.error || "duplicate detection failed");
+            }
+            setDuplicateStatus(
+              s.progress || `Checking ${total} products... (${Math.round((Date.now() - t0) / 1000)}s)`,
+            );
+            if (Date.now() - t0 > 3600000) throw new Error("duplicate check timed out");
+          }
         }
       };
 
