@@ -415,15 +415,23 @@ def match_target(title: str) -> Optional[Tuple[str, str]]:
     if not title:
         return None
     title_lower = title.lower()
-    best = None  # (kw_len, cid, target)
+    # Longest keyword used to win, which breaks on real titles: a sticker book
+    # whose description mentions "Lunch Box" matched lunch_box, and a "Rabbit Pen
+    # Bag ... Pencil Case" matched cosmetic pouch via "wash bag". The product type
+    # is what the title names EARLY (right after the brand), so the earliest match
+    # wins and the longest keyword only breaks ties at the same position.
+    best = None  # (start, -len, cid, target)
     for cid, kws, target in _resolved_map:
         for kw, rx in kws:
-            if rx.search(title_lower):
-                if best is None or len(kw) > best[0]:
-                    best = (len(kw), cid, target)
+            m = rx.search(title_lower)
+            if not m:
+                continue
+            key = (m.start(), -len(kw))
+            if best is None or key < (best[0], -best[1]):
+                best = (m.start(), len(kw), cid, target)
     if best is None:
         return None
-    return best[1], best[2]
+    return best[2], best[3]
 
 
 def split_target(target: str) -> Tuple[str, str, str, str]:
