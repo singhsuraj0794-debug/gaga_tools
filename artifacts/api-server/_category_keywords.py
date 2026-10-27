@@ -359,6 +359,12 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
      "Stationery > Office, School and College Supplies > Office Supplies & Accessories > File Folders"),
     ("backpack", ["backpack", "school bag", "kids bag", "college bag"],
      "Fashion > Leather & Travel Products > Luggage & Travel > Backpacks"),
+    # A magnetic dress-up playset was filed under Furniture > Cupboards & Almirahs
+    # because the title says "Wardrobe".
+    ("dressup_playset", ["dress-up playset", "dress up playset", "magnetic dress up",
+                         "magnetic dress-up", "magnetic princess wardrobe", "paper doll set",
+                         "dress up set", "dress-up set"],
+     "Kids & Baby > Toys > Pretend Toys"),
 ]
 
 
@@ -369,8 +375,13 @@ def _load_taxonomy_paths() -> set:
             data = json.load(f)
         out = set()
         for p in data.get("paths", []):
-            full = p["full"]
-            out.add(full)
+            out.add(p["full"])
+        # `ids` also carries L2/L3 nodes that are not leaves (e.g.
+        # "Kids & Baby > Toys > Pretend Toys"). Without them a correct anchor could
+        # not be expressed.
+        for node in (data.get("ids") or {}):
+            out.add(node)
+        for full in list(out):
             segs = [x.strip() for x in full.split(">") if x.strip()]
             for i in range(2, len(segs)):
                 out.add(" > ".join(segs[:i]))

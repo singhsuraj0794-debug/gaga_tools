@@ -212,6 +212,24 @@ _LEAF_STOP = {"the", "and", "for", "with", "set", "combo", "pack", "other", "gen
               "misc", "miscellaneous", "accessory", "accessories", "product", "products"}
 
 
+
+_TAX_NODES: set[str] | None = None
+
+
+def _taxonomy_nodes() -> set[str]:
+    """Every node name in category_l1l4.json (L2/L3/L4), for ruling validation."""
+    global _TAX_NODES
+    if _TAX_NODES is None:
+        import json as _json
+        try:
+            data = _json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                "category_l1l4.json"), encoding="utf-8"))
+            _TAX_NODES = set(data.get("ids") or {}) | {p["full"] for p in data.get("paths", [])}
+        except Exception:
+            _TAX_NODES = set()
+    return _TAX_NODES
+
+
 def _leaf_relates_to_title(leaf: str, title: str) -> bool:
     """True when the L4 leaf name is actually supported by the product title.
 
@@ -397,14 +415,15 @@ def prepare(products: list[dict], rulings: dict | None = None,
                 if ruling["path"] in cat_mapper._by_full:
                     node = cat_mapper._by_full[ruling["path"]]
                 else:
-                    # Accept a coarser L3 ruling (a curated keyword may deliberately
-                    # stop at L3 when the taxonomy has no leaf for the product).
+                    # Accept a coarser ruling (a curated keyword may deliberately stop
+                    # at L3, or target an L3 node that has no leaves at all, such as
+                    # Kids & Baby > Toys > Pretend Toys).
                     segs_r = [x.strip() for x in ruling["path"].split(">") if x.strip()]
-                    if len(segs_r) == 3 and any(
-                        k.startswith(ruling["path"] + " > ") for k in cat_mapper._by_full
-                    ):
-                        node = {"full": ruling["path"], "l1": segs_r[0], "l2": segs_r[1],
-                                "l3": segs_r[2], "l4": ""}
+                    if len(segs_r) in (3, 4) and ruling["path"] in _taxonomy_nodes():
+                        node = {"full": ruling["path"],
+                                "l1": segs_r[0], "l2": segs_r[1],
+                                "l3": segs_r[2] if len(segs_r) > 2 else "",
+                                "l4": segs_r[3] if len(segs_r) > 3 else ""}
             if node is not None:
                 level = 4 if node.get("l4") else 3
                 full = node["full"]
