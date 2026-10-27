@@ -1707,7 +1707,9 @@ export interface ClipVerificationResult {
 
 // Retry transient network failures (cloudflared quick tunnel intermittently
 // drops a connection mid-request → "TypeError: Failed to fetch" in the browser).
-async function fetchWithRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
+// 3 retries (~1.5s + 3s + 4.5s) instead of 2: a single tunnel blip used to
+// surface as "TypeError: Failed to fetch" and abort a whole validator run.
+async function fetchWithRetry(url: string, options: RequestInit, retries = 3): Promise<Response> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
