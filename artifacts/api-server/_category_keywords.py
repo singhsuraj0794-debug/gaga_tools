@@ -336,6 +336,22 @@ KEYWORD_MAP: List[Tuple[str, List[str], str]] = [
     ("baby_nail_trimmer", ["baby nail trimmer", "baby nail cutter", "baby nail file",
                            "nail trimmer for baby", "baby nail clipper"],
      "Kids & Baby > Baby Care > Health & Safety"),
+    # The only sticker leaf is Party Supplies > Stickers; without an anchor these
+    # landed in "Musical Instruments > Musical Instruments Accessories > Guitar
+    # Stickers" because the marketplace breadcrumb said "Stickers".
+    ("sticker_book", ["sticker book", "stickers book", "sticker activity book", "diy sticker",
+                      "stickers", "sticker", "puffy sticker", "washi sticker", "kawaii sticker",
+                      "sticker sheets", "sticker pack", "scrapbook sticker"],
+     "Kids & Baby > Party Supplies > Birthday & Decoration > Stickers"),
+    ("cosmetic_organizer", ["cosmetic organizer", "makeup organizer", "make up organizer",
+                            "makeup brush holder", "makeup brush organizer", "lipstick storage",
+                            "makeup storage", "cosmetic storage box", "cosmetic holder"],
+     "Beauty & Health Care > Health & Beauty > Face Care > Makeup Brush Organizers"),
+    ("pencil_case", ["pencil case", "pencil pouch", "pencil box", "pencil bag",
+                     "stationery case", "pen case", "pen pouch"],
+     "Stationery > Office, School and College Supplies > School Supplies > Pencil Boxes"),
+    ("card_holder", ["credit card holder", "card holder", "atm card holder", "debit card holder"],
+     "Stationery > Office, School and College Supplies > Office Supplies > Card Holders"),
 ]
 
 
