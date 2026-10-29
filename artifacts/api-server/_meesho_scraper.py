@@ -241,6 +241,38 @@ def _cdp_ok(cdp: str) -> None:
         _CDP_STATE[cdp] = (0, 0.0)
 
 
+
+_PROXY_DEAD_UNTIL = 0.0
+
+
+def _proxy_quota_exhausted() -> bool:
+    """True when the local proxy's upstream answers 402 (Webshare quota out).
+
+    A dead residential proxy does not fail fast: Chrome shows an error page and
+    the scraper silently falls back to this box's own IP, which Meesho 403s. The
+    result was hundreds of "blocked" rows with no hint about the real cause.
+    """
+    global _PROXY_DEAD_UNTIL
+    now = time.time()
+    if now < _PROXY_DEAD_UNTIL:
+        return True
+    host = None
+    for port in (9224,):
+        try:
+            import socket
+            s = socket.create_connection(("127.0.0.1", port), timeout=3)
+            s.sendall(b"CONNECT www.meesho.com:443 HTTP/1.1\r\nHost: www.meesho.com:443\r\n\r\n")
+            first = s.recv(200).decode("latin-1", "ignore")
+            s.close()
+            if " 402" in first:
+                _PROXY_DEAD_UNTIL = now + 300
+                print("MEESHO: residential proxy quota exhausted (402) - proxied egress disabled", flush=True)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _try_playwright(url: str) -> str:
     """Fetch a product page via a shared Chrome over CDP (proxied, then direct).
 
@@ -263,6 +295,22 @@ def _try_playwright(url: str) -> str:
                     # Fresh context: the shared default context accumulates state
                     # and starts serving block pages for every navigation.
                     ctx = browser.new_context()
+                    # MEESHO_COOKIES: a Cookie-header string ("a=1; b=2") or a JSON
+                    # array of Playwright cookies. A logged-in session is the most
+                    # reliable way past Meesho's anti-bot when the proxy is down.
+                    _cookies = os.environ.get("MEESHO_COOKIES", "").strip()
+                    if _cookies:
+                        try:
+                            if _cookies.startswith("["):
+                                ctx.add_cookies(json.loads(_cookies))
+                            else:
+                                ctx.add_cookies([
+                                    {"name": k.strip(), "value": v.strip(),
+                                     "domain": ".meesho.com", "path": "/"}
+                                    for k, v in (part.split("=", 1) for part in _cookies.split(";") if "=" in part)
+                                ])
+                        except Exception as exc:
+                            print(f"MEESHO: could not apply MEESHO_COOKIES ({type(exc).__name__})", flush=True)
                     page = ctx.new_page()
                     try:
                         def _route(route):
@@ -587,6 +635,8 @@ def scrape_product(url: str, html: str = "") -> dict:
         url = _normalize_url(url)
         html = _fetch_product_page(url)
     if not html:
+        if _proxy_quota_exhausted():
+            return _blocked("Residential proxy quota exhausted (402) - top up Webshare or set SCRAPER_PROXY")
         return _blocked(f"Could not fetch {url}")
 
     m = re.search(r'__NEXT_DATA__[^>]*>\s*({.*?})\s*</script>', html, re.DOTALL)
