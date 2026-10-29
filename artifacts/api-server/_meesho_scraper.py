@@ -223,7 +223,17 @@ _CDP_COOLDOWN_SECONDS = int(os.environ.get("MEESHO_CDP_COOLDOWN_SECONDS", "120")
 def _cdp_candidates() -> list:
     now = time.time()
     live = [c for c in _CDP_ORDER if _CDP_STATE.get(c, (0, 0.0))[1] <= now]
-    return live or list(_CDP_ORDER)
+    order = list(live or _CDP_ORDER)
+    # With the residential proxy out of quota the proxied Chrome only serves an
+    # error page, so trying it first wastes a few seconds per product. Put the
+    # direct Chrome ahead of it (the logged-in MEESHO_COOKIES session is what
+    # makes the direct egress work).
+    try:
+        if _proxy_quota_exhausted() and SCRAPE_CDP_URL in order:
+            order = [c for c in order if c != SCRAPE_CDP_URL] + [SCRAPE_CDP_URL]
+    except Exception:
+        pass
+    return order
 
 
 def _cdp_failed(cdp: str, why: str = "") -> None:
