@@ -36,32 +36,6 @@ CACHE_FILE = os.path.join(os.path.dirname(__file__), ".product_cache.json")
 # code that no longer exists (this hid the source_category_path fix completely).
 # v5: products cached before mrp_details.mrp was read carry mrp=None, and a
 # re-scrape would serve those stale entries instead of the real MRP.
-def _load_dotenv() -> None:
-    """Read .env for any key the process env lacks.
-
-    The scraper runs under several launchers (API restart scripts, the watchdog,
-    a manual start). Only some of them call Import-DotEnv, so MEESHO_COOKIES /
-    SCRAPER_PROXY disappeared whenever the gateway was restarted another way -
-    which silently turned a logged-in session back into "blocked".
-    """
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
-    except Exception:
-        pass
-
-
-_load_dotenv()
-
 CACHE_VERSION = "v5-mrp"
 _cache = {}  # url_hash -> product dict
 # The local scraper server is a ThreadingHTTPServer: several product scrapes run
@@ -233,9 +207,7 @@ def _try_curl_cffi(url: str, impersonate: str = "safari15_5") -> str:
 # short connect timeout, and we try the PROXIED Chrome first — it rotates
 # residential IPs, so Meesho's per-IP rate limit never accumulates — then fall
 # back to the direct one.
-# Direct Chrome first. Meesho serves the rotating Webshare IPs a ~2.7 KB
-# challenge shell instead of __NEXT_DATA__, so the proxied browser is only a
-# fallback now.
+# Direct Chrome first: the rotating proxy IPs often get a challenge shell.
 _CDP_ORDER = [c for c in (EXTRACT_CDP_URL, SCRAPE_CDP_URL) if c]
 CDP_CONNECT_TIMEOUT_MS = int(os.environ.get("MEESHO_CDP_CONNECT_TIMEOUT_MS", "8000"))
 
@@ -252,22 +224,7 @@ _CDP_COOLDOWN_SECONDS = int(os.environ.get("MEESHO_CDP_COOLDOWN_SECONDS", "120")
 def _cdp_candidates() -> list:
     now = time.time()
     live = [c for c in _CDP_ORDER if _CDP_STATE.get(c, (0, 0.0))[1] <= now]
-    order = list(live or _CDP_ORDER)
-    # With the residential proxy out of quota the proxied Chrome only serves an
-    # error page, so trying it first wastes a few seconds per product. Put the
-    # direct Chrome ahead of it (the logged-in MEESHO_COOKIES session is what
-    # makes the direct egress work).
-    try:
-        if _proxy_quota_exhausted() and SCRAPE_CDP_URL in order:
-            order = [c for c in order if c != SCRAPE_CDP_URL] + [SCRAPE_CDP_URL]
-    except Exception:
-        pass
-    return order
-
-
-def _blocked_for(cdp: str, seconds: int) -> None:
-    """Park an endpoint after an explicit block page."""
-    _CDP_STATE[cdp] = (99, time.time() + seconds)
+    return live or list(_CDP_ORDER)
 
 
 def _cdp_failed(cdp: str, why: str = "") -> None:
@@ -318,106 +275,519 @@ def _proxy_quota_exhausted() -> bool:
 
 
 def _try_playwright(url: str) -> str:
-    """Fetch a product page through a Chrome over CDP.
+    """Fetch a product page via a shared Chrome over CDP (proxied, then direct).
 
-    The rotating residential proxy hands out a different IP per connection and
-    some of them are Akamai-blocked, so a single failed load proves nothing: each
-    attempt opens a NEW context (new proxy IP) and a block page just moves on to
-    the next attempt. The proxy needs ~12s to render a PDP, hence the longer
-    readiness budget.
+    Optimised for a DATA scrape: images/media/fonts/CSS are aborted (the price,
+    specs and images list all come from __NEXT_DATA__), and readiness is polled
+    with a cheap JS probe instead of re-serialising the whole DOM every 2s. The
+    old loop (20 x 2s sleep + page.content()) is why a Meesho product could take
+    20-40s.
     """
     try:
         import time
         from playwright.sync_api import sync_playwright
 
         BLOCKED_RESOURCES = {"image", "media", "font", "stylesheet"}
-        READY_SECONDS = float(os.environ.get("MEESHO_READY_SECONDS", "22"))
-        ATTEMPTS = int(os.environ.get("MEESHO_LOAD_ATTEMPTS", "3"))
-        cookies_env = os.environ.get("MEESHO_COOKIES", "").strip()
 
         for cdp in _cdp_candidates():
-            blocked_pages = 0
-            for attempt in range(ATTEMPTS):
-                try:
-                    with sync_playwright() as p:
-                        browser = p.chromium.connect_over_cdp(cdp, timeout=CDP_CONNECT_TIMEOUT_MS)
-                        # Clean context (the Chrome profile's cookies were flagged)
-                        # with only the cookies we deliberately inject.
-                        ctx = browser.new_context()
-                        if cookies_env:
-                            try:
-                                if cookies_env.startswith("["):
-                                    ctx.add_cookies(json.loads(cookies_env))
-                                else:
-                                    ctx.add_cookies([
-                                        {"name": k.strip(), "value": v.strip(),
-                                         "domain": ".meesho.com", "path": "/"}
-                                        for k, v in (part.split("=", 1) for part in cookies_env.split(";") if "=" in part)
-                                    ])
-                            except Exception:
-                                pass
-                        page = ctx.new_page()
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.connect_over_cdp(cdp, timeout=CDP_CONNECT_TIMEOUT_MS)
+                    # Fresh context: the shared default context accumulates state
+                    # and starts serving block pages for every navigation.
+                    ctx = browser.new_context()
+                    # MEESHO_COOKIES: a Cookie-header string ("a=1; b=2") or a JSON
+                    # array of Playwright cookies. A logged-in session is the most
+                    # reliable way past Meesho's anti-bot when the proxy is down.
+                    _cookies = os.environ.get("MEESHO_COOKIES", "").strip()
+                    if _cookies:
                         try:
-                            def _route(route):
-                                try:
-                                    if route.request.resource_type in BLOCKED_RESOURCES:
-                                        route.abort()
-                                    else:
-                                        route.continue_()
-                                except Exception:
-                                    pass
-
+                            if _cookies.startswith("["):
+                                ctx.add_cookies(json.loads(_cookies))
+                            else:
+                                # Akamai cookies (_abck/bm_*/ak_bmsc) are bound to the
+                                # IP that minted them; replaying them from the box makes
+                                # every navigation answer 403. Only the login travels.
+                                _skip = ("_abck", "bm_", "ak_bmsc", "_ga", "_gcl", "mp_")
+                                ctx.add_cookies([
+                                    {"name": k.strip(), "value": v.strip(),
+                                     "domain": ".meesho.com", "path": "/"}
+                                    for k, v in (part.split("=", 1) for part in _cookies.split(";") if "=" in part)
+                                    if k.strip() and not k.strip().lower().startswith(_skip)
+                                ])
+                        except Exception as exc:
+                            print(f"MEESHO: could not apply MEESHO_COOKIES ({type(exc).__name__})", flush=True)
+                    page = ctx.new_page()
+                    try:
+                        def _route(route):
                             try:
-                                page.route("**/*", _route)
+                                if route.request.resource_type in BLOCKED_RESOURCES:
+                                    route.abort()
+                                else:
+                                    route.continue_()
                             except Exception:
                                 pass
 
-                            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                            ready = False
-                            deadline = time.time() + READY_SECONDS
-                            delay = 0.3
-                            while time.time() < deadline:
-                                try:
-                                    info = page.evaluate("""() => {
-                                        const el = document.getElementById('__NEXT_DATA__');
-                                        const html = document.documentElement ? document.documentElement.outerHTML : '';
-                                        return { size: html.length, has: !!el || html.indexOf('"@type": "Product"') >= 0 };
-                                    }""") or {}
-                                except Exception:
-                                    info = {}
-                                if info.get("has"):
-                                    ready = True
-                                    break
-                                time.sleep(delay)
-                                delay = min(delay * 1.6, 2.0)
+                        try:
+                            page.route("**/*", _route)
+                        except Exception:
+                            pass
 
-                            html = page.content()
-                            low = html.lower()
-                            blocked = ("access denied" in low or "verify you are a human" in low
-                                       or (len(html) < 1200 and not ready))
-                            if blocked:
-                                blocked_pages += 1
-                                print(f"MEESHO: {cdp} block page ({len(html)}b) attempt {attempt+1}/{ATTEMPTS}",
-                                      file=sys.stderr, flush=True)
-                                continue          # new context -> new proxy IP
-                            if ready or len(html) > 20000:
-                                _cdp_ok(cdp)
-                                return html
-                            print(f"MEESHO: {cdp} no product data ({len(html)}b)", file=sys.stderr, flush=True)
-                        finally:
-                            for _obj in (page, ctx):
-                                try:
-                                    _obj.close()
-                                except Exception:
-                                    pass
-                except Exception as exc:
-                    print(f"MEESHO: {cdp} attempt {attempt+1} {type(exc).__name__}", file=sys.stderr, flush=True)
-                    continue
-            if blocked_pages >= ATTEMPTS:
-                _cdp_failed(cdp, f"{blocked_pages} block pages")
+                        page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                        try:
+                            page.evaluate("""() => {
+                                document.querySelectorAll('video').forEach(v => {
+                                    try { v.pause(); v.autoplay = false; v.removeAttribute('autoplay'); v.muted = true; } catch (e) {}
+                                });
+                            }""")
+                        except Exception:
+                            pass
+
+                        # Cheap readiness probe: no HTML serialisation per poll.
+                        ready = False
+                        deadline = time.time() + float(os.environ.get("MEESHO_READY_SECONDS", "22"))
+                        delay = 0.25
+                        while time.time() < deadline:
+                            try:
+                                info = page.evaluate("""() => {
+                                    const el = document.getElementById('__NEXT_DATA__');
+                                    const html = document.documentElement ? document.documentElement.outerHTML : '';
+                                    const has = !!el || html.indexOf('"@type\":\"Product"') >= 0
+                                                || html.indexOf('"@type": "Product"') >= 0
+                                                || html.indexOf('window.__INITIAL_STATE__') >= 0;
+                                    return { size: html.length, has };
+                                }""") or {}
+                            except Exception:
+                                info = {}
+                            size = int(info.get("size") or 0)
+                            if size > 5000 and info.get("has"):
+                                ready = True
+                                break
+                            if size > 60000:
+                                break
+                            time.sleep(delay)
+                            delay = min(delay * 1.5, 1.0)
+
+                        html = page.content()
+                        if (ready or len(html) > 20000):
+                            _cdp_ok(cdp)
+                            return html
+                        _cdp_failed(cdp, f"no product data ({len(html)} bytes)")
+                    finally:
+                        for _obj in (page, ctx):
+                            try:
+                                _obj.close()
+                            except Exception:
+                                pass
+            except Exception as exc:
+                _cdp_failed(cdp, type(exc).__name__)
+                continue
     except Exception:
         pass
     return ""
+
+def _try_google_cache(url: str) -> str:
+    """Fallback: fetch Google cached version of the page."""
+    from urllib.parse import quote
+    try:
+        import requests
+        cache_url = f"https://webcache.googleusercontent.com/search?q=cache:{quote(url, safe='')}"
+        resp = requests.get(cache_url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        })
+        if resp.status_code == 200 and len(resp.text) > 1000:
+            return resp.text
+    except Exception:
+        pass
+    return ""
+
+
+def _try_scrappey(url: str) -> str:
+    """Fetch via Scrappey API (free residential proxy + JS rendering)."""
+    if not SCRAPPLEY_API_KEY:
+        return ""
+    try:
+        import json
+        import requests
+        import time as _time
+        import random
+        target = f"https://publisher.scrappey.com/api/v1?key={SCRAPPLEY_API_KEY}"
+        for attempt in range(20):
+            resp = requests.post(
+                target,
+                timeout=60,
+                headers={"Content-Type": "application/json"},
+                json={"cmd": "request.get", "url": url},
+            )
+            if resp.status_code == 200:
+                data = json.loads(resp.text)
+                solution = data.get("solution", {})
+                html = solution.get("response", "")
+                if len(html) > 1000 and not _is_bot_page(html):
+                    return html
+            if attempt < 19:
+                _time.sleep(1 + random.random() * 2)
+    except Exception:
+        pass
+    return ""
+
+
+def _try_direct(url: str) -> str:
+    try:
+        from curl_cffi import requests as curl_requests
+        resp = curl_requests.get(url, impersonate="chrome", timeout=15)
+        if resp.status_code == 200 and not _is_bot_page(resp.text):
+            return resp.text
+    except Exception:
+        pass
+    try:
+        import requests
+        resp = requests.get(url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-IN,en;q=0.9",
+        })
+        if resp.status_code == 200 and not _is_bot_page(resp.text):
+            return resp.text
+    except Exception:
+        pass
+    return ""
+
+
+def _try_scrape_do(url: str) -> str:
+    """Fetch via scrape.do — fast residential proxy fallback."""
+    if not SCRAPE_DO_TOKEN:
+        return ""
+    try:
+        import requests
+        from urllib.parse import quote
+        target = f"http://api.scrape.do?token={SCRAPE_DO_TOKEN}&super=false&url={quote(url, safe='')}"
+        resp = requests.get(target, timeout=30)
+        if len(resp.text) > 1000:
+            return resp.text
+    except Exception:
+        pass
+    return ""
+
+
+def _try_scraperapi(url: str) -> str:
+    """Fetch via ScraperAPI — 1 credit, datacenter proxy, no JS rendering."""
+    from urllib.parse import quote
+    try:
+        import requests
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        api_key = SCRAPERAPI_KEY
+        target = f"https://api.scraperapi.com?api_key={api_key}&url={quote(url, safe='')}&country_code=in"
+        resp = requests.get(target, timeout=60, verify=False)
+        if len(resp.text) > 1000:
+            return resp.text
+    except Exception:
+        pass
+    return ""
+
+
+def _get_total_count(html: str) -> int:
+    """Extract productsCount (total products across all pages) from store page HTML."""
+    m = re.search(r'__NEXT_DATA__[^>]*>\s*({.*?})\s*</script>', html, re.DOTALL)
+    if not m:
+        return 0
+    try:
+        data = json.loads(m.group(1), strict=False)
+        init = data.get("props", {}).get("pageProps", {}).get("initialState", {})
+        # Check all listing sources, not just shopListing
+        for src in ["shopListing", "hpListing", "plpListing", "searchListing", "shopCollectionListing"]:
+            listing = init.get(src, {}).get("listing", {})
+            count = int(listing.get("productsCount", 0))
+            if count > 0:
+                return count
+        return 0
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return 0
+
+
+def extract_products(html: str, store_url: str) -> dict:
+    """Extract product list from a Meesho store/shop page HTML."""
+    products = []
+    errors = []
+
+    m = re.search(r'__NEXT_DATA__[^>]*>\s*({.*?})\s*</script>', html, re.DOTALL)
+    if not m:
+        errors.append("No __NEXT_DATA__ found in page")
+        return {"products": products, "errors": errors, "store_name": ""}
+
+    try:
+        data = json.loads(m.group(1), strict=False)
+    except json.JSONDecodeError as e:
+        errors.append(f"Failed to parse __NEXT_DATA__: {e}")
+        return {"products": products, "errors": errors, "store_name": ""}
+
+    initial = data.get("props", {}).get("pageProps", {}).get("initialState", {})
+
+    store_name = ""
+    shop_info = initial.get("shop", {})
+    if isinstance(shop_info, dict):
+        shop_info_inner = shop_info.get("shopInfo") or {}
+        shop_profile = shop_info_inner.get("shopProfile") or {}
+        profile = shop_profile.get("profile", {})
+        if isinstance(profile, dict):
+            store_name = profile.get("name", "") or ""
+
+    if not store_name:
+        m2 = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL)
+        if m2:
+            store_name = m2.group(1).strip()
+
+    product_lists = []
+
+    listing_sources = ["shopListing", "hpListing", "plpListing", "searchListing"]
+    for source in listing_sources:
+        listing = initial.get(source, {}).get("listing", {})
+        if not listing:
+            continue
+        pages = listing.get("products", [])
+        if isinstance(pages, list):
+            for page in pages:
+                if isinstance(page, dict):
+                    items = page.get("products", [])
+                    if isinstance(items, list):
+                        product_lists.extend(items)
+
+    seen_pids = set()
+    for item in product_lists:
+        slug = item.get("slug", "")
+        product_id = item.get("product_id", item.get("id", ""))
+        if not slug or not product_id:
+            continue
+        unique_key = f"{slug}:{product_id}"
+        if unique_key in seen_pids:
+            continue
+        seen_pids.add(unique_key)
+
+        name = item.get("hero_product_name") or item.get("name") or ""
+        price = item.get("min_catalog_price") or item.get("price") or 0
+        original_price = item.get("original_price") or 0
+        image = item.get("image") or ""
+
+        # Extract all product images from store listing
+        image_urls = []
+        raw_images = item.get("images") or item.get("product_images") or []
+        if isinstance(raw_images, list):
+            for img in raw_images:
+                if isinstance(img, str):
+                    image_urls.append(_full_size_image_url(img))
+                elif isinstance(img, dict) and isinstance(img.get("url"), str):
+                    image_urls.append(_full_size_image_url(img["url"]))
+        # Deduplicate
+        seen_urls = set()
+        unique_urls = []
+        for u in image_urls:
+            if u not in seen_urls:
+                seen_urls.add(u)
+                unique_urls.append(u)
+        image_urls = unique_urls
+        if image:
+            image_full = _full_size_image_url(image)
+            if image_full not in image_urls:
+                image_urls.insert(0, image_full)
+
+        description = item.get("description") or name
+        full_details = item.get("full_details") or ""
+        combined_desc = description
+        if full_details:
+            combined_desc = f"{description}\n\n{full_details}"
+        slug_clean = slug.lower().replace(" ", "-")
+        slug_clean = re.sub(r"[^a-z0-9-]", "-", slug_clean).strip("-")
+        slug_clean = re.sub(r"-+", "-", slug_clean)
+        product_url = f"https://www.meesho.com/{slug_clean}/p/{product_id}"
+
+        products.append({
+            "id": str(product_id),
+            "title": name[:500] if name else "Untitled",
+            "description": _strip_html(combined_desc)[:5000] if combined_desc else None,
+            "meta_description": None,
+            "imageUrl": image_urls[0] if image_urls else (image or None),
+            "images": image_urls[:10],
+            "hsn": None,
+            "gst": None,
+            "dimensions": None,
+            "weight": None,
+            "specifications": None,
+            "variants": None,
+            "price": f"\u20b9{price}" if price else None,
+            "mrp": f"\u20b9{original_price}" if original_price else None,
+            "url": product_url,
+            "status": "pending",
+            "error": None,
+        })
+
+    if not products:
+        errors.append("No products found in store page")
+
+    return {
+        "products": products,
+        "errors": errors,
+        "store_name": store_name,
+    }
+
+
+def scrape_product(url: str, html: str = "") -> dict:
+    """Extract full product details from a Meesho product page HTML."""
+    k = _cache_key(url)
+    with _cache_lock:
+        if k in _cache:
+            return _cache[k]
+    if not html:
+        url = _normalize_url(url)
+        html = _fetch_product_page(url)
+    if not html:
+        if _proxy_quota_exhausted():
+            return _blocked("Residential proxy quota exhausted (402) - top up Webshare or set SCRAPER_PROXY")
+        return _blocked(f"Could not fetch {url}")
+
+    m = re.search(r'__NEXT_DATA__[^>]*>\s*({.*?})\s*</script>', html, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(1), strict=False)
+        except json.JSONDecodeError:
+            return _blocked("Failed to parse __NEXT_DATA__")
+    else:
+        if _is_blocked(html):
+            return _blocked("Meesho blocked the request")
+        m2 = re.search(r'<script[^>]*__NEXT_DATA__[^>]*>(.*?)</script>', html, re.DOTALL)
+        if m2:
+            try:
+                data = json.loads(m2.group(1), strict=False)
+            except json.JSONDecodeError:
+                return _blocked("Failed to parse __NEXT_DATA__ (alt)")
+        else:
+            return _blocked("No __NEXT_DATA__ found on product page")
+
+    initial = data.get("props", {}).get("pageProps", {}).get("initialState", {})
+    product_data = initial.get("product", {}).get("details", {}).get("data", {})
+
+    if not product_data or not product_data.get("name"):
+        return _fallback_scrape(html, url)
+
+    # If product has no price and no images, it's likely a dead/recycled ID — fall back to HTML parsing
+    price_raw = product_data.get("price") or 0
+    has_images = bool(product_data.get("images"))
+    if not price_raw and not has_images:
+        return _fallback_scrape(html, url)
+
+    name = product_data.get("name", "")
+    description = product_data.get("description", "")
+    price = product_data.get("price", 0)
+    # MRP lives in mrp_details.mrp - the figure behind the "price details" (i)
+    # tooltip. original_price is NOT always published, which is why most Meesho
+    # rows exported with a blank Mrp Price.
+    mrp_details = product_data.get("mrp_details") or {}
+    original_price = (
+        (mrp_details.get("mrp") if isinstance(mrp_details, dict) else None)
+        or product_data.get("original_price")
+        or 0
+    )
+    discount = product_data.get("discount", 0)
+    product_id = product_data.get("product_id", "")
+    images = product_data.get("images", [])
+    image_urls = _extract_images_from_data(images)
+
+    canonical_url = product_data.get("meta_info", {}).get("canonical_url", "") or url
+
+    specs = {}
+    product_details = product_data.get("product_details", {})
+    highlights = product_details.get("product_highlights", {}).get("attributes", [])
+    if isinstance(highlights, list):
+        for attr in highlights:
+            k = attr.get("field_name", "")
+            v = attr.get("value", "")
+            if k and v:
+                specs[k] = v
+
+    additional = product_details.get("additional_details", {}).get("attributes", [])
+    if isinstance(additional, list):
+        for attr in additional:
+            k = attr.get("field_name", "")
+            v = attr.get("value", "")
+            if k and v:
+                specs[k] = v
+
+    variations = product_data.get("variations", [])
+    variants_str = ", ".join(str(v) for v in variations) if isinstance(variations, list) and variations else None
+
+    # Category breadcrumb (e.g. "Unisex Personal Care > Face Care > Face Wash").
+    # Populated on the canonical /<slug>/p/<id> URL; the short /s/p/<id> form
+    # returns an empty list, so we prefer the pretty URL upstream.
+    #
+    # Meesho also leaves `breadcrumb` EMPTY for a sizeable share of products (no
+    # parent chain anywhere in the payload). The catalog object is still present
+    # though, so fall back to the category NAME it carries — enough for the
+    # curated map / coarse matcher to place the product.
+    source_category_path = None
+    source_catalog_name = None
+    bc = product_data.get("breadcrumb")
+    if isinstance(bc, list):
+        titles = [
+            _clean(str(b.get("title") or ""))
+            for b in bc
+            if isinstance(b, dict)
+        ]
+        titles = [t for t in titles if t]
+        if titles:
+            source_category_path = " > ".join(titles)
+    catalog = product_data.get("catalog") or {}
+    if isinstance(catalog, dict):
+        source_catalog_name = _clean(str(catalog.get("name") or "")) or None
+        if not source_category_path:
+            sub = _clean(str(catalog.get("sub_sub_category_name") or ""))
+            if not sub:
+                sub = source_catalog_name or ""
+            if sub:
+                source_category_path = sub
+
+    hsn_val = None
+    gst_val = None
+    dims_val = None
+    weight_val = None
+    for k, v in specs.items():
+        kl = k.lower()
+        if "hsn" in kl:
+            hsn_val = v
+        if "gst" in kl:
+            gst_val = v
+        if "weight" in kl:
+            weight_val = v
+        if "dimension" in kl or kl in ("size", "product dimensions"):
+            dims_val = v
+
+    result = {
+        "status": "success",
+        "id": str(product_id) if product_id else None,
+        "title": _clean(name[:500]) if name else "Untitled",
+        "description": _strip_html(description)[:5000] if description else None,
+        "meta_description": None,
+        "imageUrl": image_urls[0] if image_urls else None,
+        "images": image_urls[:10],
+        "hsn": hsn_val,
+        "gst": gst_val,
+        "dimensions": dims_val,
+        "weight": weight_val,
+        "specifications": specs if specs else None,
+        "variants": variants_str,
+        "source_category_path": source_category_path,
+        "source_catalog_name": source_catalog_name,
+        "price": f"\u20b9{price}" if price else None,
+        # Meesho's list price. The template's "Mrp Price *" is mandatory and the
+        # exporter used to hardcode it empty ("no source") - the PDP payload has
+        # carried original_price all along, it just was not surfaced.
+        "mrp": f"\u20b9{original_price}" if original_price else None,
+        "url": canonical_url,
+        "error": None,
+    }
+    with _cache_lock:
+        _cache[_cache_key(url)] = result
+    _save_cache()
+    return result
 
 
 def _fallback_scrape(html: str, url: str) -> dict:
