@@ -36,6 +36,32 @@ CACHE_FILE = os.path.join(os.path.dirname(__file__), ".product_cache.json")
 # code that no longer exists (this hid the source_category_path fix completely).
 # v5: products cached before mrp_details.mrp was read carry mrp=None, and a
 # re-scrape would serve those stale entries instead of the real MRP.
+def _load_dotenv() -> None:
+    """Read .env for any key the process env lacks.
+
+    The scraper runs under several launchers (API restart scripts, the watchdog,
+    a manual start). Only some of them call Import-DotEnv, so MEESHO_COOKIES /
+    SCRAPER_PROXY disappeared whenever the gateway was restarted another way -
+    which silently turned a logged-in session back into "blocked".
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception:
+        pass
+
+
+_load_dotenv()
+
 CACHE_VERSION = "v5-mrp"
 _cache = {}  # url_hash -> product dict
 # The local scraper server is a ThreadingHTTPServer: several product scrapes run
