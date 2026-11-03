@@ -217,8 +217,8 @@ CDP_CONNECT_TIMEOUT_MS = int(os.environ.get("MEESHO_CDP_CONNECT_TIMEOUT_MS", "80
 # a row demote it for ten minutes, so a whole job pays that cost once instead of
 # once per product.
 _CDP_STATE: dict = {}
-_CDP_FAIL_LIMIT = 2
-_CDP_COOLDOWN_SECONDS = int(os.environ.get("MEESHO_CDP_COOLDOWN_SECONDS", "120"))
+_CDP_FAIL_LIMIT = 5
+_CDP_COOLDOWN_SECONDS = int(os.environ.get("MEESHO_CDP_COOLDOWN_SECONDS", "60"))
 
 
 def _cdp_candidates() -> list:
@@ -319,20 +319,10 @@ def _try_playwright(url: str) -> str:
                             print(f"MEESHO: could not apply MEESHO_COOKIES ({type(exc).__name__})", flush=True)
                     page = ctx.new_page()
                     try:
-                        def _route(route):
-                            try:
-                                if route.request.resource_type in BLOCKED_RESOURCES:
-                                    route.abort()
-                                else:
-                                    route.continue_()
-                            except Exception:
-                                pass
-
-                        try:
-                            page.route("**/*", _route)
-                        except Exception:
-                            pass
-
+                        # No resource blocking: aborting images/css makes Akamai
+                        # answer 403 on a share of the rotating IPs and makes
+                        # page.content() fail mid-navigation. A full PDP load is
+                        # only ~120-215 KB.
                         page.goto(url, wait_until="domcontentloaded", timeout=25000)
                         try:
                             page.evaluate("""() => {
