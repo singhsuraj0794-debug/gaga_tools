@@ -124,6 +124,9 @@ export default function PreListingValidator() {
   const _rowsPreDup = useRef<ListingRow[] | null>(null);
   const _resultsPreDup = useRef<ValidationResult[] | null>(null);
   const [useQwen, setUseQwen] = useState(true);
+  // Polish titles with the local Qwen agent (llama-server :8082) after the
+  // rule-based correction. Guarded server-side, so a bad rewrite is dropped.
+  const [useLlm, setUseLlm] = useState(false);
   const [skipHsn, setSkipHsn] = useState(true);
   const [skipTextCorrection, setSkipTextCorrection] = useState(false);
   const [crossSellerDuplicates, setCrossSellerDuplicates] = useState(false);
@@ -1042,7 +1045,7 @@ export default function PreListingValidator() {
     try {
       const _txtBase = getPrelistingApiBase();
       pushLog("BATCH", 0, `[TXT] API base: ${_txtBase}`);
-      pushLog("BATCH", 0, `[TXT] Calling API for ${correctProducts.length} products (batched, size ${useQwen ? 2 : 10}, Qwen ${useQwen ? "ON" : "off"})...`);
+      pushLog("BATCH", 0, `[TXT] Calling API for ${correctProducts.length} products (batched, size ${useQwen ? 2 : 10}, Qwen ${useQwen ? "ON" : "off"}${useLlm ? ", local agent polishing ON" : ""})...`);
       let _failCount = 0;
       const result = await runTextCorrectionBatched(correctProducts, "", useQwen, (bi, tb) => {
         pushLog("BATCH", 0, `[TXT] Batch ${bi}/${tb}...`);
@@ -1051,7 +1054,7 @@ export default function PreListingValidator() {
       }, useQwen ? 2 : 20, (bi, tb, err) => {
         _failCount++;
         pushLog("BATCH", 0, `[TXT] ⚠️ Batch ${bi}/${tb} FAILED — ${err instanceof Error ? err.message : String(err)}`);
-      }, () => cancelValidation.current);
+      }, () => cancelValidation.current, useLlm);
       pushLog("BATCH", 0, `[TXT] API returned ${result.results.length}/${correctProducts.length} results${_failCount > 0 ? ` (${_failCount} batch(es) failed)` : ""}`);
 
       const corrMap = new Map(result.results.map((cr) => [cr.sku, { title: cr.title, description: cr.description, log: cr.log }]));
@@ -2265,6 +2268,15 @@ export default function PreListingValidator() {
                         className="w-3.5 h-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
                       />
                       Use Qwen VLM
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none" title="Rewrite titles with the local Qwen 14B agent (Windows, :8082): Title Case, promo words removed, brand and model codes preserved. Guarded server-side.">
+                      <input
+                        type="checkbox"
+                        checked={useLlm}
+                        onChange={(e) => setUseLlm(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      Polish titles (local agent)
                     </label>
                     <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none" title="Skip HSN code suggestion step entirely">
                       <input

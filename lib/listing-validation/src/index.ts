@@ -602,12 +602,13 @@ export async function runTextCorrection(
   products: CorrectTextProduct[],
   apiBase: string = "",
   useQwen: boolean = false,
+  useLlm: boolean = false,
 ): Promise<CorrectTextResult> {
   const baseUrl = apiBase || getPrelistingApiBase();
   const resp = await fetch(`${baseUrl}/api/products/correct-text`, withApiHeaders({
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ products, useQwen }),
+    body: JSON.stringify({ products, useQwen, useLlm }),
   }));
   if (!resp.ok) {
     throw new Error(`Text correction failed: ${resp.status} ${resp.statusText}`);
@@ -674,10 +675,11 @@ export async function runTextCorrectionBatched(
   batchSize: number = BATCH_SIZE,
   onFail?: (batchIdx: number, totalBatches: number, err: unknown) => void,
   shouldStop?: () => boolean,
+  useLlm: boolean = false,
 ): Promise<CorrectTextResult> {
   return batchCall(
     products,
-    (batch) => runTextCorrection(batch, apiBase, useQwen),
+    (batch) => runTextCorrection(batch, apiBase, useQwen, useLlm),
     (outputs) => ({
       results: outputs.flatMap((o) => o.results),
     }),

@@ -1331,7 +1331,7 @@ async function tryAnalysisServer(path: "hsn-suggest" | "correct-text" | "categor
 
 router.post("/products/correct-text", async (req, res): Promise<void> => {
   try {
-    const { products, useQwen } = req.body as {
+    const { products, useQwen, useLlm } = req.body as {
       products: {
         sku: string;
         title: string;
@@ -1342,6 +1342,7 @@ router.post("/products/correct-text", async (req, res): Promise<void> => {
         images?: string[];
       }[];
       useQwen?: boolean;
+      useLlm?: boolean;
     };
 
     if (!Array.isArray(products) || products.length === 0) {
@@ -1351,9 +1352,9 @@ router.post("/products/correct-text", async (req, res): Promise<void> => {
 
     // Prefer the persistent analysis server so Qwen/CLIP stay resident and the
     // request fits the tunnel's ~100s limit. Fall back to the one-shot CLI.
-    const serverResult = await tryAnalysisServer("correct-text", { products, useQwen: useQwen || false });
+    const serverResult = await tryAnalysisServer("correct-text", { products, useQwen: useQwen || false, useLlm: useLlm || false });
     if (serverResult) {
-      req.log.info({ count: products.length, mode: "server", useQwen: useQwen || false }, "Text correction (persistent server)");
+      req.log.info({ count: products.length, mode: "server", useQwen: useQwen || false, useLlm: useLlm || false }, "Text correction (persistent server)");
       res.json(serverResult);
       return;
     }
@@ -1361,9 +1362,9 @@ router.post("/products/correct-text", async (req, res): Promise<void> => {
     const scriptPath = resolveScript("_correct_text.py");
     const { writeFile, unlink } = await import("node:fs/promises");
     const inputPath = tmpPath(`correct_text_input_${Date.now()}.json`);
-    await writeFile(inputPath, JSON.stringify({ products, useQwen: useQwen || false, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
+    await writeFile(inputPath, JSON.stringify({ products, useQwen: useQwen || false, useLlm: useLlm || false, imgbKey: process.env.IMGBB_API_KEY || "92789523467a2cc743f1c0f143322dbc" }));
 
-    req.log.info({ count: products.length, useQwen: useQwen || false }, "Running text correction (one-shot)");
+    req.log.info({ count: products.length, useQwen: useQwen || false, useLlm: useLlm || false }, "Running text correction (one-shot)");
 
     const { stdout } = await execFileAsync(pythonBin(), [scriptPath, inputPath], {
       maxBuffer: 10 * 1024 * 1024,

@@ -28,6 +28,7 @@ def main() -> None:
 
     products = data.get("products", [])
     use_qwen = data.get("useQwen", False)
+    use_llm = data.get("useLlm", False)
     if not products:
         print(json.dumps({"results": []}))
         return
@@ -52,6 +53,27 @@ def main() -> None:
                 "description": corrected.get("description"),
                 "log": corrected.get("log", []),
             })
+        if use_llm and results:
+            try:
+                from _text_agent import polish_titles
+                by_sku = {str(r.get("sku") or ""): r for r in results}
+                items = [{"sku": r.get("sku", ""),
+                          "title": r.get("title") or "",
+                          "brand": ""} for r in results]
+                # fall back to the original title when the rule engine produced none
+                src_by_sku = {str(p.get("sku") or ""): p for p in products}
+                for it in items:
+                    if not it["title"]:
+                        it["title"] = src_by_sku.get(it["sku"], {}).get("title", "")
+                    if not it["brand"]:
+                        it["brand"] = src_by_sku.get(it["sku"], {}).get("brand", "")
+                for sku, new_title in polish_titles(items).items():
+                    r = by_sku.get(sku)
+                    if r:
+                        r.setdefault("log", []).append(f"[TEXT-AGENT] polished title: {new_title}")
+                        r["title"] = new_title
+            except Exception as exc:  # noqa: BLE001
+                print(f"[TEXT-AGENT] skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
         out = json.dumps({"results": results})
     except Exception as e:
         traceback.print_exc(file=sys.stderr)

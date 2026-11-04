@@ -77,7 +77,7 @@ def _ensure_models(use_qwen: bool = False):
     _models_ready = True
 
 
-def _run_correct_text(products, use_qwen):
+def _run_correct_text(products, use_qwen, use_llm=False):
     from _hsn_suggest import correct_product_text
 
     def _one(p):
@@ -110,6 +110,37 @@ def _run_correct_text(products, use_qwen):
             results = list(pool.map(_one, products))
     else:
         results = [_one(p) for p in products]
+
+    # Optional: polish the (rule-corrected or original) titles with the local
+    # Qwen agent. Guarded inside _text_agent, so a bad rewrite is dropped.
+    if use_llm and results:
+        try:
+            from _text_agent import polish_titles
+            items = []
+            by_sku = {}
+            for r in results:
+                sku = str(r.get("sku") or "")
+                src = next((p for p in products if str(p.get("sku") or "") == sku), {})
+                # Polish the rule output only when it still carries the brand;
+                # otherwise start from the original title so the brand is not lost.
+                brand = str(src.get("brand") or "")
+                rule_title = str(r.get("title") or "")
+                orig_title = str(src.get("title") or "")
+                title_in = rule_title if (brand and brand.lower() in rule_title.lower()) else (orig_title or rule_title)
+                items.append({"sku": sku, "title": title_in, "brand": brand})
+                by_sku[sku] = r
+            polished = polish_titles(items)
+            for sku, new_title in polished.items():
+                r = by_sku.get(sku)
+                if not r:
+                    continue
+                r.setdefault("log", []).append(f"[TEXT-AGENT] polished title: {new_title}")
+                r["title"] = new_title
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TEXT-AGENT] skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
+            for r in results:
+                r.setdefault("log", []).append(f"[TEXT-AGENT] unavailable: {type(exc).__name__}")
+
     return {"results": results}
 
 
@@ -269,8 +300,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/correct-text":
                 products = data.get("products", [])
                 use_qwen = data.get("useQwen", False)
+                use_llm = data.get("useLlm", False)
                 _ensure_models(use_qwen=bool(use_qwen))
-                result = _run_correct_text(products, use_qwen)
+                result = _run_correct_text(products, use_qwen, use_llm)
             elif self.path == "/category-validate/job":
                 products = data.get("products", [])
                 job_id = _cat_start_job(products)
