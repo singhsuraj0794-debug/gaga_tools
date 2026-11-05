@@ -6,6 +6,18 @@
 . "$PSScriptRoot\windows-common.ps1"
 Import-DotEnv
 
+# The watchdog may call this while old scraper processes are still bound to
+# :9000 (SO_REUSEADDR allows duplicates). Keep only the newest instance.
+$existingScrapers = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*local_scraper_server.py*' })
+if ($existingScrapers.Count -gt 1) {
+    Write-Host "Found $($existingScrapers.Count) scraper servers - keeping the newest"
+    $keep = ($existingScrapers | Sort-Object CreationDate -Descending | Select-Object -First 1).ProcessId
+    $existingScrapers | Where-Object { $_.ProcessId -ne $keep } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+}
+
 if (Test-PortOpen $ScraperPort) {
     Write-Host "Scraper server already running on $ScraperPort"
 } else {
