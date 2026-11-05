@@ -1090,9 +1090,13 @@ def _run_ocr_parallel(image_urls: List[str], only_first: bool = True) -> List[di
             except Exception as e:
                 results[url] = {"url": url, "flagged": None, "error": str(e)}
     out = []
-    for url in image_urls:
-        out.append(results.get(url, {"url": url, "flagged": False, "ocrText": "", "claims": [],
-                                     "skipped": "only the primary image is checked"}))
+    for i, url in enumerate(image_urls):
+        if i == 0:
+            out.append(results.get(url, {"url": url, "flagged": False, "ocrText": "", "claims": []}))
+        else:
+            # Position, not URL: a repeated image must not inherit the hero result.
+            out.append({"url": url, "flagged": False, "ocrText": "", "claims": [],
+                        "skipped": "only the primary image is checked"})
     return out
 
 
