@@ -978,7 +978,9 @@ def check_ops_on_image(image_url: str) -> dict:
         # strip ALL non-alphanumerics so those collapse near "BESTSELLER".
         compact = re.sub(r"[^A-Z0-9]+", "", norm)
         short_claim_patterns = [
-            (r"\bFREE\s*(SHIPPING|DELIVERY|RETURN|RETURNS|REPLACEMENT|EXCHANGE|GIFT)\b", "free shipping/delivery/return claim"),
+            # GIFT deliberately excluded: "FREE CERAMIC CUP STAND WITH EVERY PACK"
+            # is a bundle offer printed on the pack, not an ops claim.
+            (r"\bFREE\s*(SHIPPING|DELIVERY|RETURN|RETURNS|REPLACEMENT|EXCHANGE)\b", "free shipping/delivery/return claim"),
             (r"\b(COD|CASH ON DELIVERY)\b", "COD available claim"),
             (r"\b(?:100%|FULL|MONEY[- ]BACK)\s*GUARANTEE\b", "money-back guarantee claim"),
             (r"\b(?:NO[- ]COST|0%)?\s*EMI\b", "EMI/installment claim"),
@@ -1006,7 +1008,7 @@ def check_ops_on_image(image_url: str) -> dict:
         ]
         # Loose variants tolerant of OCR noise.
         short_claim_patterns += [
-            (r"\bFRE?E\s*(SHIPPING|SHIP|DELIVERY|RETURN|REPLACEMENT|EXCHANGE|GIFT)\b", "free shipping/delivery/return claim"),
+            (r"\bFRE?E\s*(SHIPPING|SHIP|DELIVERY|RETURN|REPLACEMENT|EXCHANGE)\b", "free shipping/delivery/return claim"),
             (r"\bC\s*[O0]\s*D\b", "COD available claim"),
             (r"\b\d{1,3}\s*%\s*[O0]FF\b", "discount/off claim"),
             (r"\bB[E3]ST\s*PRIC[E3]\b", "best price claim"),
@@ -1052,18 +1054,16 @@ def check_ops_on_image(image_url: str) -> dict:
                 "claimTexts": list(dict.fromkeys(claim_texts)),
             }
 
-        # Semantic pipeline for longer OCR text. OCR lines are short standalone
-        # blocks, not sentences — keep min_len small and lower the min_text_len
-        # so short blocks like "Free Shipping COD Available" are still analyzed.
-        # OCR text is noisy, so use a lower semantic threshold than titles.
-        claims = detect_op_claims(text, min_len=6, min_text_len=6, threshold_override=0.60)
-
+        # Deliberately NO semantic/embedding pass on image OCR text. Marketplace
+        # box/leaflet photos OCR into noise ("Trr Lel", "LOBBAN", "OlTl(o)") and
+        # the embedding model scored that noise as an operations claim, which is
+        # what flagged plain packaging. The regex list above is high precision and
+        # covers the real overlays (FREE DELIVERY, 50% OFF, COD, EMI, warranty...).
         return {
             "url": image_url,
-            "flagged": len(claims) > 0,
+            "flagged": False,
             "ocrText": text,
-            "claims": claims,
-            "claimTexts": claims,
+            "claims": [],
         }
     except Exception as e:
         return {"url": image_url, "flagged": None, "error": str(e)}
