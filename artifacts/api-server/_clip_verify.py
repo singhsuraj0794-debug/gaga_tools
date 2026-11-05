@@ -952,6 +952,22 @@ def check_ops_on_image(image_url: str) -> dict:
         # "50% OFF"). These are too short for the embedding pipeline to catch.
         claims: list = []
         low = (text or "").upper()
+
+        # A printed label is not a marketing overlay. If the OCR text reads like
+        # packaging (MRP / Net Qty / Best Before / Mfg / batch ...) and carries no
+        # strong promo wording, stop here instead of flagging the listing.
+        _PACKAGING = re.compile(
+            r"\b(MRP|NET\s*(QTY|QUANTITY|WEIGHT|CONTENT)|BEST\s*BEFORE|MFG|MFD|"
+            r"MANUFACTURED|COUNTRY\s*OF\s*ORIGIN|BATCH|EXP(IRY)?|INGREDIENTS?|"
+            r"NUTRITION|STORAGE|MARKETED\s*BY|CUSTOMER\s*CARE|TOLL\s*FREE)\b",
+            re.I)
+        _STRONG_PROMO = re.compile(
+            r"\b(FREE\s*(SHIPPING|DELIVERY|RETURN|GIFT)|CASH\s*ON\s*DELIVERY|COD\b|"
+            r"\d{1,3}\s*%\s*OFF|MEGA\s*SALE|FLASH\s*SALE|LIMITED\s*TIME|"
+            r"BUY\s*\d+\s*GET\s*\d+|EMI\b|BEST\s*SELLER|HURRY)\b", re.I)
+        if _PACKAGING.search(text) and not _STRONG_PROMO.search(text):
+            return {"url": image_url, "flagged": False, "ocrText": text, "claims": [],
+                    "note": "packaging label text (MRP/batch/origin) - not a promo claim"}
         # OCR is noisy on low-res marketplace images ("Weter", "REPEATEO",
         # "M@@IG"). Normalise common confusions and match patterns against BOTH
         # the raw and the normalised text.
@@ -966,7 +982,6 @@ def check_ops_on_image(image_url: str) -> dict:
             (r"\b(COD|CASH ON DELIVERY)\b", "COD available claim"),
             (r"\b(?:100%|FULL|MONEY[- ]BACK)\s*GUARANTEE\b", "money-back guarantee claim"),
             (r"\b(?:NO[- ]COST|0%)?\s*EMI\b", "EMI/installment claim"),
-            (r"\bSALE\b", "sale claim"),
             (r"\b(?:FLAT\s*)?\d{1,3}\s*%[- ]?OFF\b", "discount/off claim"),
             (r"\bBEST\s*PRICE\b", "best price claim"),
             (r"\bLOWEST\s*PRICE\b", "lowest price claim"),
@@ -974,7 +989,9 @@ def check_ops_on_image(image_url: str) -> dict:
             (r"\bPAY\s*LATER\b", "pay later claim"),
             (r"\b(?:FREE|FAST|EXPRESS|NEXT[- ]DAY)\s*(?:DELIVERY|SHIPPING|DISPATCH)\b", "delivery claim"),
             (r"\bHASSLE[- ]?FREE\s*(?:RETURN|RETURNS|RETURN POLICY)\b", "hassle-free return claim"),
-            (r"\bWARRANTY\b", "warranty claim"),
+            # A printed "1 year warranty" is a product spec; only promotional
+            # warranty wording counts.
+            (r"\b(FREE|LIFETIME|EXTENDED|LIFETIME[- ]FREE)\s*WARRANTY\b", "warranty claim"),
             (r"\b(?:LIFETIME|NUMBER\s*1|#1|WORLD'?S\s*BEST)\b", "quality claim"),
             (r"\bBEST[\s-]*SELL(?:ER|ING)\b", "best seller claim"),
             (r"\bTOP[\s-]*(?:SELL(?:ER|ING)|RATED)\b", "top rated/seller claim"),
@@ -994,7 +1011,6 @@ def check_ops_on_image(image_url: str) -> dict:
             (r"\b\d{1,3}\s*%\s*[O0]FF\b", "discount/off claim"),
             (r"\bB[E3]ST\s*PRIC[E3]\b", "best price claim"),
             (r"\bL[O0]W[E3]ST\s*PRIC[E3]\b", "lowest price claim"),
-            (r"\bS[AB]L[E3]\b", "sale claim"),
             (r"\bBUY\s*N[O0]W\b", "buy now claim"),
             (r"\bWARRANT[YV]\b", "warranty claim"),
         ]
@@ -1053,22 +1069,31 @@ def check_ops_on_image(image_url: str) -> dict:
         return {"url": image_url, "flagged": None, "error": str(e)}
 
 
-def _run_ocr_parallel(image_urls: List[str]) -> List[dict]:
-    """Run OCR claim detection over multiple image URLs using a thread pool.
-    EasyOCR releases the GIL during inference, so threads give near-parallel
-    speedup; the reader is loaded once (guarded by a lock) to avoid duplicate
-    model loads."""
+def _run_ocr_parallel(image_urls: List[str], only_first: bool = True) -> List[dict]:
+    """Run OCR claim detection on the PRIMARY image only.
+
+    Catalogue images 2..10 are detail/packaging shots. A printed box legitimately
+    carries "1 Year Warranty", "MRP", "Net Qty" etc., which the promo-claim rules
+    read as operations claims - that is why packaging-only listings were flagged.
+    Only image 1 (the hero image) is checked now; the rest are reported as not
+    flagged so the response shape is unchanged.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    targets = image_urls[:1] if only_first else list(image_urls)
     results: Dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(4, len(image_urls))) as pool:
-        futures = {pool.submit(check_ops_on_image, url): url for url in image_urls}
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(targets)))) as pool:
+        futures = {pool.submit(check_ops_on_image, url): url for url in targets}
         for fut in as_completed(futures):
             url = futures[fut]
             try:
                 results[url] = fut.result()
             except Exception as e:
                 results[url] = {"url": url, "flagged": None, "error": str(e)}
-    return [results[url] for url in image_urls]
+    out = []
+    for url in image_urls:
+        out.append(results.get(url, {"url": url, "flagged": False, "ocrText": "", "claims": [],
+                                     "skipped": "only the primary image is checked"}))
+    return out
 
 
 def check_rule1(image_urls: List[str]) -> dict:

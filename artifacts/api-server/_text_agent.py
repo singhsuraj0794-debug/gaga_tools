@@ -121,13 +121,41 @@ def _chat(messages: list[dict], max_tokens: int = 320) -> str:
     return data["choices"][0]["message"]["content"]
 
 
+def needs_polish(title: str) -> bool:
+    """Only send titles that actually need a rewrite.
+
+    The 14B agent generates at ~6-8 tok/s, so polishing every row of a 500-row
+    sheet costs minutes. Most titles are already fine; skip them and the agent
+    only sees the ones with ALL CAPS, promo wording, doubled spaces or extreme
+    length.
+    """
+    t = str(title or "").strip()
+    if len(t) < 8:
+        return False
+    if len(t) > 110:
+        return True
+    if "  " in t:
+        return True
+    if re.search(r"\s[,;:]|[!]{2,}|\*", t):
+        return True
+    letters = [c for c in t if c.isalpha()]
+    if letters:
+        upper = sum(1 for c in letters if c.isupper()) / len(letters)
+        if upper > 0.7 and len(letters) > 12:
+            return True
+    if _BANNED.search(t):
+        return True
+    return False
+
+
 def polish_titles(items: list[dict], batch: int | None = None) -> dict:
     """Return {sku: cleaned_title} for the titles that passed the guards."""
     batch = max(1, int(batch or BATCH))
     out: dict[str, str] = {}
     started = time.time()
     for start in range(0, len(items), batch):
-        chunk = [x for x in items[start:start + batch] if str(x.get("title") or "").strip()]
+        chunk = [x for x in items[start:start + batch]
+                 if str(x.get("title") or "").strip() and needs_polish(x.get("title"))]
         if not chunk:
             continue
         numbered = "\n".join(
@@ -149,7 +177,8 @@ def polish_titles(items: list[dict], batch: int | None = None) -> dict:
             original = str(item.get("title") or "").strip()
             if _accept(original, cand, str(item.get("brand") or "")):
                 out[str(item.get("sku") or "")] = cand
-    print(f"[TEXT-AGENT] polished {len(out)}/{len(items)} in {time.time() - started:.1f}s", file=sys.stderr)
+    print(f"[TEXT-AGENT] polished {len(out)}/{len(items)} in {time.time() - started:.1f}s "
+          f"(only titles that needed it were sent)", file=sys.stderr)
     return out
 
 
