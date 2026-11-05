@@ -37,12 +37,28 @@ if (Test-PortOpen $PgPort) {
 
 Stage "db: postgrest check"
 # --- PostgREST ---
+# SO_REUSEADDR lets several PostgREST instances bind :3000; when they stack up,
+# requests randomly hit wedged instances and the API reports "PostgREST
+# unreachable". Keep only the newest process before checking the port.
+$pgrest = @(Get-Process postgrest -ErrorAction SilentlyContinue)
+if ($pgrest.Count -gt 1) {
+    Write-Host "[db] $($pgrest.Count) PostgREST instances found - keeping the newest"
+    $keep = ($pgrest | Sort-Object StartTime -Descending | Select-Object -First 1).Id
+    $pgrest | Where-Object { $_.Id -ne $keep } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+}
 if (Test-PortOpen $PostgrestPort) {
     Write-Host "[db] PostgREST already listening on $PostgrestPort"
 } else {
     if (-not (Test-Path $CONF)) {
         Write-Warning "[db] $CONF missing - run the db bootstrap first"
         return
+    }
+    # Port closed: any leftover postgrest process is stale - clear it first.
+    $stale = @(Get-Process postgrest -ErrorAction SilentlyContinue)
+    if ($stale.Count -gt 0) {
+        $stale | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
     }
     Write-Host "[db] starting PostgREST on $PostgrestPort"
     # postgrest.exe links libpq/OpenSSL from the Postgres bin dir, and the DLLs

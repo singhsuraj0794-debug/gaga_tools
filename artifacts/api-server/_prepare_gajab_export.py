@@ -406,7 +406,17 @@ def prepare(products: list[dict], rulings: dict | None = None,
                 _kw = _match_target(p.get("title") or "")
             except Exception:
                 _kw = None
-            if _kw and (not ruling or _kw[1] != ruling.get("path")):
+            # Some sources ship a reliable category (e.g. indiahandmade's own leaf
+            # category); for those the curated category mapping must win over a
+            # title keyword ("Double Bed Sheet" is NOT a Bed). Opt out per platform.
+            _kw_disabled = {
+                x.strip().lower()
+                for x in os.environ.get("TITLE_KEYWORD_DISABLED_PLATFORMS", "").split(",")
+                if x.strip()
+            }
+            if _kw and platform.lower() not in _kw_disabled and (
+                not ruling or _kw[1] != ruling.get("path")
+            ):
                 ruling = {"path": _kw[1], "confidence": 0.95, "method": "title-keyword"}
 
             node = None

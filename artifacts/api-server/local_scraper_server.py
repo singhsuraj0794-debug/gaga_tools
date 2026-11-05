@@ -25,6 +25,17 @@ import _amazon_scraper as amazon_scraper
 import _meesho_scraper as meesho_scraper
 import _platform_searcher
 
+# Single-instance guard. The watchdog can call the starter while an old process
+# is still bound to :9000 (SO_REUSEADDR lets duplicates stack up); a named mutex
+# makes a second instance exit immediately.
+if os.name == "nt":
+    import ctypes
+    _instance_mutex = ctypes.windll.kernel32.CreateMutexW(
+        None, False, "Global\\GajabLocalScraperServer")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        print("local_scraper_server is already running; exiting.", flush=True)
+        sys.exit(0)
+
 
 def _sweep_leaked_tabs():
     """Close browser tabs abandoned by earlier runs.
@@ -223,7 +234,24 @@ class ScraperHandler(BaseHTTPRequestHandler):
         headers = {"Content-Type": self.headers.get("Content-Type", "application/json")}
         req = urllib.request.Request(target, data=body, method=self.command, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=1800) as resp:
+            resp = None
+            last_err = None
+            for _attempt in range(4):
+                try:
+                    resp = urllib.request.urlopen(req, timeout=1800)
+                    break
+                except urllib.error.HTTPError:
+                    raise
+                except Exception as _e:
+                    last_err = _e
+                    if getattr(_e, "winerror", None) == 10048 and _attempt < 3:
+                        import time as _time
+                        _time.sleep(0.3 * (_attempt + 1))
+                        continue
+                    raise
+            if resp is None:
+                raise last_err
+            with resp:
                 payload = resp.read()
                 self.send_response(resp.status)
                 self.send_header("Content-Type", resp.headers.get("Content-Type", "application/json"))
