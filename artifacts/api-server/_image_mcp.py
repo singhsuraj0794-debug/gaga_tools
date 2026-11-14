@@ -22,7 +22,8 @@ import urllib.request
 
 MCP_URL = os.environ.get(
     "IMAGE_MCP_URL",
-    "https://cow-engineering-shoe-pix.trycloudflare.com/xpMtZXQ91CScRrXu60i6eOnbkrHR5i2SkYKliSaDpPk",
+    # Permanent Tailscale Funnel endpoint (a quick tunnel kept changing/530ing).
+    "https://desktop-deghg21.tailff34af.ts.net/xpMtZXQ91CScRrXu60i6eOnbkrHR5i2SkYKliSaDpPk",
 )
 _TIMEOUT = int(os.environ.get("IMAGE_MCP_TIMEOUT", "600"))
 _session: str | None = None
@@ -82,7 +83,7 @@ def gpu_status() -> str:
         return ""
 
 
-def _retry_connect(attempts: int = 3, delay: float = 20.0) -> bool:
+def _retry_connect(attempts: int = 7, delay: float = 20.0) -> bool:
     import time as _t
     for i in range(attempts):
         if connect():
