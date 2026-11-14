@@ -2,7 +2,7 @@ import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  Video,
+  Image as ImageIcon,
   TrendingUp,
   ShoppingBag,
   ShoppingCart,
@@ -22,11 +22,11 @@ import ProductSync from "@/components/ProductSync";
 export default function Home() {
   const sections = [
     {
-      title: "Product Video Finder",
-      description: "Find and download product videos from various platforms",
-      icon: <Video className="h-10 w-10 text-blue-600" />,
-      path: "/video-finder",
-      color: "bg-blue-50 hover:bg-blue-100 border-blue-200",
+      title: "Image Verification",
+      description: "Remove ops claims (best seller, free delivery…) from product images and relink them",
+      icon: <ImageIcon className="h-10 w-10 text-cyan-600" />,
+      path: "/image-verification",
+      color: "bg-cyan-50 hover:bg-cyan-100 border-cyan-200",
     },
     {
       title: "Hook Analyzer",

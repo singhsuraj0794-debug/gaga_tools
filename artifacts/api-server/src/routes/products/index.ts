@@ -6,10 +6,11 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { logger } from "../../lib/logger";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, renameSync } from "node:fs";
 import { getSupabase } from "../../lib/supabase";
 import { tmpPath } from "../../lib/tmp";
 import { pythonBin } from "../../lib/py";
+import multer from "multer";
 import { validateProduct, type ListingRow } from "@workspace/listing-validation";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1938,6 +1939,74 @@ router.post("/products/qwen-specs", async (req, res): Promise<void> => {
     req.log.error({ err }, "Qwen VLM spec extraction failed");
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── Image Verification (ops-claim removal) ────────────────────────────────
+// Upload a sheet whose image links carry promo text (best seller, free delivery,
+// COD, % off ...). Each image is OCR'd, the claim areas are content-aware
+// inpainted, the result is re-uploaded to imgbb and the URL is rewritten in the
+// same sheet. Jobs run in the background so a big sheet does not hit the
+// tunnel's 100s limit.
+const IV_DIR = path.resolve(__parentDirname, "image_verify_jobs");
+mkdirSync(IV_DIR, { recursive: true });
+const ivUpload = multer({ dest: IV_DIR, limits: { fileSize: 100 * 1024 * 1024 } });
+const ivJobs = new Map<string, { dir: string; out: string; started: number; state: string; total?: number }>();
+
+router.post("/products/image-verify/start", ivUpload.single("file"), async (req, res): Promise<void> => {
+  try {
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      res.status(400).json({ error: "file required" });
+      return;
+    }
+    // Fresh id: multer's temp filename must not be reused as the job directory
+    // (the temp file sits in IV_DIR, so mkdir would collide with it).
+    const jobId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 8)}`;
+    // multer gives us a TEMP FILE, so the job gets its own directory and the
+    // upload is moved into it as input.xlsx.
+    const dir = path.join(IV_DIR, jobId);
+    mkdirSync(dir, { recursive: true });
+    const src = path.join(dir, "input" + (path.extname(file.originalname || "").toLowerCase() || ".xlsx"));
+    renameSync(file.path, src);
+    const out = path.join(dir, "verified.xlsx");
+    const job = { dir, out, started: Date.now(), state: "running" as string, total: undefined as number | undefined };
+    ivJobs.set(jobId, job);
+    const env = { ...process.env, PYTHONUTF8: "1" };
+    const child = spawn(pythonBin(), [
+      resolveScript("_image_verify.py"),
+      "--in", src, "--out", out,
+      "--progress", path.join(dir, "progress.json"),
+    ], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let tail = "";
+    child.stdout.on("data", (b) => { tail = (tail + b.toString()).slice(-4000); });
+    child.stderr.on("data", (b) => { tail = (tail + b.toString()).slice(-4000); });
+    child.on("exit", (code) => {
+      job.state = code === 0 ? "done" : "failed";
+      if (code !== 0) logger.error({ jobId, code, tail }, "image-verify failed");
+    });
+    logger.info({ jobId, file: file.originalname }, "image-verify started");
+    res.json({ jobId });
+  } catch (err: any) {
+    logger.error({ err }, "image-verify start failed");
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/products/image-verify/:jobId", (req, res): void => {
+  const job = ivJobs.get(req.params.jobId);
+  if (!job) { res.status(404).json({ state: "unknown" }); return; }
+  let progress: any = {};
+  try { progress = JSON.parse(readFileSync(path.join(job.dir, "progress.json"), "utf8")); } catch { /* not yet */ }
+  res.json({ state: job.state, ...progress });
+});
+
+router.get("/products/image-verify/:jobId/download", (req, res): void => {
+  const job = ivJobs.get(req.params.jobId);
+  if (!job || job.state !== "done" || !existsSync(job.out)) {
+    res.status(404).json({ error: "result not ready" });
+    return;
+  }
+  res.download(job.out, `verified-images-${req.params.jobId.slice(0, 8)}.xlsx`);
 });
 
 export default router;

@@ -4,7 +4,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
-import Dashboard from "@/components/Dashboard";
+import ImageVerification from "@/pages/ImageVerification";
 import FlipkartScraper from "@/pages/FlipkartScraper";
 import MeeshoScraper from "@/pages/MeeshoScraper";
 import AmazonScraper from "@/pages/AmazonScraper";
@@ -32,7 +32,6 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
-      <Route path="/video-finder" component={Dashboard} />
       <Route path="/trend-finder" component={TrendFinder} />
       <Route path="/meesho-scraper" component={MeeshoScraper} />
       <Route path="/price-mapper" component={PriceMapper} />
@@ -40,6 +39,7 @@ function Router() {
       <Route path="/amazon-scraper" component={AmazonScraper} />
       <Route path="/monitoring" component={MonitoringDashboard} />
       <Route path="/pre-listing-validator" component={PreListingValidator} />
+      <Route path="/image-verification" component={ImageVerification} />
       <Route path="/rd/category-validation" component={CategoryValidator} />
       <Route path="/rd/product-enhance" component={ProductList} />
       <Route path="/rd/product-enhance/list" component={ProductList} />
