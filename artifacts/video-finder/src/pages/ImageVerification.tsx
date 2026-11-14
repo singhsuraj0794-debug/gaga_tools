@@ -16,6 +16,7 @@ interface Progress {
 
 export default function ImageVerification() {
   const [file, setFile] = useState<File | null>(null);
+  const [mode, setMode] = useState<"word" | "panel" | "crop" | "auto">("panel");
   const [jobId, setJobId] = useState<string | null>(null);
   const [progress, setProgress] = useState<Progress>({ state: "idle" });
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +33,7 @@ export default function ImageVerification() {
     setProgress({ state: "running" });
     const form = new FormData();
     form.append("file", file);
+    form.append("mode", mode);
     try {
       const res = await fetch(`${API_BASE}/api/products/image-verify/start`, withApiHeaders({
         method: "POST",
@@ -55,7 +57,7 @@ export default function ImageVerification() {
       setError(e?.message || String(e));
       setProgress({ state: "failed" });
     }
-  }, [file]);
+  }, [file, mode]);
 
   const download = () => {
     if (!jobId) return;
@@ -108,6 +110,30 @@ export default function ImageVerification() {
                 }}
               />
             </label>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium text-slate-700">Removal mode</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {([
+                  ["panel", "Erase info panel", "Clears the designed copy block into the page background. Keeps the composition."],
+                  ["crop", "Crop to product", "Keeps only the product — drops badges, icons, logo and copy. Best for infographics."],
+                  ["auto", "Auto", "Crop when the product is a distinct object, otherwise erase the panel."],
+                  ["word", "Words only", "Smallest change: masks just the claim words. Can damage typography."],
+                ] as const).map(([value, title, desc]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setMode(value)}
+                    className={`text-left rounded-lg border p-3 transition ${
+                      mode === value ? "border-cyan-500 bg-cyan-50" : "border-slate-200 bg-white hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="text-sm font-medium text-slate-800">{title}</div>
+                    <div className="text-xs text-slate-500 mt-0.5">{desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="flex items-center gap-3">
               <Button onClick={start} disabled={!file || progress.state === "running"}>

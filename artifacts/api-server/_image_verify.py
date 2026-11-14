@@ -53,6 +53,15 @@ CLAIM_PATTERNS = [
     (r"\bHURRY\b|\bORDER\s*NOW\b|\bBUY\s*NOW\b|\bSHOP\s*NOW\b", "urgency CTA"),
     (r"\b100%\s*(?:ORIGINAL|GENUINE|AUTHENTIC)\b", "authenticity claim"),
     (r"\b(?:FREE|COMPLIMENTARY)\s*GIFT\b", "free gift"),
+    # Marketing badges that appear on marketplace infographics (they are claims in
+    # the same sense as "best seller": unverifiable promotional statements).
+    (r"\bBEST\s*GIFT\b|\bPERFECT\s*GIFT\b|\bGIFT\s*IDEA\b", "best gift"),
+    (r"\bWARRANTY\s*COVERAGE\b|\b\d{1,2}[- ]?MONTH\s*(?:LIMITED\s*)?WARRANTY\b|\bLIMITED\s*WARRANTY\b", "warranty badge"),
+    (r"\b(?:HIGH|EXPORT|PREMIUM|SUPERIOR|SUPREME)\s*QUALITY\b", "quality claim"),
+    (r"\bECO[- ]?FRIENDLY\b|\bSUSTAINABLE\b", "eco claim"),
+    (r"\bBPA[- ]?FREE\b|\bNON[- ]?TOXIC\b|\bFOOD[- ]?GRADE\b", "safety claim"),
+    (r"\bVALUE\s*FOR\s*MONEY\b|\bSTAIN[- ]?FREE\b", "value claim"),
+    (r"\bWORLD\s*PREMIERE\b|\bFIRST\s*TIME\s*IN\s*INDIA\b", "premiere claim"),
 ]
 _COMPILED = [(re.compile(p, re.I), label) for p, label in CLAIM_PATTERNS]
 
@@ -206,12 +215,337 @@ def upload_imgbb(img_bytes: bytes, api_key: str, name: str = "image.png") -> str
     return ""
 
 
-def verify_image(source: str, api_key: str) -> dict:
-    """Detect + remove claims + re-upload one image."""
+
+def detect_text_panels(img, min_boxes: int = 3, min_area_frac: float = 0.03) -> list[dict]:
+    """Cluster OCR text into rectangular PANELS (infographic copy blocks).
+
+    Word-level masking cannot cleanly rebuild designed headline/paragraph layouts
+    (it shreds the typography - "Perfect for..." came back as "Rongest Fldcfus").
+    A panel is a group of >= min_boxes text lines that overlap horizontally and
+    together cover at least min_area_frac of the image; the whole block is then
+    masked and the model repaints a clean background.
+    """
+    if img is None:
+        return []
+    h, w = img.shape[:2]
+    try:
+        boxes = _reader().readtext(img, detail=1, paragraph=False)
+    except Exception:
+        return []
+    items = []
+    for box, text, conf in boxes:
+        if not str(text or "").strip() or conf < 0.2:
+            continue
+        xs = [p[0] for p in box]; ys = [p[1] for p in box]
+        items.append({"x1": int(min(xs)), "y1": int(min(ys)),
+                      "x2": int(max(xs)), "y2": int(max(ys)),
+                      "text": str(text).strip()})
+    if len(items) < min_boxes:
+        return []
+    # group vertically-adjacent lines that share horizontal space
+    items.sort(key=lambda b: (b["y1"], b["x1"]))
+    groups: list[list[dict]] = []
+    for b in items:
+        placed = False
+        for g in groups:
+            gx1 = min(x["x1"] for x in g); gx2 = max(x["x2"] for x in g)
+            gy2 = max(x["y2"] for x in g)
+            overlap = min(gx2, b["x2"]) - max(gx1, b["x1"])
+            if overlap > 0 and b["y1"] <= gy2 + h * 0.04:
+                g.append(b)
+                placed = True
+                break
+        if not placed:
+            groups.append([b])
+    panels = []
+    for g in groups:
+        if len(g) < min_boxes:
+            continue
+        joined = " ".join(x.get("text", "") for x in g)
+        is_claim = any(re.search(pat, joined, re.I) for pat, _ in CLAIM_PATTERNS)
+        if len(g) < 4 and not is_claim:
+            continue
+        x1 = min(x["x1"] for x in g); y1 = min(x["y1"] for x in g)
+        x2 = max(x["x2"] for x in g); y2 = max(x["y2"] for x in g)
+        if (x2 - x1) * (y2 - y1) < min_area_frac * w * h:
+            continue
+        pad = int(max(w, h) * 0.012)
+        panels.append({"x1": max(0, x1 - pad), "y1": max(0, y1 - pad),
+                       "x2": min(w - 1, x2 + pad), "y2": min(h - 1, y2 + pad),
+                       "lines": len(g), "text": joined[:300]})
+    return panels
+
+
+def remove_panels(img, panels: list[dict], radius: int = 7):
+    """Mask whole panels and repaint a clean background with the image model."""
+    cv2, np = _load_cv()
+    if img is None or not panels:
+        return img, 0
+    h, w = img.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    for b in panels:
+        cv2.rectangle(mask, (b["x1"], b["y1"]), (b["x2"], b["y2"]), 255, -1)
+    mask = cv2.dilate(mask, np.ones((9, 9), np.uint8), iterations=1)
+    try:
+        import _image_mcp
+        ok, ibuf = cv2.imencode(".png", img)
+        ok2, mbuf = cv2.imencode(".png", mask)
+        if ok and ok2:
+            raw = _image_mcp.inpaint(
+                ibuf.tobytes(), mbuf.tobytes(),
+                prompt=("clean seamless studio product background, soft even lighting, "
+                        "smooth gradient, empty space, no text, no words, no lines"),
+                negative_prompt=("text, letters, words, paragraph, headline, bullet points, "
+                                 "logo, watermark, border, frame, icons, arrows"),
+                steps=28, guidance=6.5)
+            if raw:
+                gen = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if gen is not None:
+                    if gen.shape[:2] != img.shape[:2]:
+                        gen = cv2.resize(gen, (img.shape[1], img.shape[0]))
+                    soft = cv2.GaussianBlur(mask, (15, 15), 0).astype(np.float32) / 255.0
+                    soft = soft[..., None]
+                    out = gen.astype(np.float32) * soft + img.astype(np.float32) * (1 - soft)
+                    return out.clip(0, 255).astype(np.uint8), len(panels)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[verify] panel repaint unavailable ({type(exc).__name__})", file=sys.stderr)
+    out = cv2.inpaint(img, mask, radius, cv2.INPAINT_TELEA)
+    return out, len(panels)
+
+
+
+def _corner_stats(img):
+    """Std-dev and median of the four corner patches (the background probe)."""
+    cv2, np = _load_cv()
+    h, w = img.shape[:2]
+    s = max(6, min(h, w) // 16)
+    patches = [img[:s, :s], img[:s, -s:], img[-s:, :s], img[-s:, -s:]]
+    px = np.concatenate([p.reshape(-1, 3) for p in patches])
+    return float(np.std(px)), px
+
+
+def _page_bg(img) -> tuple:
+    cv2, np = _load_cv()
+    h, w = img.shape[:2]
+    f = max(8, int(min(h, w) * 0.02))
+    frame = np.concatenate([
+        img[:f].reshape(-1, 3), img[-f:].reshape(-1, 3),
+        img[:, :f].reshape(-1, 3), img[:, -f:].reshape(-1, 3)])
+    return tuple(int(v) for v in np.median(frame, axis=0))
+
+
+def _panel_region(img, panel: dict):
+    """Bounding box of everything drawn on the panel's background.
+
+    Infographic cards are often the SAME colour as the page (only a soft shadow
+    separates them), so brightness cannot find the card. Instead take every
+    component that differs from the page background and intersects the text
+    block - that captures headline+body+bullet icons+badges as one region, and
+    the fill colour (the page background) then blends invisibly.
+    """
+    cv2, np = _load_cv()
+    h, w = img.shape[:2]
+    bg = np.array(_page_bg(img), dtype=np.int16)
+    diff = np.abs(img.astype(np.int16) - bg).max(axis=2)
+    ink = (diff > 10).astype(np.uint8)
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    px1, py1, px2, py2 = panel["x1"], panel["y1"], panel["x2"], panel["y2"]
+    xs1 = ys1 = 10 ** 9; xs2 = ys2 = -1; area = 0
+    for i in range(1, n):
+        x, y, bw, bh, a = stats[i]
+        if x > px2 or y > py2 or x + bw < px1 or y + bh < py1:
+            continue
+        xs1 = min(xs1, x); ys1 = min(ys1, y)
+        xs2 = max(xs2, x + bw); ys2 = max(ys2, y + bh)
+        area += a
+    if xs2 < 0 or area > 0.8 * w * h:
+        return None
+    if (xs2 - xs1) < (px2 - px1) * 0.9:
+        return None
+    return (int(xs1), int(ys1), int(xs2), int(ys2))
+
+
+def product_crop(img, margin: float = 0.06, pad_square: bool = True):
+    """Keep only the product: drop every infographic element around it.
+
+    Designed panels (badges, dashed circles, icons, copy) are frequently
+    interleaved with the product, so a rectangle fill cuts them in half and leaves
+    fragments. Cropping to the product's own silhouette removes the whole
+    composition deterministically, which is what a compliant listing image needs.
+    """
+    cv2, np = _load_cv()
+    if img is None:
+        return img, None
+    h, w = img.shape[:2]
+    bg = np.array(_page_bg(img), dtype=np.int16)
+    diff = np.abs(img.astype(np.int16) - bg).max(axis=2)
+    ink = (diff > 18).astype(np.uint8)
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    if n <= 1:
+        return img, None
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    main = 1 + int(np.argmax(areas))
+    mx, my, mw, mh, _ = stats[main]
+    # pull in nearby pieces of the same product (cap, strap, detached shadow band)
+    xs1, ys1, xs2, ys2 = mx, my, mx + mw, my + mh
+    main_area = float(stats[main, cv2.CC_STAT_AREA])
+    for i in range(1, n):
+        if i == main:
+            continue
+        x, y, bw, bh, a = stats[i]
+        # only substantial pieces fully inside the product's box (cap, detached
+        # strap). Side-by-side icons and the brand logo must stay out, so no
+        # "nearby" tolerance: that chained every icon into the product.
+        if a < 0.15 * main_area:
+            continue
+        if x >= mx and y >= my and x + bw <= mx + mw and y + bh <= my + mh:
+            xs1 = min(xs1, x); ys1 = min(ys1, y)
+            xs2 = max(xs2, x + bw); ys2 = max(ys2, y + bh)
+    if (xs2 - xs1) * (ys2 - ys1) < 0.12 * w * h:
+        return img, None
+    # A "product" spanning nearly the whole frame is really a lifestyle shot or a
+    # brochure where everything merges into one blob - cropping changes nothing,
+    # so report it as not-croppable instead of claiming a fix.
+    if (xs2 - xs1) > 0.88 * w and (ys2 - ys1) > 0.88 * h:
+        return img, None
+    # wipe anything inside the box that is not the product (icon slivers, logo
+    # edges): keep only the main component, then crop.
+    keep = np.zeros((h, w), dtype=np.uint8)
+    keep[labels == main] = 255
+    for i in range(1, n):
+        if i == main:
+            continue
+        x, y, bw, bh, a = stats[i]
+        if a >= 0.15 * main_area and x >= mx and y >= my and x + bw <= mx + mw and y + bh <= my + mh:
+            keep[labels == i] = 255
+    # Only wipe stray fragments when the background is uniform (it is, we just
+    # checked); on designed backgrounds the fill leaves a hard halo.
+    if True:
+        keep = cv2.dilate(keep, np.ones((5, 5), np.uint8), 1)
+        clean = np.zeros_like(img); clean[:] = _page_bg(img)
+        clean[keep > 0] = img[keep > 0]
+        img = clean
+    m = int(max(xs2 - xs1, ys2 - ys1) * margin)
+    xs1, ys1 = max(0, xs1 - m), max(0, ys1 - m)
+    xs2, ys2 = min(w, xs2 + m), min(h, ys2 + m)
+    out = img[ys1:ys2, xs1:xs2]
+    # Nothing meaningful was removed -> do not present a "fix". Checking area is
+    # not enough (a brochure fills the frame yet is slightly inset), so compare
+    # how much of the image's ink actually falls inside the crop.
+    total_ink = float(ink.sum())
+    if total_ink > 0:
+        kept = float(ink[ys1:ys2, xs1:xs2].sum())
+        if kept / total_ink > 0.95:
+            return img, None
+    if (xs2 - xs1) * (ys2 - ys1) > 0.85 * (w * h):
+        return img, None
+    if pad_square:
+        oh, ow = out.shape[:2]
+        side = max(oh, ow)
+        canvas = np.zeros((side, side, 3), dtype=np.uint8)
+        canvas[:] = _page_bg(img)
+        oy = (side - oh) // 2; ox = (side - ow) // 2
+        canvas[oy:oy + oh, ox:ox + ow] = out
+        out = canvas
+    return out, (xs1, ys1, xs2, ys2)
+
+
+def remove_panels_flat(img, panels: list[dict], feather: int = 9):
+    """Erase infographic panels into a clean page background.
+
+    The panels sit on flat design backgrounds (white cards / grey page). Diffusion
+    invents objects on large empty areas (a grey card came back as a pink
+    cylinder), and sampling a thin ring caught the orange badge blocks. So: detect
+    the enclosing card, fill it with the image's own page-background colour, and
+    feather the seam. Deterministic and invisible on studio mockups.
+    """
+    cv2, np = _load_cv()
+    if img is None or not panels:
+        return img, 0
+    h, w = img.shape[:2]
+    bg = _page_bg(img)
+    out = np.zeros_like(img); out[:] = bg
+    mask = np.zeros((h, w), dtype=np.uint8)
+    done = 0
+    for b in panels:
+        card = _panel_region(img, b)
+        x1, y1, x2, y2 = card if card else (b["x1"], b["y1"], b["x2"], b["y2"])
+        pad = int(max(w, h) * 0.01)
+        x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+        x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
+        cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+        done += 1
+    mask = cv2.dilate(mask, np.ones((feather, feather), np.uint8), 1)
+    soft = cv2.GaussianBlur(mask, (feather * 2 + 1, feather * 2 + 1), 0).astype(np.float32) / 255.0
+    soft = soft[..., None]
+    res = out.astype(np.float32) * soft + img.astype(np.float32) * (1 - soft)
+    return res.clip(0, 255).astype(np.uint8), done
+
+
+def verify_panels(source: str, api_key: str) -> dict:
+    """Whole-panel regeneration for infographic images."""
+    t0 = time.time()
+    img = load_image(source)
+    if img is None:
+        return {"source": source, "status": "unreachable", "panels": 0, "url": "", "seconds": 0}
+    panels = detect_text_panels(img)
+    if not panels:
+        return {"source": source, "status": "no-panel", "panels": 0, "url": "", "seconds": round(time.time() - t0, 1)}
+    if os.environ.get("IMAGE_VERIFY_PANEL_ENGINE", "flat") == "mcp":
+        out, n = remove_panels(img, panels)
+    else:
+        out, n = remove_panels_flat(img, panels)
+    url = upload_imgbb(encode_png(out), api_key, name=os.path.basename(str(source)) or "image.png")
+    return {"source": source, "status": "repainted" if url else "repainted-no-upload",
+            "panels": n, "boxes": panels, "url": url, "seconds": round(time.time() - t0, 1)}
+
+
+def verify_image(source: str, api_key: str, mode: str = "word") -> dict:
+    """Detect + remove claims + re-upload one image.
+
+    mode:
+      word  - mask just the claim words (least change, can shred typography)
+      panel - erase the whole designed copy block into the page background
+      crop  - keep only the product (drops icons, badges, logo, copy)
+      auto  - crop when the product is a distinct object, else panel
+    """
     t0 = time.time()
     img = load_image(source)
     if img is None:
         return {"source": source, "status": "unreachable", "claims": [], "url": "", "seconds": 0}
+    if mode in ("panel", "crop", "auto"):
+        panels = detect_text_panels(img)
+        claims = detect_claims(img)
+        if mode == "crop" or (mode == "auto" and panels):
+            out, box = product_crop(img)
+            if box is not None:
+                leftover = detect_claims(out)
+                url = upload_imgbb(encode_png(out), api_key, name=os.path.basename(str(source)) or "image.png")
+                st = "cropped" if not leftover else "cropped-claims-remain"
+                if not url:
+                    st = "cropped-no-upload"
+                return {"source": source, "status": st,
+                        "claims": [{"label": b["label"], "text": b["text"]} for b in claims],
+                        "leftover": [{"label": b["label"], "text": b["text"]} for b in leftover],
+                        "crop": list(box), "url": url, "seconds": round(time.time() - t0, 1)}
+        if panels:
+            if os.environ.get("IMAGE_VERIFY_PANEL_ENGINE", "flat") == "mcp":
+                out, n = remove_panels(img, panels)
+            else:
+                out, n = remove_panels_flat(img, panels)
+            url = upload_imgbb(encode_png(out), api_key, name=os.path.basename(str(source)) or "image.png")
+            return {"source": source, "status": "repainted" if url else "repainted-no-upload",
+                    "claims": [{"label": b["label"], "text": b["text"]} for b in claims],
+                    "panels": n, "url": url, "seconds": round(time.time() - t0, 1)}
+        if claims:
+            cleaned, painted = remove_claims(img, claims)
+            url = upload_imgbb(encode_png(cleaned), api_key, name=os.path.basename(str(source)) or "image.png")
+            return {"source": source, "status": "fixed" if url else "fixed-no-upload",
+                    "claims": [{"label": b["label"], "text": b["text"]} for b in claims],
+                    "url": url, "seconds": round(time.time() - t0, 1)}
+        return {"source": source, "status": "clean", "claims": [], "url": "", "seconds": round(time.time() - t0, 1)}
     boxes = detect_claims(img)
     if not boxes:
         return {"source": source, "status": "clean", "claims": [], "url": "", "seconds": round(time.time() - t0, 1)}
@@ -237,7 +571,7 @@ def _is_url(v) -> bool:
 
 def process_sheet(input_path: str, out_path: str, api_key: str,
                   columns: list[str] | None = None, limit: int = 0,
-                  progress_path: str | None = None) -> dict:
+                  progress_path: str | None = None, mode: str = "word") -> dict:
     from openpyxl import load_workbook
 
     ext = os.path.splitext(input_path)[1].lower()
@@ -277,7 +611,7 @@ def process_sheet(input_path: str, out_path: str, api_key: str,
 
     done = 0
     for r, c, url in tasks:
-        res = verify_image(url, api_key)
+        res = verify_image(url, api_key, mode)
         done += 1
         if res["url"]:
             # header indices are 0-based; openpyxl columns are 1-based.
@@ -312,9 +646,11 @@ def main() -> int:
     ap.add_argument("--columns", default="")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--progress", default="")
+    ap.add_argument("--mode", required=True, choices=["word", "panel", "crop", "auto"],
+                    help="word = mask claims only; panel = erase copy block; crop = product only")
     a = ap.parse_args()
     cols = [c.strip() for c in a.columns.split(",") if c.strip()] or None
-    res = process_sheet(a.inp, a.out, a.imgbb_key, cols, a.limit, a.progress or None)
+    res = process_sheet(a.inp, a.out, a.imgbb_key, cols, a.limit, a.progress or None, a.mode)
     print(json.dumps({k: v for k, v in res.items() if k != "images"}, ensure_ascii=False))
     return 0
 

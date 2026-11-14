@@ -1959,6 +1959,11 @@ router.post("/products/image-verify/start", ivUpload.single("file"), async (req,
       res.status(400).json({ error: "file required" });
       return;
     }
+    const mode = String((req.body as any)?.mode || "").toLowerCase();
+    if (!["word", "panel", "crop", "auto"].includes(mode)) {
+      res.status(400).json({ error: "mode required: word | panel | crop | auto" });
+      return;
+    }
     // Fresh id: multer's temp filename must not be reused as the job directory
     // (the temp file sits in IV_DIR, so mkdir would collide with it).
     const jobId = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 8)}`;
@@ -1975,6 +1980,7 @@ router.post("/products/image-verify/start", ivUpload.single("file"), async (req,
     const child = spawn(pythonBin(), [
       resolveScript("_image_verify.py"),
       "--in", src, "--out", out,
+      "--mode", mode,
       "--progress", path.join(dir, "progress.json"),
     ], { env, stdio: ["ignore", "pipe", "pipe"] });
     let tail = "";
