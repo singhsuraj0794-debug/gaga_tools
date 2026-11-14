@@ -37,33 +37,15 @@ IMGBB_ENDPOINT = "https://api.imgbb.com/1/upload"
 # High-precision operations/marketing claim wording. Deliberately does NOT match
 # pack copy such as "MRP", "Net Qty", "1 Year Warranty", "Made in India" - those
 # are product/packaging facts, not promo claims.
-CLAIM_PATTERNS = [
-    (r"\bBEST\s*SELL(?:ER|ING)\b", "best seller"),
-    (r"\bNO\.?\s*1\b|\bNUMBER\s*1\b|\b#1\b", "number 1"),
-    (r"\bFREE\s*(?:DELIVERY|SHIPPING|RETURN|RETURNS|REPLACEMENT|EXCHANGE|GIFT)\b", "free delivery/return"),
-    (r"\bCASH\s*ON\s*DELIVERY\b|\bCOD\s*AVAILABLE\b|\bPAY\s*ON\s*DELIVERY\b", "COD"),
-    (r"\b(?:FLAT\s*)?\d{1,3}\s*%\s*(?:OFF|DISCOUNT)\b", "discount"),
-    (r"\b(?:MEGA|BIG|HOT|FLASH|CLEARANCE|END\s*OF\s*SEASON)\s*SALE\b", "sale"),
-    (r"\bLIMITED\s*(?:TIME|STOCK|PERIOD)\s*OFFER\b|\bSPECIAL\s*OFFER\b", "offer"),
-    (r"\bBUY\s*\d+\s*GET\s*\d+\b|\bBUY\s*1\s*GET\s*1\b", "buy/get offer"),
-    (r"\bNO\s*COST\s*EMI\b|\bEASY\s*EMI\b|\bEMI\s*AVAILABLE\b", "EMI"),
-    (r"\b(?:LIFETIME|FREE|EXTENDED)\s*WARRANTY\b", "warranty claim"),
-    (r"\bHASSLE[- ]?FREE\s*(?:RETURN|RETURNS|RETURN\s*POLICY)\b", "hassle-free return"),
-    (r"\bBEST\s*PRICE\b|\bLOWEST\s*PRICE\b|\bTOP\s*RATED\b|\bHIGHLY\s*RATED\b", "price/rating claim"),
-    (r"\bHURRY\b|\bORDER\s*NOW\b|\bBUY\s*NOW\b|\bSHOP\s*NOW\b", "urgency CTA"),
-    (r"\b100%\s*(?:ORIGINAL|GENUINE|AUTHENTIC)\b", "authenticity claim"),
-    (r"\b(?:FREE|COMPLIMENTARY)\s*GIFT\b", "free gift"),
-    # Marketing badges that appear on marketplace infographics (they are claims in
-    # the same sense as "best seller": unverifiable promotional statements).
-    (r"\bBEST\s*GIFT\b|\bPERFECT\s*GIFT\b|\bGIFT\s*IDEA\b", "best gift"),
-    (r"\bWARRANTY\s*COVERAGE\b|\b\d{1,2}[- ]?MONTH\s*(?:LIMITED\s*)?WARRANTY\b|\bLIMITED\s*WARRANTY\b", "warranty badge"),
-    (r"\b(?:HIGH|EXPORT|PREMIUM|SUPERIOR|SUPREME)\s*QUALITY\b", "quality claim"),
-    (r"\bECO[- ]?FRIENDLY\b|\bSUSTAINABLE\b", "eco claim"),
-    (r"\bBPA[- ]?FREE\b|\bNON[- ]?TOXIC\b|\bFOOD[- ]?GRADE\b", "safety claim"),
-    (r"\bVALUE\s*FOR\s*MONEY\b|\bSTAIN[- ]?FREE\b", "value claim"),
-    (r"\bWORLD\s*PREMIERE\b|\bFIRST\s*TIME\s*IN\s*INDIA\b", "premiere claim"),
-]
-_COMPILED = [(re.compile(p, re.I), label) for p, label in CLAIM_PATTERNS]
+def _claim_hits(text: str) -> list[dict]:
+    """Ops claims per the PRE-LISTING VALIDATOR rules (single source of truth).
+
+    Kept as a thin wrapper so this tool cannot drift into flagging marketing
+    badges ("Best Gift", "Eco-friendly", "Premium Quality") or printed specs
+    ("1 Year Warranty") that the validator deliberately allows.
+    """
+    from _clip_verify import detect_claims_in_text
+    return detect_claims_in_text(text)
 
 
 def _load_cv():
@@ -110,22 +92,29 @@ def detect_claims(img) -> list[dict]:
         results = reader.readtext(img, detail=1, paragraph=False)
     except Exception:
         return []
-    out = []
+    lines = []
     for box, text, conf in results:
         t = (text or "").strip()
         if len(t) < 3 or conf < 0.15:
             continue
-        for rx, label in _COMPILED:
-            if rx.search(t):
-                xs = [p[0] for p in box]
-                ys = [p[1] for p in box]
-                out.append({
-                    "x1": int(min(xs)), "y1": int(min(ys)),
-                    "x2": int(max(xs)), "y2": int(max(ys)),
-                    "text": t, "label": label, "conf": round(float(conf), 2),
-                })
-                break
-    return out
+        xs = [p[0] for p in box]
+        ys = [p[1] for p in box]
+        lines.append({"x1": int(min(xs)), "y1": int(min(ys)),
+                      "x2": int(max(xs)), "y2": int(max(ys)),
+                      "text": t, "conf": round(float(conf), 2)})
+    if not lines:
+        return []
+    # The validator decides on the whole OCR block (it needs the surrounding
+    # words for its packaging/context guards), then we keep the boxes of the
+    # lines that individually carry a claim.
+    if not _claim_hits(" ".join(b["text"] for b in lines)):
+        return []
+    out = []
+    for b in lines:
+        hits = _claim_hits(b["text"])
+        if hits:
+            out.append({**b, "label": hits[0]["label"]})
+    return out or [dict(b, label="claim") for b in lines]
 
 
 def build_mask(img, boxes: list[dict], pad: int = 6):
@@ -262,8 +251,7 @@ def detect_text_panels(img, min_boxes: int = 3, min_area_frac: float = 0.03) -> 
         if len(g) < min_boxes:
             continue
         joined = " ".join(x.get("text", "") for x in g)
-        is_claim = any(re.search(pat, joined, re.I) for pat, _ in CLAIM_PATTERNS)
-        if len(g) < 4 and not is_claim:
+        if len(g) < 4 and not _claim_hits(joined):
             continue
         x1 = min(x["x1"] for x in g); y1 = min(x["y1"] for x in g)
         x2 = max(x["x2"] for x in g); y2 = max(x["y2"] for x in g)

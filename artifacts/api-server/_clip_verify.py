@@ -931,140 +931,125 @@ def extract_image_text(img: Image.Image) -> str:
     return text
 
 
+_OPS_PACKAGING = re.compile(
+    r"\b(MRP|NET\s*(QTY|QUANTITY|WEIGHT|CONTENT)|BEST\s*BEFORE|MFG|MFD|"
+    r"MANUFACTURED|COUNTRY\s*OF\s*ORIGIN|BATCH|EXP(IRY)?|INGREDIENTS?|"
+    r"NUTRITION|STORAGE|MARKETED\s*BY|CUSTOMER\s*CARE|TOLL\s*FREE)\b",
+    re.I)
+_OPS_STRONG_PROMO = re.compile(
+    r"\b(FREE\s*(SHIPPING|DELIVERY|RETURN|GIFT)|CASH\s*ON\s*DELIVERY|COD\b|"
+    r"\d{1,3}\s*%\s*OFF|MEGA\s*SALE|FLASH\s*SALE|LIMITED\s*TIME|"
+    r"BUY\s*\d+\s*GET\s*\d+|EMI\b|BEST\s*SELLER|HURRY)\b", re.I)
+_OPS_SHORT_PATTERNS = [
+    # GIFT deliberately excluded: "FREE CERAMIC CUP STAND WITH EVERY PACK"
+    # is a bundle offer printed on the pack, not an ops claim.
+    (r"\bFREE\s*(SHIPPING|DELIVERY|RETURN|RETURNS|REPLACEMENT|EXCHANGE)\b", "free shipping/delivery/return claim"),
+    (r"\b(COD|CASH ON DELIVERY)\b", "COD available claim"),
+    (r"\b(?:100%|FULL|MONEY[- ]BACK)\s*GUARANTEE\b", "money-back guarantee claim"),
+    (r"\b(?:NO[- ]COST|0%)?\s*EMI\b", "EMI/installment claim"),
+    (r"\b(?:FLAT\s*)?\d{1,3}\s*%[- ]?OFF\b", "discount/off claim"),
+    (r"\bBEST\s*PRICE\b", "best price claim"),
+    (r"\bLOWEST\s*PRICE\b", "lowest price claim"),
+    (r"\bBUY\s*NOW\b", "buy now claim"),
+    (r"\bPAY\s*LATER\b", "pay later claim"),
+    (r"\b(?:FREE|FAST|EXPRESS|NEXT[- ]DAY)\s*(?:DELIVERY|SHIPPING|DISPATCH)\b", "delivery claim"),
+    (r"\bHASSLE[- ]?FREE\s*(?:RETURN|RETURNS|RETURN POLICY)\b", "hassle-free return claim"),
+    # A printed "1 year warranty" is a product spec; only promotional
+    # warranty wording counts.
+    (r"\b(FREE|LIFETIME|EXTENDED|LIFETIME[- ]FREE)\s*WARRANTY\b", "warranty claim"),
+    (r"\b(?:LIFETIME|NUMBER\s*1|#1|WORLD'?S\s*BEST)\b", "quality claim"),
+    (r"\bBEST[\s-]*SELL(?:ER|ING)\b", "best seller claim"),
+    (r"\bTOP[\s-]*(?:SELL(?:ER|ING)|RATED)\b", "top rated/seller claim"),
+    (r"\bNO\.?\s*1\b", "number 1 claim"),
+    (r"\bAMAZON'?S\s*CHOICE\b", "amazon's choice claim"),
+    (r"\bMOST\s*POPULAR\b", "most popular claim"),
+    (r"\bHIGHLY\s*RATED\b", "highly rated claim"),
+    (r"\b(?:MEGA|BIG|HOT|FLASH|CLEARANCE)\s*SALE\b", "sale claim"),
+    (r"\b(?:SPECIAL|LIMITED\s*TIME)\s*OFFER\b", "offer claim"),
+    (r"\bGREAT\s*DEAL\b", "deal claim"),
+    (r"\bHURRY\b", "urgency claim"),
+]
+# Loose variants tolerant of OCR noise.
+_OPS_SHORT_PATTERNS += [
+    (r"\bFRE?E\s*(SHIPPING|SHIP|DELIVERY|RETURN|REPLACEMENT|EXCHANGE)\b", "free shipping/delivery/return claim"),
+    (r"\bC\s*[O0]\s*D\b", "COD available claim"),
+    (r"\b\d{1,3}\s*%\s*[O0]FF\b", "discount/off claim"),
+    (r"\bB[E3]ST\s*PRIC[E3]\b", "best price claim"),
+    (r"\bL[O0]W[E3]ST\s*PRIC[E3]\b", "lowest price claim"),
+    (r"\bBUY\s*N[O0]W\b", "buy now claim"),
+    (r"\bWARRANT[YV]\b", "warranty claim"),
+]
+# Compact variants (matched against the space-stripped text) — tolerate
+# OCR splitting/mis-reading words like "BEST SELLER" -> "BESTSEIIER".
+_OPS_COMPACT_PATTERNS = [
+    (r"BESTS[EIUO][IL]{1,2}[EI]?R", "best seller claim"),
+    (r"BESTPRICE", "best price claim"),
+    (r"LOWESTPRICE", "lowest price claim"),
+    (r"FREESHIP", "free shipping claim"),
+    (r"CASHONDELIVERY", "COD available claim"),
+    (r"\d{1,3}%?OFF", "discount/off claim"),
+    (r"MONEYBACKGUARANTEE", "money-back guarantee claim"),
+    (r"TOPRATED", "top rated claim"),
+    (r"MOSTPOPULAR", "most popular claim"),
+]
+
+
+def detect_claims_in_text(text: str) -> list[dict]:
+    """Ops/marketing claims in OCR text -> [{"label","text"}].
+
+    Single source of truth: the pre-listing validator and the image verifier both
+    call this, so a printed "1 Year Warranty" or a "Best Gift" badge is judged
+    identically everywhere. Regex-only on purpose - OCR noise from box/leaflet
+    photos used to be scored as claims by the embedding pass.
+    """
+    if not text or len(text) < 4:
+        return []
+    from _hsn_suggest import _CLAIM_CONTEXT
+
+    if _OPS_PACKAGING.search(text) and not _OPS_STRONG_PROMO.search(text):
+        return []
+    low = text.upper()
+    norm = low.replace("0", "O").replace("1", "I").replace("5", "S").replace("|", "I")
+    norm = re.sub(r"[^A-Z% ]+", " ", norm)
+    norm = re.sub(r"\s{2,}", " ", norm)
+    compact = re.sub(r"[^A-Z0-9]+", "", norm)
+    out: list[dict] = []
+    for pat, label in _OPS_SHORT_PATTERNS:
+        m = re.search(pat, low) or re.search(pat, norm)
+        if m:
+            if _CLAIM_CONTEXT.search(text):
+                continue
+            out.append({"label": label, "text": m.group(0).strip()})
+    for pat, label in _OPS_COMPACT_PATTERNS:
+        m = re.search(pat, compact)
+        if m:
+            if _CLAIM_CONTEXT.search(text):
+                continue
+            out.append({"label": label, "text": m.group(0).strip()})
+    seen=set(); ded=[]
+    for c in out:
+        if c["label"] in seen:
+            continue
+        seen.add(c["label"]); ded.append(c)
+    return ded
+
+
 def check_ops_on_image(image_url: str) -> dict:
     """OCR the image, then detect operations/marketing claims in the extracted
-    text using the same regex + MiniLM semantic pipeline as title/description
-    checks. Returns flagged=True with the matched claim text when found."""
+    text using the shared regex pipeline (see detect_claims_in_text)."""
     img = load_image(image_url)
     if img is None:
         return {"url": image_url, "flagged": None, "error": "Image failed to load"}
-
     try:
         text = extract_image_text(img)
         if not text or len(text) < 4:
             return {"url": image_url, "flagged": False, "ocrText": text, "claims": []}
-
-        # Lazy import to avoid circular dependency (_hsn_suggest imports from us).
-        from _hsn_suggest import detect_op_claims, _CLAIM_CONTEXT
-
-        # Fast regex pass for short claim phrases OCR frequently renders as
-        # isolated, capitalized blocks (e.g. "FREE SHIPPING", "COD", "SALE",
-        # "50% OFF"). These are too short for the embedding pipeline to catch.
-        claims: list = []
-        low = (text or "").upper()
-
-        # A printed label is not a marketing overlay. If the OCR text reads like
-        # packaging (MRP / Net Qty / Best Before / Mfg / batch ...) and carries no
-        # strong promo wording, stop here instead of flagging the listing.
-        _PACKAGING = re.compile(
-            r"\b(MRP|NET\s*(QTY|QUANTITY|WEIGHT|CONTENT)|BEST\s*BEFORE|MFG|MFD|"
-            r"MANUFACTURED|COUNTRY\s*OF\s*ORIGIN|BATCH|EXP(IRY)?|INGREDIENTS?|"
-            r"NUTRITION|STORAGE|MARKETED\s*BY|CUSTOMER\s*CARE|TOLL\s*FREE)\b",
-            re.I)
-        _STRONG_PROMO = re.compile(
-            r"\b(FREE\s*(SHIPPING|DELIVERY|RETURN|GIFT)|CASH\s*ON\s*DELIVERY|COD\b|"
-            r"\d{1,3}\s*%\s*OFF|MEGA\s*SALE|FLASH\s*SALE|LIMITED\s*TIME|"
-            r"BUY\s*\d+\s*GET\s*\d+|EMI\b|BEST\s*SELLER|HURRY)\b", re.I)
-        if _PACKAGING.search(text) and not _STRONG_PROMO.search(text):
-            return {"url": image_url, "flagged": False, "ocrText": text, "claims": [],
-                    "note": "packaging label text (MRP/batch/origin) - not a promo claim"}
-        # OCR is noisy on low-res marketplace images ("Weter", "REPEATEO",
-        # "M@@IG"). Normalise common confusions and match patterns against BOTH
-        # the raw and the normalised text.
-        norm = low.replace("0", "O").replace("1", "I").replace("5", "S").replace("|", "I")
-        norm = re.sub(r"[^A-Z% ]+", " ", norm)
-        norm = re.sub(r"\s{2,}", " ", norm)
-        # Compact form: OCR splits words ("SE LLE R", "SuLER", "SEIIER") —
-        # strip ALL non-alphanumerics so those collapse near "BESTSELLER".
-        compact = re.sub(r"[^A-Z0-9]+", "", norm)
-        short_claim_patterns = [
-            # GIFT deliberately excluded: "FREE CERAMIC CUP STAND WITH EVERY PACK"
-            # is a bundle offer printed on the pack, not an ops claim.
-            (r"\bFREE\s*(SHIPPING|DELIVERY|RETURN|RETURNS|REPLACEMENT|EXCHANGE)\b", "free shipping/delivery/return claim"),
-            (r"\b(COD|CASH ON DELIVERY)\b", "COD available claim"),
-            (r"\b(?:100%|FULL|MONEY[- ]BACK)\s*GUARANTEE\b", "money-back guarantee claim"),
-            (r"\b(?:NO[- ]COST|0%)?\s*EMI\b", "EMI/installment claim"),
-            (r"\b(?:FLAT\s*)?\d{1,3}\s*%[- ]?OFF\b", "discount/off claim"),
-            (r"\bBEST\s*PRICE\b", "best price claim"),
-            (r"\bLOWEST\s*PRICE\b", "lowest price claim"),
-            (r"\bBUY\s*NOW\b", "buy now claim"),
-            (r"\bPAY\s*LATER\b", "pay later claim"),
-            (r"\b(?:FREE|FAST|EXPRESS|NEXT[- ]DAY)\s*(?:DELIVERY|SHIPPING|DISPATCH)\b", "delivery claim"),
-            (r"\bHASSLE[- ]?FREE\s*(?:RETURN|RETURNS|RETURN POLICY)\b", "hassle-free return claim"),
-            # A printed "1 year warranty" is a product spec; only promotional
-            # warranty wording counts.
-            (r"\b(FREE|LIFETIME|EXTENDED|LIFETIME[- ]FREE)\s*WARRANTY\b", "warranty claim"),
-            (r"\b(?:LIFETIME|NUMBER\s*1|#1|WORLD'?S\s*BEST)\b", "quality claim"),
-            (r"\bBEST[\s-]*SELL(?:ER|ING)\b", "best seller claim"),
-            (r"\bTOP[\s-]*(?:SELL(?:ER|ING)|RATED)\b", "top rated/seller claim"),
-            (r"\bNO\.?\s*1\b", "number 1 claim"),
-            (r"\bAMAZON'?S\s*CHOICE\b", "amazon's choice claim"),
-            (r"\bMOST\s*POPULAR\b", "most popular claim"),
-            (r"\bHIGHLY\s*RATED\b", "highly rated claim"),
-            (r"\b(?:MEGA|BIG|HOT|FLASH|CLEARANCE)\s*SALE\b", "sale claim"),
-            (r"\b(?:SPECIAL|LIMITED\s*TIME)\s*OFFER\b", "offer claim"),
-            (r"\bGREAT\s*DEAL\b", "deal claim"),
-            (r"\bHURRY\b", "urgency claim"),
-        ]
-        # Loose variants tolerant of OCR noise.
-        short_claim_patterns += [
-            (r"\bFRE?E\s*(SHIPPING|SHIP|DELIVERY|RETURN|REPLACEMENT|EXCHANGE)\b", "free shipping/delivery/return claim"),
-            (r"\bC\s*[O0]\s*D\b", "COD available claim"),
-            (r"\b\d{1,3}\s*%\s*[O0]FF\b", "discount/off claim"),
-            (r"\bB[E3]ST\s*PRIC[E3]\b", "best price claim"),
-            (r"\bL[O0]W[E3]ST\s*PRIC[E3]\b", "lowest price claim"),
-            (r"\bBUY\s*N[O0]W\b", "buy now claim"),
-            (r"\bWARRANT[YV]\b", "warranty claim"),
-        ]
-        # Compact variants (matched against the space-stripped text) — tolerate
-        # OCR splitting/mis-reading words like "BEST SELLER" -> "BESTSEIIER".
-        compact_claim_patterns = [
-            (r"BESTS[EIUO][IL]{1,2}[EI]?R", "best seller claim"),
-            (r"BESTPRICE", "best price claim"),
-            (r"LOWESTPRICE", "lowest price claim"),
-            (r"FREESHIP", "free shipping claim"),
-            (r"CASHONDELIVERY", "COD available claim"),
-            (r"\d{1,3}%?OFF", "discount/off claim"),
-            (r"MONEYBACKGUARANTEE", "money-back guarantee claim"),
-            (r"TOPRATED", "top rated claim"),
-            (r"MOSTPOPULAR", "most popular claim"),
-        ]
-        claim_texts: list = []
-        for pat, label in short_claim_patterns:
-            m = re.search(pat, low) or re.search(pat, norm)
-            if m:
-                # Skip if the matched context is a product descriptor
-                if _CLAIM_CONTEXT.search(text):
-                    continue
-                claims.append(label)
-                claim_texts.append(m.group(0).strip())
-        for pat, label in compact_claim_patterns:
-            m = re.search(pat, compact)
-            if m:
-                if _CLAIM_CONTEXT.search(text):
-                    continue
-                claims.append(label)
-                claim_texts.append(m.group(0).strip())
-        if claims:
-            return {
-                "url": image_url,
-                "flagged": True,
-                "ocrText": text,
-                "claims": list(dict.fromkeys(claims)),
-                "claimTexts": list(dict.fromkeys(claim_texts)),
-            }
-
-        # Deliberately NO semantic/embedding pass on image OCR text. Marketplace
-        # box/leaflet photos OCR into noise ("Trr Lel", "LOBBAN", "OlTl(o)") and
-        # the embedding model scored that noise as an operations claim, which is
-        # what flagged plain packaging. The regex list above is high precision and
-        # covers the real overlays (FREE DELIVERY, 50% OFF, COD, EMI, warranty...).
-        return {
-            "url": image_url,
-            "flagged": False,
-            "ocrText": text,
-            "claims": [],
-        }
+        claims = detect_claims_in_text(text)
+        if not claims:
+            return {"url": image_url, "flagged": False, "ocrText": text, "claims": []}
+        return {"url": image_url, "flagged": True, "ocrText": text,
+                "claims": [c["label"] for c in claims],
+                "claimTexts": [c["text"] for c in claims]}
     except Exception as e:
         return {"url": image_url, "flagged": None, "error": str(e)}
 
