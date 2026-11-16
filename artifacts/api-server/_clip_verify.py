@@ -983,6 +983,16 @@ _OPS_SHORT_PATTERNS += [
     (r"\b[L1I|]?[O0]WEST\s*PRIC[E3]\b", "lowest price claim"),
     (r"\bH[O0]T\s*SAL[E3]\b", "sale claim"),
     (r"\bB[E3]ST\s*S[E3]LL[E3]R\b", "best seller claim"),
+    # Quality / guarantee badges. These are the same unverifiable marketing
+    # statements the text pipeline strips ("best quality", "100% genuine"), just
+    # printed on the image instead of the title.
+    (r"\b(?:BEST|PREMIUM|HIGH|SUPERIOR|SUPREME|TOP|FINEST)\s*QUA[LI][LI]?T?Y\b", "quality claim"),
+    (r"\bQUA[LI][LI]?T?Y\s*(?:GUARANTEE|GUARANTEED|ASSURED|ASSURANCE)\b", "quality guarantee claim"),
+    (r"\b(?:SATISFACTION|MONEY[- ]BACK)\s*GUARANTEE\b", "money-back guarantee claim"),
+    (r"\b100%\s*(?:GENUINE|ORIGINAL|AUTHENTIC)\b", "authenticity claim"),
+    # OCR-tolerant variants ("BEST QUAIT GUARANTER").
+    (r"\bB[E3]ST\s*QUA[I1L][T7]\b", "quality claim"),
+    (r"\bGUARAN[T7][E3]{1,2}\b", "guarantee claim"),
 ]
 # Compact variants (matched against the space-stripped text) — tolerate
 # OCR splitting/mis-reading words like "BEST SELLER" -> "BESTSEIIER".

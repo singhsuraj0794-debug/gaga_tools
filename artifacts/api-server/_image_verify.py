@@ -159,7 +159,7 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
     h, w = img.shape[:2]
     mask = np.zeros((h, w), dtype=np.uint8)
     painted = 0
-    grouping = os.environ.get("IMAGE_VERIFY_MASK", "group") != "line"
+    grouping = os.environ.get("IMAGE_VERIFY_MASK", "line") != "line"
     rects = [(b["x1"], b["y1"], b["x2"], b["y2"]) for b in boxes]
     if grouping and rects:
         # merge boxes that touch/overlap within a small gap
@@ -178,7 +178,7 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
     for (bx1, by1, bx2, by2) in rects:
         # Badges/ribbons carry a border around the glyphs; pad by a fraction of
         # the block's own height so the frame goes with the text.
-        extra = int((by2 - by1) * float(os.environ.get("IMAGE_VERIFY_MASK_PAD", "0.30")))
+        extra = int((by2 - by1) * float(os.environ.get("IMAGE_VERIFY_MASK_PAD", "0.08")))
         p_ = max(pad, extra)
         x1 = max(0, bx1 - p_); y1 = max(0, by1 - p_)
         x2 = min(w - 1, bx2 + p_); y2 = min(h - 1, by2 + p_)
@@ -191,12 +191,121 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
     return mask, painted
 
 
-def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
-    """Content-aware fill over the given boxes.
+def spill_fill(img, mask, smooth: bool = True):
+    """Content-aware "space spill": grow the surrounding pixels into the hole.
 
-    Preferred path: the image-mcp inpaint model (prompt-guided diffusion), with
-    its result composited back ONLY inside the mask so the product itself is never
-    re-rendered. Falls back to OpenCV Telea when the MCP server is unreachable.
+    Every masked pixel copies the colour of its NEAREST unmasked pixel (exact
+    Euclidean Voronoi of the hole, via a distance transform). That is literally
+    what content-aware fill does on smooth surfaces: the white background stays
+    white, a flat product face keeps its own colour and gradient, and nothing is
+    invented. A light median pass removes Voronoi ridges without blurring texture
+    (unlike Telea).
+    """
+    cv2, np = _load_cv()
+    h, w = img.shape[:2]
+    hole = (mask > 0)
+    if not hole.any():
+        return img.copy()
+    src = 1 - hole.astype(np.uint8)
+    if src.sum() == 0:
+        return img.copy()
+    _dist, labels = cv2.distanceTransformWithLabels(
+        src, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    ys, xs = np.where(src > 0)          # row-major, matches the label numbering
+    idx = labels[hole] - 1
+    idx = np.clip(idx, 0, len(ys) - 1)
+    out = img.copy()
+    out[hole] = img[ys[idx], xs[idx]]
+    if smooth:
+        # median only inside the hole, feathered at the seam
+        med = cv2.medianBlur(out, 3)
+        soft = cv2.GaussianBlur((mask > 0).astype(np.uint8) * 255, (5, 5), 0).astype(np.float32) / 255.0
+        soft = soft[..., None]
+        out = (med.astype(np.float32) * soft + out.astype(np.float32) * (1 - soft)).clip(0, 255).astype(np.uint8)
+    return out
+
+
+def smart_spill_fill(img, mask, bg_pixels_frac: float = 0.0):
+    """Space-spill that respects the product silhouette.
+
+    A badge usually straddles the product edge, so a plain nearest-neighbour fill
+    leaves a visible rectangle split between product colour and background. Here
+    the product silhouette is recovered (non-background pixels, closed across the
+    hole), and the hole is filled per side: product pixels continue the product
+    surface, everything else becomes the page background. The result follows the
+    object's shape instead of the mask's rectangle.
+    """
+    cv2, np = _load_cv()
+    h, w = img.shape[:2]
+    hole = (mask > 0)
+    if not hole.any():
+        return img.copy()
+
+    bg = np.array(_page_bg(img), dtype=np.int16)
+    diff = np.abs(img.astype(np.int16) - bg).max(axis=2)
+    prod = (diff > 18).astype(np.uint8)
+    # close across the hole so the silhouette is continuous under the badge
+    ys, xs = np.where(hole)
+    span = int(max(xs.max() - xs.min(), ys.max() - ys.min())) if len(xs) else 32
+    k = max(9, min(151, int(span * 1.4) | 1))
+    prod_closed = cv2.morphologyEx(prod, cv2.MORPH_CLOSE,
+                                   cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+
+    src = 1 - hole.astype(np.uint8)
+    if src.sum() == 0:
+        return img.copy()
+    _dist, labels = cv2.distanceTransformWithLabels(
+        src, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    vys, vxs = np.where(src > 0)
+    idx = np.clip(labels[hole] - 1, 0, len(vys) - 1)
+    out = img.copy()
+    out[hole] = img[vys[idx], vxs[idx]]
+
+    # outside the recovered silhouette -> flat background
+    outside = hole & (prod_closed == 0)
+    if outside.any():
+        out[outside] = np.array(_page_bg(img), dtype=np.uint8)
+
+    # kill Voronoi ridges inside the product without smearing the background
+    inside = hole & (prod_closed > 0)
+    if inside.any():
+        med = cv2.medianBlur(out, 5)
+        soft = cv2.GaussianBlur(inside.astype(np.uint8) * 255, (7, 7), 0).astype(np.float32) / 255.0
+        soft = soft[..., None]
+        out = (med.astype(np.float32) * soft + out.astype(np.float32) * (1 - soft)).clip(0, 255).astype(np.uint8)
+    return out
+
+
+def _hole_texture(img, mask, ring: int = 12):
+    """Local colour variation around a hole. High variance = patterned/detailed
+    area, where nearest-pixel spill produces visible smears instead of matching
+    the neighbours."""
+    cv2, np = _load_cv()
+    if img is None or mask is None or not mask.any():
+        return 0.0
+    h, w = img.shape[:2]
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ring * 2 + 1, ring * 2 + 1))
+    band = cv2.dilate((mask > 0).astype(np.uint8), k) - (mask > 0).astype(np.uint8)
+    sel = band > 0
+    if sel.sum() < 50:
+        return 0.0
+    px = img[sel].reshape(-1, 3).astype(np.float32)
+    return float(px.std(axis=0).mean())
+
+
+def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
+    """Content-aware fill: copy plausible surrounding texture into each hole.
+
+    Engine is selectable because they fail differently:
+      patch (default) - OpenCV xphoto SHIFTMAP (PatchMatch). Copies real texture
+                        from around the hole, so a badge over a flat product
+                        surface gets that product surface back - no invented
+                        graphics, no blur.
+      mcp             - SDXL inpaint. Can synthesise, but on a large hole it
+                        hallucinates new badges/logos.
+      telea           - last-resort smooth fill (blurry on big areas).
+    Each region is processed on a tight context crop so the patch search has the
+    product's own structure to sample from.
     """
     cv2, np = _load_cv()
     if img is None or not boxes:
@@ -205,39 +314,93 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     if not painted:
         return img, 0
 
-    # 1) MCP inpaint, composited inside the mask only.
-    try:
-        import _image_mcp
-        h0, w0 = img.shape[:2]
-        # The MCP endpoint 413s on big PNG payloads (a 2428x1830 product shot).
-        # Inpainting works at ~1280px, so downscale the pair and map the result
-        # back - the composite below still uses the full-resolution original.
-        limit = int(os.environ.get("IMAGE_VERIFY_MCP_MAX_SIDE", "1280"))
-        scale = min(1.0, limit / float(max(h0, w0)))
-        src = img if scale >= 1.0 else cv2.resize(img, (int(w0 * scale), int(h0 * scale)))
-        msk = mask if scale >= 1.0 else cv2.resize(mask, (int(w0 * scale), int(h0 * scale)),
-                                                  interpolation=cv2.INTER_NEAREST)
-        ok, ibuf = cv2.imencode(".png", src)
-        ok2, mbuf = cv2.imencode(".png", msk)
-        if ok and ok2:
-            raw = _image_mcp.inpaint(ibuf.tobytes(), mbuf.tobytes(),
-                                     prompt=("clean seamless product photo background, "
-                                             "remove all text and badges, natural surface"))
-            if raw:
-                gen = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
-                if gen is not None:
-                    if gen.shape[:2] != (h0, w0):
-                        gen = cv2.resize(gen, (w0, h0))
-                    soft = cv2.GaussianBlur(mask, (7, 7), 0).astype(np.float32) / 255.0
-                    soft = soft[..., None]
-                    out = (gen.astype(np.float32) * soft + img.astype(np.float32) * (1 - soft))
-                    return out.clip(0, 255).astype(np.uint8), painted
-    except Exception as exc:  # noqa: BLE001
-        print(f"[verify] MCP inpaint unavailable ({type(exc).__name__}); using OpenCV Telea",
-              file=sys.stderr)
+    engine = (os.environ.get("IMAGE_VERIFY_FILL") or "spill").lower()
+    if engine == "spill":
+        # One pass over the whole mask keeps the spill global and consistent
+        # (per-region passes would each sample their own edge).
+        return smart_spill_fill(img, mask), painted
+    has_patch = hasattr(getattr(cv2, "xphoto", None), "inpaint")
+    if engine == "patch" and not has_patch:
+        engine = "telea"
 
-    # 2) Local fallback.
-    out = cv2.inpaint(img, mask, radius, cv2.INPAINT_TELEA)
+    H, W = img.shape[:2]
+    out = img.copy()
+    prompt = ("extend the surrounding product surface and background seamlessly, "
+              "same colours, material and lighting, continuous edges, no text, no badge")
+    neg = ("text, letters, words, numbers, watermark, logo, badge, banner, ribbon, "
+           "seal, blurry, smudge, gradient patch")
+    mcp = None
+    if engine == "mcp":
+        try:
+            import _image_mcp as mcp  # type: ignore
+        except Exception:
+            mcp = None
+            engine = "patch" if has_patch else "telea"
+
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), 8)
+    for i in range(1, n):
+        x, y, w0, h0, _area = stats[i]
+        if w0 * h0 == 0:
+            continue
+        comp = (labels == i)
+        cx = int(max(w0, h0) * 1.2) + 48
+        x0 = max(0, x - cx); y0 = max(0, y - cx)
+        x1 = min(W, x + w0 + cx); y1 = min(H, y + h0 + cx)
+        crop = img[y0:y1, x0:x1]
+        cmask = (comp[y0:y1, x0:x1]).astype(np.uint8) * 255
+        if int(cmask.sum()) == 0:
+            continue
+
+        gen = None
+        if engine == "patch":
+            try:
+                # xphoto expects CIELab input for SHIFTMAP and the INVERTED mask
+                # convention: non-zero = keep, zero = hole.
+                lab = cv2.cvtColor(crop, cv2.COLOR_BGR2Lab)
+                keep = cv2.bitwise_not(cmask)
+                dst = lab.copy()
+                cv2.xphoto.inpaint(lab, keep, dst, cv2.xphoto.INPAINT_SHIFTMAP)
+                gen = cv2.cvtColor(dst, cv2.COLOR_Lab2BGR)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[verify] PatchMatch failed ({type(exc).__name__}: {exc}); telea", file=sys.stderr)
+                engine = "telea"
+        if gen is None and engine == "mcp" and mcp is not None:
+            ch, cw = crop.shape[:2]
+            scale = 1.0
+            cap = int(os.environ.get("IMAGE_VERIFY_INPAINT_MAX", "1024"))
+            if max(ch, cw) > cap:
+                scale = cap / float(max(ch, cw))
+            src = crop if scale == 1.0 else cv2.resize(crop, (int(cw * scale), int(ch * scale)),
+                                                      interpolation=cv2.INTER_CUBIC)
+            msk = cmask if scale == 1.0 else cv2.resize(cmask, (int(cw * scale), int(ch * scale)),
+                                                        interpolation=cv2.INTER_NEAREST)
+            try:
+                ok, ibuf = cv2.imencode(".png", src)
+                ok2, mbuf = cv2.imencode(".png", msk)
+                if ok and ok2:
+                    raw = mcp.inpaint(ibuf.tobytes(), mbuf.tobytes(),
+                                      prompt=prompt, negative_prompt=neg,
+                                      steps=26, guidance=6.5)
+                    if raw:
+                        g = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        if g is not None:
+                            gen = g if g.shape[:2] == crop.shape[:2] else cv2.resize(g, (cw, ch))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[verify] MCP inpaint failed ({type(exc).__name__})", file=sys.stderr)
+        if gen is None:
+            gen = cv2.inpaint(crop, cmask, radius, cv2.INPAINT_TELEA)
+
+        if engine == "patch" and gen is not None:
+            # PatchMatch writes only inside the mask; blend the seam softly.
+            soft = cv2.GaussianBlur(cmask, (7, 7), 0).astype(np.float32) / 255.0
+            soft = np.clip(soft * 1.15, 0, 1)[..., None]
+            out[y0:y1, x0:x1] = (gen.astype(np.float32) * soft +
+                                 crop.astype(np.float32) * (1 - soft)).clip(0, 255).astype(np.uint8)
+        else:
+            soft = cv2.GaussianBlur(cmask, (9, 9), 0).astype(np.float32) / 255.0
+            soft = soft[..., None]
+            out[y0:y1, x0:x1] = (gen.astype(np.float32) * soft +
+                                 crop.astype(np.float32) * (1 - soft)).clip(0, 255).astype(np.uint8)
     return out, painted
 
 
@@ -593,6 +756,17 @@ def verify_image(source: str, api_key: str, mode: str = "word") -> dict:
                     "claims": [{"label": b["label"], "text": b["text"]} for b in claims],
                     "panels": n, "url": url, "seconds": round(time.time() - t0, 1)}
         if claims:
+            tmask, _pn = build_mask(img, claims)
+            tex = _hole_texture(img, tmask)
+            frac = float((tmask > 0).sum()) / float(img.shape[0] * img.shape[1])
+            limit = float(os.environ.get("IMAGE_VERIFY_MAX_TEXTURE", "22"))
+            # A large hole over artwork cannot be rebuilt from neighbours: spill
+            # smears (a strip of book covers collapsed into streaks). Flag it
+            # instead of shipping a damaged image.
+            if frac > float(os.environ.get("IMAGE_VERIFY_MAX_HOLE", "0.015")):
+                return {"source": source, "status": "needs-manual",
+                        "claims": [{"label": b["label"], "text": b["text"]} for b in claims],
+                        "texture": round(tex, 1), "url": "", "seconds": round(time.time() - t0, 1)}
             cleaned, painted = remove_claims(img, claims)
             url = upload_imgbb(encode_png(cleaned), api_key, name=os.path.basename(str(source)) or "image.png")
             return {"source": source, "status": "fixed" if url else "fixed-no-upload",
@@ -602,6 +776,17 @@ def verify_image(source: str, api_key: str, mode: str = "word") -> dict:
     boxes = detect_claims(img)
     if not boxes:
         return {"source": source, "status": "clean", "claims": [], "url": "", "seconds": round(time.time() - t0, 1)}
+    tmask, _pn = build_mask(img, boxes)
+    tex = _hole_texture(img, tmask)
+    frac = float((tmask > 0).sum()) / float(img.shape[0] * img.shape[1])
+    # Only the HOLE SIZE predicts a bad spill: colour variance around a hole is
+    # high even when the fill is perfect (a striped pool ring), while a large hole
+    # over artwork always smears. ~1.5% of the frame is the break-even point.
+    if frac > float(os.environ.get("IMAGE_VERIFY_MAX_HOLE", "0.015")):
+        return {"source": source, "status": "needs-manual",
+                "claims": [{"label": b["label"], "text": b["text"]} for b in boxes],
+                "texture": round(tex, 1), "hole_frac": round(frac, 4),
+                "url": "", "seconds": round(time.time() - t0, 1)}
     cleaned, painted = remove_claims(img, boxes)
     url = upload_imgbb(encode_png(cleaned), api_key, name=os.path.basename(str(source)) or "image.png")
     return {
