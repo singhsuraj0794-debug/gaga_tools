@@ -96,11 +96,11 @@ export default function ImageVerification() {
             <label className="flex items-center gap-3 cursor-pointer rounded-lg border-2 border-dashed border-slate-300 bg-white px-4 py-6 hover:border-cyan-400">
               <Upload className="h-5 w-5 text-slate-400" />
               <span className="text-sm text-slate-600">
-                {file ? file.name : "Choose an .xlsx / .csv (uses the Product Image 1…10 columns)"}
+                {file ? file.name : "Choose an .xlsx or .csv (uses the Product Image 1…10 columns)"}
               </span>
               <input
                 type="file"
-                accept=".xlsx,.xls,.csv"
+                accept=".xlsx,.csv"
                 className="hidden"
                 onChange={(e) => {
                   setFile(e.target.files?.[0] || null);

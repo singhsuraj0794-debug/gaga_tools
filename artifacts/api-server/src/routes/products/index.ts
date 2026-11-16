@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { logger } from "../../lib/logger";
-import { existsSync, readFileSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { getSupabase } from "../../lib/supabase";
 import { tmpPath } from "../../lib/tmp";
 import { pythonBin } from "../../lib/py";
@@ -1988,7 +1988,14 @@ router.post("/products/image-verify/start", ivUpload.single("file"), async (req,
     child.stderr.on("data", (b) => { tail = (tail + b.toString()).slice(-4000); });
     child.on("exit", (code) => {
       job.state = code === 0 ? "done" : "failed";
-      if (code !== 0) logger.error({ jobId, code, tail }, "image-verify failed");
+      if (code !== 0) {
+        logger.error({ jobId, code, tail }, "image-verify failed");
+        // Surface the reason in the UI instead of a bare "failed".
+        try {
+          writeFileSync(path.join(dir, "progress.json"),
+            JSON.stringify({ state: "failed", error: tail.trim().split("\n").slice(-6).join("\n") }));
+        } catch { /* best effort */ }
+      }
     });
     logger.info({ jobId, file: file.originalname }, "image-verify started");
     res.json({ jobId });

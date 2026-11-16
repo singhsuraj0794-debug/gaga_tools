@@ -563,8 +563,19 @@ def process_sheet(input_path: str, out_path: str, api_key: str,
     from openpyxl import load_workbook
 
     ext = os.path.splitext(input_path)[1].lower()
-    wb = load_workbook(input_path)
-    ws = wb.active
+    if ext in (".csv", ".txt"):
+        # openpyxl only reads xlsx; build a workbook from the CSV so the UI's
+        # ".csv accepted" promise holds (it used to fail with InvalidFileException).
+        from openpyxl import Workbook
+        with open(input_path, newline="", encoding="utf-8-sig") as f:
+            data = [row for row in csv.reader(f)]
+        wb = Workbook()
+        ws = wb.active
+        for row in data:
+            ws.append(row)
+    else:
+        wb = load_workbook(input_path)
+        ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         return {"error": "empty sheet"}
@@ -598,29 +609,47 @@ def process_sheet(input_path: str, out_path: str, api_key: str,
     ws.cell(row=1, column=status_col, value="Image Verify Status")
 
     done = 0
+    by_row: dict[int, list] = {}
     for r, c, url in tasks:
-        res = verify_image(url, api_key, mode)
-        done += 1
-        if res["url"]:
-            # header indices are 0-based; openpyxl columns are 1-based.
-            ws.cell(row=r, column=c + 1, value=res["url"])
-            ws.cell(row=r, column=url_col, value=res["url"])
-        ws.cell(row=r, column=claim_col, value="; ".join(sorted({x["label"] for x in res["claims"]})))
-        ws.cell(row=r, column=status_col, value=res["status"])
-        report.append(res)
-        if progress_path:
-            try:
-                with open(progress_path, "w", encoding="utf-8") as f:
-                    json.dump({"done": done, "total": len(tasks),
-                               "current": os.path.basename(str(url))[:80],
-                               "fixed": sum(1 for x in report if x["status"] == "fixed"),
-                               "clean": sum(1 for x in report if x["status"] == "clean")}, f)
-            except Exception:
-                pass
+        by_row.setdefault(r, []).append((c, url))
+
+    def _ok(st: str) -> bool:
+        return st in ("fixed", "cropped", "repainted")
+
+    for r, items in by_row.items():
+        claims: set[str] = set()
+        statuses: list[str] = []
+        changed = 0
+        for c, url in items:
+            res = verify_image(url, api_key, mode)
+            done += 1
+            if res["url"]:
+                ws.cell(row=r, column=c + 1, value=res["url"])
+                changed += 1
+            claims.update(x["label"] for x in res.get("claims", []))
+            statuses.append(res["status"])
+            report.append(res)
+            if progress_path:
+                try:
+                    with open(progress_path, "w", encoding="utf-8") as f:
+                        json.dump({"done": done, "total": len(tasks),
+                                   "current": os.path.basename(str(url))[:80],
+                                   "fixed": sum(1 for x in report if _ok(x["status"])),
+                                   "clean": sum(1 for x in report if x["status"] == "clean")}, f)
+                except Exception:
+                    pass
+        if changed:
+            ws.cell(row=r, column=url_col, value=ws.cell(row=r, column=items[0][0] + 1).value)
+        ws.cell(row=r, column=claim_col, value="; ".join(sorted(claims)))
+        # One status per row, worst-first, so a partially handled image is visible.
+        order = ["failed", "burnt", "needs-manual", "fixed-leftover",
+                 "cropped-claims-remain", "skipped-no-panel", "unreachable"]
+        pick = next((s for o in order for s in statuses if s == o), None)
+        ws.cell(row=r, column=status_col, value=pick or (statuses[0] if statuses else ""))
 
     wb.save(out_path)
     return {"total": len(tasks), "done": done,
-            "fixed": sum(1 for x in report if x["status"] == "fixed"),
+            "fixed": sum(1 for x in report if _ok(x["status"])),
             "clean": sum(1 for x in report if x["status"] == "clean"),
             "unreachable": sum(1 for x in report if x["status"] == "unreachable"),
             "columns": [header[i] for i in cols], "images": report}
