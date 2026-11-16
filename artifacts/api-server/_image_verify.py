@@ -159,7 +159,7 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
     h, w = img.shape[:2]
     mask = np.zeros((h, w), dtype=np.uint8)
     painted = 0
-    grouping = os.environ.get("IMAGE_VERIFY_MASK", "line") != "line"
+    grouping = os.environ.get("IMAGE_VERIFY_MASK", "group") != "line"
     rects = [(b["x1"], b["y1"], b["x2"], b["y2"]) for b in boxes]
     if grouping and rects:
         # merge boxes that touch/overlap within a small gap
@@ -178,7 +178,7 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
     for (bx1, by1, bx2, by2) in rects:
         # Badges/ribbons carry a border around the glyphs; pad by a fraction of
         # the block's own height so the frame goes with the text.
-        extra = int((by2 - by1) * float(os.environ.get("IMAGE_VERIFY_MASK_PAD", "0.08")))
+        extra = int((by2 - by1) * float(os.environ.get("IMAGE_VERIFY_MASK_PAD", "0.85")))
         p_ = max(pad, extra)
         x1 = max(0, bx1 - p_); y1 = max(0, by1 - p_)
         x2 = min(w - 1, bx2 + p_); y2 = min(h - 1, by2 + p_)
@@ -293,6 +293,74 @@ def _hole_texture(img, mask, ring: int = 12):
     return float(px.std(axis=0).mean())
 
 
+_LAMA = None
+
+
+def _lama_model():
+    """Lazy LaMa (big-lama) singleton. Trained specifically for mask removal, so
+    it continues structure/texture across large holes instead of inventing new
+    objects (SDXL) or averaging colours (Telea/spill). This is the closest open
+    equivalent to Photoshop's content-aware fill."""
+    global _LAMA
+    if _LAMA is None:
+        from simple_lama_inpainting import SimpleLama
+        _LAMA = SimpleLama()
+    return _LAMA
+
+
+def lama_fill(img, mask):
+    cv2, np = _load_cv()
+    from PIL import Image
+    h, w = img.shape[:2]
+    model = _lama_model()
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    m = (mask > 0).astype(np.uint8) * 255
+    out = model(Image.fromarray(rgb), Image.fromarray(m))
+    res = np.array(out)
+    if res.ndim == 2:
+        res = cv2.cvtColor(res, cv2.COLOR_GRAY2RGB)
+    res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
+    if res.shape[:2] != (h, w):
+        res = res[:h, :w]
+    return res
+
+
+def _grow_mask_to_graphics(img, mask, boxes, max_scale=2.5, max_gain=5.0):
+    """Text boxes only cover the glyphs, so a badge's ring/border/arrow survives
+    and the model then *continues* that colour into the fill. Grow the mask to
+    the graphic that owns the text: keep background-differing components that
+    touch the text mask, but bound both component size and total growth so a
+    badge welded to the product can never swallow the product itself."""
+    cv2, np = _load_cv()
+    H, W = img.shape[:2]
+    extra = np.zeros((H, W), np.uint8)
+    base = int((mask > 0).sum())
+    for (x, y, w, h) in boxes:
+        ex, ey = int(w * 1.2) + 8, int(h * 1.2) + 8
+        x0, y0 = max(0, x - ex), max(0, y - ey)
+        x1, y1 = min(W, x + w + ex), min(H, y + h + ey)
+        crop = img[y0:y1, x0:x1]
+        if crop.size == 0:
+            continue
+        border = np.concatenate([crop[0], crop[-1], crop[:, 0], crop[:, -1]])
+        bg = np.median(border.reshape(-1, 3), axis=0)
+        diff = np.abs(crop.astype(np.int16) - bg.astype(np.int16)).sum(2)
+        ink = (diff > 55).astype(np.uint8)
+        ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        sub = mask[y0:y1, x0:x1]
+        cap = int(w * h * max_scale) + 200
+        add = np.zeros_like(ink)
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] <= cap and np.any(lab[sub > 0] == i):
+                add[lab == i] = 1
+        extra[y0:y1, x0:x1] |= add
+    grown = cv2.bitwise_or(mask, extra)
+    if base and int((grown > 0).sum()) > base * max_gain:
+        return mask  # runaway: keep the text-only mask
+    return cv2.dilate(grown, np.ones((5, 5), np.uint8))
+
+
 def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     """Content-aware fill: copy plausible surrounding texture into each hole.
 
@@ -311,10 +379,26 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     if img is None or not boxes:
         return img, 0
     mask, painted = build_mask(img, boxes, pad)
+    if boxes and os.environ.get("IMAGE_VERIFY_GROW_GRAPHICS", "1") == "1":
+        try:
+            mask = _grow_mask_to_graphics(img, mask, [(b["x1"], b["y1"], b["x2"] - b["x1"], b["y2"] - b["y1"]) for b in boxes])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[verify] mask grow skipped: {exc}", file=sys.stderr)
     if not painted:
         return img, 0
 
-    engine = (os.environ.get("IMAGE_VERIFY_FILL") or "spill").lower()
+    engine = (os.environ.get("IMAGE_VERIFY_FILL") or "lama").lower()
+    if engine == "lama":
+        try:
+            res = lama_fill(img, mask)
+            # composite only inside the holes, feathered
+            soft = cv2.GaussianBlur((mask > 0).astype(np.uint8) * 255, (3, 3), 0).astype(np.float32) / 255.0
+            soft = np.clip(soft * 1.0, 0, 1)[..., None]
+            out = (res.astype(np.float32) * soft + img.astype(np.float32) * (1 - soft))
+            return out.clip(0, 255).astype(np.uint8), painted
+        except Exception as exc:  # noqa: BLE001
+            print(f"[verify] LaMa unavailable ({type(exc).__name__}: {exc}); spill", file=sys.stderr)
+            engine = "spill"
     if engine == "spill":
         # One pass over the whole mask keeps the spill global and consistent
         # (per-region passes would each sample their own edge).
@@ -782,7 +866,8 @@ def verify_image(source: str, api_key: str, mode: str = "word") -> dict:
     # Only the HOLE SIZE predicts a bad spill: colour variance around a hole is
     # high even when the fill is perfect (a striped pool ring), while a large hole
     # over artwork always smears. ~1.5% of the frame is the break-even point.
-    if frac > float(os.environ.get("IMAGE_VERIFY_MAX_HOLE", "0.015")):
+    engine_mode = (os.environ.get("IMAGE_VERIFY_FILL") or "lama").lower()
+    if engine_mode != "lama" and frac > float(os.environ.get("IMAGE_VERIFY_MAX_HOLE", "0.015")):
         return {"source": source, "status": "needs-manual",
                 "claims": [{"label": b["label"], "text": b["text"]} for b in boxes],
                 "texture": round(tex, 1), "hole_frac": round(frac, 4),
