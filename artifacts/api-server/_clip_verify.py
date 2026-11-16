@@ -978,6 +978,11 @@ _OPS_SHORT_PATTERNS += [
     (r"\bL[O0]W[E3]ST\s*PRIC[E3]\b", "lowest price claim"),
     (r"\bBUY\s*N[O0]W\b", "buy now claim"),
     (r"\bWARRANT[YV]\b", "warranty claim"),
+    # OCR routinely drops/loses one glyph of a small badge ("LOWEST" -> "OWEST",
+    # "HOT SALE" -> "H0T SALE"). Narrow enough not to match normal product copy.
+    (r"\b[L1I|]?[O0]WEST\s*PRIC[E3]\b", "lowest price claim"),
+    (r"\bH[O0]T\s*SAL[E3]\b", "sale claim"),
+    (r"\bB[E3]ST\s*S[E3]LL[E3]R\b", "best seller claim"),
 ]
 # Compact variants (matched against the space-stripped text) — tolerate
 # OCR splitting/mis-reading words like "BEST SELLER" -> "BESTSEIIER".

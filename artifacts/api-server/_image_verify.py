@@ -83,8 +83,8 @@ def load_image(source: str):
         return None
 
 
-def detect_claims(img) -> list[dict]:
-    """OCR the image and return the claim text boxes found."""
+def _ocr_words(img) -> list[dict]:
+    """OCR the image once -> [{x1,y1,x2,y2,text,conf}]."""
     if img is None:
         return []
     reader = _reader()
@@ -92,40 +92,96 @@ def detect_claims(img) -> list[dict]:
         results = reader.readtext(img, detail=1, paragraph=False)
     except Exception:
         return []
-    lines = []
+    out = []
     for box, text, conf in results:
         t = (text or "").strip()
-        if len(t) < 3 or conf < 0.15:
+        if len(t) < 2 or conf < 0.15:
             continue
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
-        lines.append({"x1": int(min(xs)), "y1": int(min(ys)),
-                      "x2": int(max(xs)), "y2": int(max(ys)),
-                      "text": t, "conf": round(float(conf), 2)})
-    if not lines:
+        out.append({"x1": int(min(xs)), "y1": int(min(ys)),
+                    "x2": int(max(xs)), "y2": int(max(ys)),
+                    "text": t, "conf": round(float(conf), 2)})
+    return out
+
+
+def _group_words(words: list[dict], h: int, w: int) -> list[list[dict]]:
+    """Cluster nearby words into text blocks (headline + its sub-line, etc.)."""
+    items = sorted(words, key=lambda b: (b["y1"], b["x1"]))
+    groups: list[list[dict]] = []
+    for b in items:
+        placed = False
+        for g in groups:
+            gx1 = min(x["x1"] for x in g); gx2 = max(x["x2"] for x in g)
+            gy2 = max(x["y2"] for x in g)
+            overlap = min(gx2, b["x2"]) - max(gx1, b["x1"])
+            if overlap > 0 and b["y1"] <= gy2 + h * 0.04:
+                g.append(b); placed = True; break
+        if not placed:
+            groups.append([b])
+    return groups
+
+
+def detect_claims(img) -> list[dict]:
+    """OCR the image and return the claim text boxes found.
+
+    Claims are decided per TEXT BLOCK, not per line: overlays routinely split a
+    phrase across lines ("FREE" / "DELIVERY"), and a per-line matcher misses it.
+    The vocabulary itself comes from the pre-listing validator.
+    """
+    words = _ocr_words(img)
+    if not words:
         return []
-    # The validator decides on the whole OCR block (it needs the surrounding
-    # words for its packaging/context guards), then we keep the boxes of the
-    # lines that individually carry a claim.
-    if not _claim_hits(" ".join(b["text"] for b in lines)):
-        return []
-    out = []
-    for b in lines:
-        hits = _claim_hits(b["text"])
+    h, w = img.shape[:2]
+    out: list[dict] = []
+    for g in _group_words(words, h, w):
+        joined = " ".join(x["text"] for x in g)
+        hits = _claim_hits(joined)
         if hits:
-            out.append({**b, "label": hits[0]["label"]})
-    return out or [dict(b, label="claim") for b in lines]
+            for x in g:
+                out.append({**x, "label": hits[0]["label"]})
+    if out:
+        return out
+    if not _claim_hits(" ".join(x["text"] for x in words)):
+        return []
+    return [dict(x, label="claim") for x in words]
 
 
 def build_mask(img, boxes: list[dict], pad: int = 6):
-    """White mask over the claim boxes (dilated a little)."""
+    """White mask over the claim boxes (dilated a little).
+
+    Masks the BLOCK around each claim, not just the glyphs: "BEST SELLER" is
+    printed on a white ribbon with a red border, so masking only the letters
+    leaves the ribbon behind. The block box (padded) lets the inpaint rebuild the
+    whole badge area with the surrounding product/background.
+    """
     cv2, np = _load_cv()
     h, w = img.shape[:2]
     mask = np.zeros((h, w), dtype=np.uint8)
     painted = 0
-    for b in boxes:
-        x1 = max(0, b["x1"] - pad); y1 = max(0, b["y1"] - pad)
-        x2 = min(w - 1, b["x2"] + pad); y2 = min(h - 1, b["y2"] + pad)
+    grouping = os.environ.get("IMAGE_VERIFY_MASK", "group") != "line"
+    rects = [(b["x1"], b["y1"], b["x2"], b["y2"]) for b in boxes]
+    if grouping and rects:
+        # merge boxes that touch/overlap within a small gap
+        gap = int(min(h, w) * 0.012)
+        merged: list[list[int]] = []
+        for r in rects:
+            for m in merged:
+                if not (r[0] > m[2] + gap or r[2] < m[0] - gap or
+                        r[1] > m[3] + gap or r[3] < m[1] - gap):
+                    m[0] = min(m[0], r[0]); m[1] = min(m[1], r[1])
+                    m[2] = max(m[2], r[2]); m[3] = max(m[3], r[3])
+                    break
+            else:
+                merged.append(list(r))
+        rects = [tuple(m) for m in merged]
+    for (bx1, by1, bx2, by2) in rects:
+        # Badges/ribbons carry a border around the glyphs; pad by a fraction of
+        # the block's own height so the frame goes with the text.
+        extra = int((by2 - by1) * float(os.environ.get("IMAGE_VERIFY_MASK_PAD", "0.30")))
+        p_ = max(pad, extra)
+        x1 = max(0, bx1 - p_); y1 = max(0, by1 - p_)
+        x2 = min(w - 1, bx2 + p_); y2 = min(h - 1, by2 + p_)
         if x2 <= x1 or y2 <= y1:
             continue
         cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
@@ -152,8 +208,17 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     # 1) MCP inpaint, composited inside the mask only.
     try:
         import _image_mcp
-        ok, ibuf = cv2.imencode(".png", img)
-        ok2, mbuf = cv2.imencode(".png", mask)
+        h0, w0 = img.shape[:2]
+        # The MCP endpoint 413s on big PNG payloads (a 2428x1830 product shot).
+        # Inpainting works at ~1280px, so downscale the pair and map the result
+        # back - the composite below still uses the full-resolution original.
+        limit = int(os.environ.get("IMAGE_VERIFY_MCP_MAX_SIDE", "1280"))
+        scale = min(1.0, limit / float(max(h0, w0)))
+        src = img if scale >= 1.0 else cv2.resize(img, (int(w0 * scale), int(h0 * scale)))
+        msk = mask if scale >= 1.0 else cv2.resize(mask, (int(w0 * scale), int(h0 * scale)),
+                                                  interpolation=cv2.INTER_NEAREST)
+        ok, ibuf = cv2.imencode(".png", src)
+        ok2, mbuf = cv2.imencode(".png", msk)
         if ok and ok2:
             raw = _image_mcp.inpaint(ibuf.tobytes(), mbuf.tobytes(),
                                      prompt=("clean seamless product photo background, "
@@ -161,8 +226,8 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
             if raw:
                 gen = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if gen is not None:
-                    if gen.shape[:2] != img.shape[:2]:
-                        gen = cv2.resize(gen, (img.shape[1], img.shape[0]))
+                    if gen.shape[:2] != (h0, w0):
+                        gen = cv2.resize(gen, (w0, h0))
                     soft = cv2.GaussianBlur(mask, (7, 7), 0).astype(np.float32) / 255.0
                     soft = soft[..., None]
                     out = (gen.astype(np.float32) * soft + img.astype(np.float32) * (1 - soft))
@@ -590,7 +655,24 @@ def process_sheet(input_path: str, out_path: str, api_key: str,
         if not cols:
             cols = [i for i, h in enumerate(header) if IMAGE_HEADER.search(h)]
     if not cols:
-        return {"error": "no image URL column found", "header": header}
+        # Headerless export ("a list of links"): row 1 is data, so sniff the
+        # columns that actually hold URLs and add a proper header row.
+        data_rows = rows if any(_is_url(c) for c in rows[0]) else rows[1:]
+        seen: dict[int, int] = {}
+        for row in data_rows[:50]:
+            for i, cell in enumerate(row):
+                if _is_url(cell):
+                    seen[i] = seen.get(i, 0) + 1
+        cols = sorted(seen)
+        if not cols:
+            return {"error": "no image URL column found", "header": header}
+        ncols = max(len(r) for r in rows)
+        ws.insert_rows(1)
+        header = [""] * ncols
+        for n, i in enumerate(cols):
+            header[i] = "Image URL" if n == 0 else f"Image URL {n + 1}"
+            ws.cell(row=1, column=i + 1, value=header[i])
+        rows = [header] + data_rows
 
     tasks = []
     for r, row in enumerate(rows[1:], start=2):
@@ -601,7 +683,8 @@ def process_sheet(input_path: str, out_path: str, api_key: str,
         tasks = tasks[:limit]
 
     report = []
-    url_col = len(header) + 1
+    ncols = max(len(r) for r in rows)
+    url_col = ncols + 1
     claim_col = url_col + 1
     status_col = url_col + 2
     ws.cell(row=1, column=url_col, value="Verified Image URL")
