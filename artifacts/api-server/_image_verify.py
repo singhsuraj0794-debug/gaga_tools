@@ -178,10 +178,16 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
     for (bx1, by1, bx2, by2) in rects:
         # Badges/ribbons carry a border around the glyphs; pad by a fraction of
         # the block's own height so the frame goes with the text.
-        extra = int((by2 - by1) * float(os.environ.get("IMAGE_VERIFY_MASK_PAD", "0.85")))
+        # Circular seals are far wider than their two text lines, so a per-axis
+        # fraction leaves a crescent of gold ring behind. Floor each axis pad by
+        # a share of the longer side; cap it so a flat ribbon cannot turn into a
+        # full-height hole.
+        frac = float(os.environ.get("IMAGE_VERIFY_MASK_PAD", "0.8"))
+        extra = int((by2 - by1) * frac)
         p_ = max(pad, extra)
-        x1 = max(0, bx1 - p_); y1 = max(0, by1 - p_)
-        x2 = min(w - 1, bx2 + p_); y2 = min(h - 1, by2 + p_)
+        pad_x = pad_y = p_
+        x1 = max(0, bx1 - pad_x); y1 = max(0, by1 - pad_y)
+        x2 = min(w - 1, bx2 + pad_x); y2 = min(h - 1, by2 + pad_y)
         if x2 <= x1 or y2 <= y1:
             continue
         cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
@@ -321,22 +327,95 @@ def lama_fill(img, mask):
         res = cv2.cvtColor(res, cv2.COLOR_GRAY2RGB)
     res = cv2.cvtColor(res, cv2.COLOR_RGB2BGR)
     if res.shape[:2] != (h, w):
-        res = res[:h, :w]
+        res = cv2.resize(res, (w, h), interpolation=cv2.INTER_LINEAR)
     return res
 
 
-def _grow_mask_to_graphics(img, mask, boxes, max_scale=2.5, max_gain=5.0):
+def poisson_blend(img, filled, mask):
+    """Gradient-domain composite (Photoshop's 'colour adaptation'): each hole is
+    placed so its boundary gradients match the untouched pixels, which removes
+    the tone step and haze a plain alpha blend leaves behind.
+
+    Blended per connected component: seamlessClone shifts the source by the
+    offset of `center` from the component's bounding box, so a mean-of-pixels
+    centre (or a giant multi-region bbox) puts the ROI out of range.
+    """
+    cv2, np = _load_cv()
+    H, W = img.shape[:2]
+    base = (mask > 0).astype(np.uint8)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(base, 8)
+    res = img.copy()
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] < 40:
+            continue
+        comp = (lab == i).astype(np.uint8)
+        comp = cv2.dilate(comp, np.ones((9, 9), np.uint8))
+        x, y = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP]
+        w, h = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        pad = 6
+        if x - pad < 1 or y - pad < 1 or x + w + pad > W - 1 or y + h + pad > H - 1:
+            # flush against the frame: plain but seamless-enough alpha blend
+            soft = cv2.GaussianBlur(comp * 255, (5, 5), 0).astype(np.float32) / 255.0
+            res = (filled.astype(np.float32) * soft[..., None]
+                   + res.astype(np.float32) * (1 - soft[..., None])).clip(0, 255).astype(np.uint8)
+            continue
+        centre = (x + w // 2, y + h // 2)
+        try:
+            res = cv2.seamlessClone(filled, res, comp * 255, centre, cv2.NORMAL_CLONE)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[verify] poisson fallback: {exc}", file=sys.stderr)
+            soft = cv2.GaussianBlur(comp * 255, (5, 5), 0).astype(np.float32) / 255.0
+            res = (filled.astype(np.float32) * soft[..., None]
+                   + res.astype(np.float32) * (1 - soft[..., None])).clip(0, 255).astype(np.uint8)
+    return res
+
+
+def _residual_hue(orig, mask, band=30, min_area=30, max_frac=0.10):
+    """A sealed badge's ring is usually the most saturated colour in the pixels
+    hugging the hole. Find the dominant saturated hue just outside the mask and
+    return only those pixels (bounded in area) as extra mask — this removes a
+    leftover gold ring without touching the product's own saturated areas."""
+    cv2, np = _load_cv()
+    base = (mask > 0).astype(np.uint8)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (band * 2 + 1, band * 2 + 1))
+    ring = cv2.dilate(base, k) & (1 - base)
+    hsv = cv2.cvtColor(orig, cv2.COLOR_BGR2HSV)
+    h, s_, v = hsv[..., 0].astype(np.int16), hsv[..., 1].astype(np.int16), hsv[..., 2].astype(np.int16)
+    cand = (ring > 0) & (s_ > 130) & (v > 70)
+    if int(cand.sum()) < min_area:
+        return None
+    hues = h[cand]
+    hist = np.bincount((hues // 8).astype(np.int32), minlength=23)
+    mode = int(hist.argmax())
+    lo, hi = mode * 8 - 10, mode * 8 + 10
+    pick = cand & (((h >= lo) & (h <= hi)) | ((h + 180 >= lo) & (h + 180 <= hi)))
+    if int(pick.sum()) < min_area:
+        return None
+    m = pick.astype(np.uint8)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(m, 8)
+    hole = max(1, int(base.sum()))
+    out = np.zeros_like(base)
+    for i in range(1, n):
+        a = stats[i, cv2.CC_STAT_AREA]
+        if min_area <= a <= hole * max_frac:
+            out[lab == i] = 1
+    if out.sum() < min_area:
+        return None
+    return cv2.dilate(out, np.ones((7, 7), np.uint8))
+
+
+def _grow_mask_to_graphics(img, mask, boxes, max_scale=1.6, max_gain=2.6):
     """Text boxes only cover the glyphs, so a badge's ring/border/arrow survives
     and the model then *continues* that colour into the fill. Grow the mask to
-    the graphic that owns the text: keep background-differing components that
-    touch the text mask, but bound both component size and total growth so a
-    badge welded to the product can never swallow the product itself."""
+    the graphic that owns the text, but bound both component size and total
+    growth so a badge welded to the product can never swallow the product."""
     cv2, np = _load_cv()
     H, W = img.shape[:2]
     extra = np.zeros((H, W), np.uint8)
     base = int((mask > 0).sum())
     for (x, y, w, h) in boxes:
-        ex, ey = int(w * 1.2) + 8, int(h * 1.2) + 8
+        ex, ey = int(w * 0.9) + 8, int(h * 0.9) + 8
         x0, y0 = max(0, x - ex), max(0, y - ey)
         x1, y1 = min(W, x + w + ex), min(H, y + h + ey)
         crop = img[y0:y1, x0:x1]
@@ -357,7 +436,7 @@ def _grow_mask_to_graphics(img, mask, boxes, max_scale=2.5, max_gain=5.0):
         extra[y0:y1, x0:x1] |= add
     grown = cv2.bitwise_or(mask, extra)
     if base and int((grown > 0).sum()) > base * max_gain:
-        return mask  # runaway: keep the text-only mask
+        return mask
     return cv2.dilate(grown, np.ones((5, 5), np.uint8))
 
 
@@ -391,11 +470,7 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     if engine == "lama":
         try:
             res = lama_fill(img, mask)
-            # composite only inside the holes, feathered
-            soft = cv2.GaussianBlur((mask > 0).astype(np.uint8) * 255, (3, 3), 0).astype(np.float32) / 255.0
-            soft = np.clip(soft * 1.0, 0, 1)[..., None]
-            out = (res.astype(np.float32) * soft + img.astype(np.float32) * (1 - soft))
-            return out.clip(0, 255).astype(np.uint8), painted
+            return poisson_blend(img, res, mask), painted
         except Exception as exc:  # noqa: BLE001
             print(f"[verify] LaMa unavailable ({type(exc).__name__}: {exc}); spill", file=sys.stderr)
             engine = "spill"
@@ -873,12 +948,49 @@ def verify_image(source: str, api_key: str, mode: str = "word") -> dict:
                 "texture": round(tex, 1), "hole_frac": round(frac, 4),
                 "url": "", "seconds": round(time.time() - t0, 1)}
     cleaned, painted = remove_claims(img, boxes)
+    # Residual pass: OCR the result. Leftover claim text means the fill rebuilt
+    # glyph edges (or the mask clipped a badge); re-mask those words a bit wider
+    # and refill, so nothing is left half-erased.
+    passes = 0
+    max_passes = max(0, int(os.environ.get("IMAGE_VERIFY_REFILL_PASSES", "2")))
+    _c, _np = _load_cv()
+    while passes < max_passes:
+        leftover = detect_claims(cleaned)
+        if not leftover:
+            break
+        grown = []
+        for b in leftover:
+            padx = int((b["x2"] - b["x1"]) * 0.35) + 6
+            pady = int((b["y2"] - b["y1"]) * 0.35) + 6
+            grown.append(dict(b, x1=max(0, b["x1"] - padx), y1=max(0, b["y1"] - pady),
+                              x2=min(cleaned.shape[1], b["x2"] + padx),
+                              y2=min(cleaned.shape[0], b["y2"] + pady)))
+        cleaned, _p2 = remove_claims(cleaned, grown)
+        painted += _p2
+        passes += 1
+    # Remnant pass: a badge ring/edge that fell outside the mask is now a hard
+    # edge against the rebuilt area — add it to the mask and refill.
+    for _ in range(max(0, int(os.environ.get("IMAGE_VERIFY_REMNANT_PASSES", "0")))):
+        tmask, _ = build_mask(cleaned, boxes)
+        extra = _residual_hue(img, tmask)
+        if extra is None:
+            break
+        m2 = np.maximum(tmask, extra)
+        native, _np = _load_cv()
+        if (os.environ.get("IMAGE_VERIFY_FILL") or "lama").lower() == "lama":
+            try:
+                cleaned = poisson_blend(cleaned, lama_fill(cleaned, m2), m2)
+            except Exception:
+                break
+        else:
+            cleaned = smart_spill_fill(cleaned, m2)
     url = upload_imgbb(encode_png(cleaned), api_key, name=os.path.basename(str(source)) or "image.png")
     return {
         "source": source,
         "status": "fixed" if url else "fixed-no-upload",
         "claims": [{"label": b["label"], "text": b["text"], "box": [b["x1"], b["y1"], b["x2"], b["y2"]]} for b in boxes],
         "boxes_removed": painted,
+        "refill_passes": passes,
         "url": url,
         "seconds": round(time.time() - t0, 1),
     }
