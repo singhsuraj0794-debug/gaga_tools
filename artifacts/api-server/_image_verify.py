@@ -147,6 +147,35 @@ def detect_claims(img) -> list[dict]:
     return [dict(x, label="claim") for x in words]
 
 
+def _seal_radius(img, cx, cy, md, min_md=80):
+    """Detect a circular badge (seal) around a text block.
+
+    Sampling rings outward: while the ring of pixels is *mixed* (gold ring
+    against the page/product) its colour variance stays high; once the circle
+    clears the badge the samples become uniform background and the variance
+    collapses. The last high-variance radius is the badge's outer edge — a
+    banner or plain text does not produce that plateau-then-collapse.
+    """
+    cv2, np = _load_cv()
+    H, W = img.shape[:2]
+    if md < min_md:
+        return None
+    last_high = None
+    for f in np.arange(0.55, 1.35, 0.05):
+        r = int(md * f)
+        if r < 8 or cx - r < 1 or cy - r < 1 or cx + r >= W - 1 or cy + r >= H - 1:
+            continue
+        pts = []
+        for t in np.linspace(0, 2 * np.pi, 200, endpoint=False):
+            pts.append(img[int(cy + r * np.sin(t)), int(cx + r * np.cos(t))].astype(float))
+        std = float(np.array(pts).std(axis=0).mean())
+        if std >= 70.0:
+            last_high = r
+        elif last_high is not None and std < 60.0:
+            return last_high
+    return None
+
+
 def build_mask(img, boxes: list[dict], pad: int = 6):
     """White mask over the claim boxes (dilated a little).
 
@@ -192,6 +221,17 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
             continue
         cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
         painted += 1
+    if os.environ.get("IMAGE_VERIFY_SEAL", "1") == "1":
+        # A circular seal extends well past its text lines; a plain rectangle
+        # leaves a crescent of the ring behind, which the model then continues.
+        # Detect the ring per line group and add the whole disc.
+        for b in boxes:
+            md = max(b["x2"] - b["x1"], b["y2"] - b["y1"])
+            rad = _seal_radius(img, (b["x1"] + b["x2"]) // 2,
+                               (b["y1"] + b["y2"]) // 2, md)
+            if rad:
+                cv2.circle(mask, ((b["x1"] + b["x2"]) // 2, (b["y1"] + b["y2"]) // 2),
+                           int(rad) + 10, 255, -1)
     if painted:
         mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
     return mask, painted
@@ -329,6 +369,31 @@ def lama_fill(img, mask):
     if res.shape[:2] != (h, w):
         res = cv2.resize(res, (w, h), interpolation=cv2.INTER_LINEAR)
     return res
+
+
+def _flatten_hole(img, filled, mask, scale=8, sigma=9):
+    """Match the fill's LOW frequencies to the surroundings.
+
+    Inpainting models drift inside a large hole: the result keeps the boundary
+    (Poisson does that) but the interior can sit brighter or flatter than the
+    surface it was cut from, which reads as a glow. Extrapolate the untouched
+    image across the hole at low resolution, then subtract the low-frequency
+    difference from the fill. Detail is preserved; only the tone is corrected.
+    """
+    cv2, np = _load_cv()
+    H, W = img.shape[:2]
+    sw, sh = max(2, W // scale), max(2, H // scale)
+    small = cv2.resize(img, (sw, sh), interpolation=cv2.INTER_AREA)
+    small_f = cv2.resize(filled, (sw, sh), interpolation=cv2.INTER_AREA)
+    small_m = (cv2.resize(mask, (sw, sh), interpolation=cv2.INTER_NEAREST) > 0).astype(np.uint8)
+    if int(small_m.sum()) == 0:
+        return filled
+    ref = cv2.inpaint(small, small_m, max(3, sh // 12), cv2.INPAINT_NS).astype(np.float32)
+    diff = cv2.GaussianBlur(small_f.astype(np.float32) - ref, (0, 0), sigma)
+    up = cv2.resize(diff, (W, H), interpolation=cv2.INTER_LINEAR)
+    soft = cv2.GaussianBlur((mask > 0).astype(np.uint8) * 255, (0, 0), 4).astype(np.float32) / 255.0
+    out = filled.astype(np.float32) - up * soft[..., None]
+    return out.clip(0, 255).astype(np.uint8)
 
 
 def poisson_blend(img, filled, mask):
@@ -470,7 +535,10 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     if engine == "lama":
         try:
             res = lama_fill(img, mask)
-            return poisson_blend(img, res, mask), painted
+            out = poisson_blend(img, res, mask)
+            if os.environ.get("IMAGE_VERIFY_FLATTEN", "1") == "1":
+                out = _flatten_hole(img, out, mask)
+            return out, painted
         except Exception as exc:  # noqa: BLE001
             print(f"[verify] LaMa unavailable ({type(exc).__name__}: {exc}); spill", file=sys.stderr)
             engine = "spill"
