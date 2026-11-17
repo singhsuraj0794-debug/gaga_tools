@@ -147,33 +147,69 @@ def detect_claims(img) -> list[dict]:
     return [dict(x, label="claim") for x in words]
 
 
-def _seal_radius(img, cx, cy, md, min_md=80):
-    """Detect a circular badge (seal) around a text block.
+def _seal_disc(img, box: dict, min_md: int = 80):
+    """Detect a dark circular seal around a text block -> {"cx","cy","r"} or None.
 
-    Sampling rings outward: while the ring of pixels is *mixed* (gold ring
-    against the page/product) its colour variance stays high; once the circle
-    clears the badge the samples become uniform background and the variance
-    collapses. The last high-variance radius is the badge's outer edge — a
-    banner or plain text does not produce that plateau-then-collapse.
+    A circular seal ("BEST QUALITY") is a dark disc carrying a bright ring and
+    bright lettering, so the dark interior is the reliable signal: threshold the
+    dark pixels, fill the lettering holes, and the blob that *contains the text*
+    is the seal. A ribbon or plain text has no dark disc behind it, so nothing
+    fires. The disc's own circle is used (not an outward scan), so the mask hugs
+    the badge instead of swallowing the product behind it.
     """
     cv2, np = _load_cv()
     H, W = img.shape[:2]
+    x1, y1, x2, y2 = int(box["x1"]), int(box["y1"]), int(box["x2"]), int(box["y2"])
+    md = max(x2 - x1, y2 - y1)
     if md < min_md:
         return None
-    last_high = None
-    for f in np.arange(0.55, 1.35, 0.05):
-        r = int(md * f)
-        if r < 8 or cx - r < 1 or cy - r < 1 or cx + r >= W - 1 or cy + r >= H - 1:
-            continue
-        pts = []
-        for t in np.linspace(0, 2 * np.pi, 200, endpoint=False):
-            pts.append(img[int(cy + r * np.sin(t)), int(cx + r * np.cos(t))].astype(float))
-        std = float(np.array(pts).std(axis=0).mean())
-        if std >= 70.0:
-            last_high = r
-        elif last_high is not None and std < 60.0:
-            return last_high
-    return None
+    pad = int(md * 3)
+    X0, Y0 = max(0, x1 - pad), max(0, y1 - pad)
+    X1, Y1 = min(W, x2 + pad), min(H, y2 + pad)
+    crop = img[Y0:Y1, X0:X1]
+    if crop.size == 0:
+        return None
+    dark = (crop.max(axis=2) < 110).astype(np.uint8)
+    # the badge's bright ring/lettering is gold: take it with the dark disc so
+    # no crescent of ring is left outside the mask
+    gold = ((crop[:, :, 2] > 140) & (crop[:, :, 1] > 100) &
+            (crop[:, :, 0] < 120)).astype(np.uint8)
+    k = max(3, int(md * 0.10)) | 1
+    dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    hh, ww = dark.shape
+    flood = dark.copy()
+    ffmask = np.zeros((hh + 2, ww + 2), np.uint8)
+    cv2.floodFill(flood, ffmask, (0, 0), 1)
+    holes = ((flood == 0) & (dark == 0)).astype(np.uint8)
+    dark = cv2.bitwise_or(dark, holes)
+    gold = cv2.morphologyEx(gold, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    dark = cv2.bitwise_or(dark, gold)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    tcx = min(max((x1 + x2) // 2 - X0, 0), ww - 1)
+    tcy = min(max((y1 + y2) // 2 - Y0, 0), hh - 1)
+    idx = int(labels[tcy, tcx])
+    if idx == 0 or idx >= n:
+        return None                      # no dark disc behind the text
+    (ccx, ccy), r = cv2.minEnclosingCircle(
+        np.argwhere(labels == idx)[:, ::-1].astype(np.float32))
+    area = float(stats[idx, cv2.CC_STAT_AREA])
+    if r <= 0:
+        return None
+    circ = area / (np.pi * r * r)
+    if circ < 0.72:
+        return None                     # a disc, not a whole dark surface
+    if not (0.55 * md <= r <= 1.5 * md):
+        return None                     # a seal is roughly the text block's size
+    if area < 0.30 * np.pi * (md / 2.0) ** 2:
+        return None
+    if np.pi * r * r > 0.25 * H * W:
+        return None                     # never mask a quarter of the frame
+    # every corner of the text block must sit inside the disc
+    for (px, py) in ((x1 - X0, y1 - Y0), (x2 - X0, y1 - Y0),
+                     (x1 - X0, y2 - Y0), (x2 - X0, y2 - Y0)):
+        if np.hypot(px - ccx, py - ccy) > r * 0.95:
+            return None
+    return {"cx": int(ccx + X0), "cy": int(ccy + Y0), "r": int(r)}
 
 
 def build_mask(img, boxes: list[dict], pad: int = 6):
@@ -224,14 +260,12 @@ def build_mask(img, boxes: list[dict], pad: int = 6):
     if os.environ.get("IMAGE_VERIFY_SEAL", "1") == "1":
         # A circular seal extends well past its text lines; a plain rectangle
         # leaves a crescent of the ring behind, which the model then continues.
-        # Detect the ring per line group and add the whole disc.
+        # Detect the badge's own dark disc and mask exactly that.
         for b in boxes:
-            md = max(b["x2"] - b["x1"], b["y2"] - b["y1"])
-            rad = _seal_radius(img, (b["x1"] + b["x2"]) // 2,
-                               (b["y1"] + b["y2"]) // 2, md)
-            if rad:
-                cv2.circle(mask, ((b["x1"] + b["x2"]) // 2, (b["y1"] + b["y2"]) // 2),
-                           int(rad) + 10, 255, -1)
+            d = _seal_disc(img, b)
+            if d:
+                pad_r = max(6, int(d["r"] * 0.08))
+                cv2.circle(mask, (d["cx"], d["cy"]), int(d["r"]) + pad_r, 255, -1)
     if painted:
         mask = cv2.dilate(mask, np.ones((5, 5), np.uint8), iterations=1)
     return mask, painted
@@ -396,6 +430,73 @@ def _flatten_hole(img, filled, mask, scale=8, sigma=9):
     return out.clip(0, 255).astype(np.uint8)
 
 
+def _region_composite(img, filled, mask, tol=45, feather=1.4):
+    """Photoshop-style split fill: page background vs product.
+
+    A model inpaints the hole as ONE surface, so a badge that straddles the
+    product edge blends both: the white page picks up the product's colour (the
+    "smudge") and the product's silhouette is lost. Here the hole is split by the
+    product silhouette (recovered from the untouched pixels, closed and dilated
+    slightly), and:
+      page part -> the page's own colour plus its measured grain (crisp, no haze)
+      product   -> the model's fill, untouched (structure stays where it belongs)
+    Only runs when the page background dominates the frame (packshots); a busy
+    photo keeps the model's fill as-is.
+    """
+    cv2, np = _load_cv()
+    hole = mask > 0
+    if not hole.any():
+        return filled
+    valid = ~hole
+    H, W = img.shape[:2]
+    px = img[valid].reshape(-1, 3).astype(float)
+    if len(px) < 50:
+        return filled
+    bright = px.min(axis=1) > 200
+    if bright.sum() < max(200, len(px) * 0.15):
+        bright = np.zeros(len(px), bool)
+        bright[np.argsort(px.sum(axis=1))[-max(500, len(px) // 5):]] = True
+    bg = np.median(px[bright], axis=0)
+    if float(np.linalg.norm(px - bg, axis=1).max()) < tol:
+        return filled                     # nothing but background already
+    flat_px = px[np.linalg.norm(px - bg, axis=1) <= tol]
+    if len(flat_px) and float(np.percentile(flat_px.sum(1), 95) -
+                              np.percentile(flat_px.sum(1), 5)) > 90:
+        return filled                     # shadowed/gradient backdrop: model is safer
+    # split the hole between product and page by nearest untouched pixel of each
+    # kind (a Voronoi bisector) - a badge sitting INSIDE the product band is then
+    # rebuilt as product, which a dilated silhouette can never reach
+    nonprod = (valid & (np.linalg.norm(img.astype(float) - bg, axis=2) <= tol)).astype(np.uint8)
+    # only the page's own region counts as background: it must reach the frame.
+    # Specular highlights inside the product are also near-white, and treating
+    # them as page would paint flat white boxes across the product.
+    nn, ll, stt, _ce = cv2.connectedComponentsWithStats(nonprod, 8)
+    # page regions: genuinely large (a specular highlight is not) - frame contact
+    # alone is not reliable because product frames often box the page in
+    big = [i for i in range(1, nn) if stt[i, cv2.CC_STAT_AREA] >= max(0.02 * H * W, 3000)]
+    if not big:
+        return filled
+    bg_seed = np.isin(ll, big).astype(np.uint8)
+    prod_seed = valid.astype(np.uint8) - bg_seed
+    if prod_seed.sum() < 50 or bg_seed.sum() < 50:
+        return filled
+    d_prod = cv2.distanceTransform(1 - prod_seed, cv2.DIST_L2, 5)
+    d_bg = cv2.distanceTransform(1 - bg_seed, cv2.DIST_L2, 5)
+    prod_hole = hole & (d_prod <= d_bg)
+    bgh = hole & ~prod_hole
+    out = filled.astype(np.float32)
+    if bgh.any():
+        near_bg = valid & (np.linalg.norm(img.astype(float) - bg, axis=2) <= tol)
+        grain = float(img[near_bg].astype(float).std()) if near_bg.any() else 3.0
+        grain = min(max(grain, 1.2), 6.0)
+        rng = np.random.default_rng(7)
+        flat = np.clip(bg[None, None, :] +
+                       rng.normal(0.0, grain, (H, W, 1)).repeat(3, axis=2), 0, 255)
+        out[bgh] = flat[bgh]
+    soft = cv2.GaussianBlur(hole.astype(np.float32), (0, 0), feather)[..., None]
+    return np.clip(out * soft + img.astype(np.float32) * (1 - soft), 0, 255).astype(np.uint8)
+
+
 def poisson_blend(img, filled, mask):
     """Gradient-domain composite (Photoshop's 'colour adaptation'): each hole is
     placed so its boundary gradients match the untouched pixels, which removes
@@ -536,8 +637,15 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
         try:
             res = lama_fill(img, mask)
             out = poisson_blend(img, res, mask)
+            # tone-correct the model's fill FIRST, then replace the page part with
+            # the page's own colour - otherwise flattening tints that flat fill
             if os.environ.get("IMAGE_VERIFY_FLATTEN", "1") == "1":
                 out = _flatten_hole(img, out, mask)
+            if os.environ.get("IMAGE_VERIFY_REGIONS", "1") == "1":
+                try:
+                    out = _region_composite(img, out, mask)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[verify] region composite skipped: {exc}", file=sys.stderr)
             return out, painted
         except Exception as exc:  # noqa: BLE001
             print(f"[verify] LaMa unavailable ({type(exc).__name__}: {exc}); spill", file=sys.stderr)
