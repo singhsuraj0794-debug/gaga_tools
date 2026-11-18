@@ -1110,41 +1110,121 @@ def check_rule1(image_urls: List[str]) -> dict:
     return {"passed": True, "count": count, "message": f"{count} images (within 4-10 range)"}
 
 
+_DUP_SIDE = 96
+_DUP_ASPECT_TOL = 0.02
+_DUP_IOU_MIN = 0.90
+_DUP_NCC_MIN = 0.97
+_DUP_MAD_MAX = 0.06
+
+
+def _dup_signature(img: "Image.Image"):
+    """96x96 RGB pixels, grey plane, and a non-white "product" mask.
+
+    Computed once per image so a 10-image listing costs 10 resizes and then 45
+    cheap vector comparisons.
+    """
+    import numpy as np
+
+    rgb = np.asarray(
+        img.convert("RGB").resize((_DUP_SIDE, _DUP_SIDE), Image.LANCZOS), np.float32
+    )
+    grey = rgb.mean(axis=2)
+    mask = np.abs(rgb - 255.0).max(axis=2) > 12.0
+    return rgb, grey, mask
+
+
+def _ncc(a, b) -> float:
+    import numpy as np
+
+    if a.size == 0:
+        return 0.0
+    a = a - a.mean()
+    b = b - b.mean()
+    den = float(np.sqrt((a * a).sum() * (b * b).sum()))
+    return float((a * b).sum() / den) if den > 0 else 0.0
+
+
+def _same_picture(sig_a, sig_b) -> bool:
+    """True only when two images are the SAME photo (re-encoded/resized).
+
+    pHash alone could not tell. It is luminance-only and keeps 64 low-frequency
+    bits, so the same shot recoloured (red mug -> blue mug) hashes to distance ~2
+    and was reported as a duplicate, while a genuinely different photo with a
+    similar silhouette could land at 0-4. The comparison here is made on the
+    product's own pixels (the white backdrop is excluded) and uses colour as well
+    as structure:
+      • silhouettes must overlap almost exactly
+      • brightness structure must correlate
+      • RGB difference must be small — this is what rejects colour variants
+    """
+    import numpy as np
+
+    ra, ga, ma = sig_a
+    rb, gb, mb = sig_b
+    union = ma | mb
+    if not union.any():
+        return False  # two blank images are not "the same picture"
+    if int((ma & mb).sum()) / int(union.sum()) < _DUP_IOU_MIN:
+        return False
+    if _ncc(ga[union], gb[union]) < _DUP_NCC_MIN:
+        return False
+    mad = float(np.abs(ra[union] - rb[union]).mean() / 255.0)
+    return mad <= _DUP_MAD_MAX
+
+
 def check_rule2(image_urls: List[str]) -> dict:
-    """RULE 2: Duplicate detection (exact URL + perceptual hash)."""
+    """RULE 2: duplicate images (exact URL + same-photo detection)."""
     # Exact URL dedup
     unique_urls = list(dict.fromkeys(image_urls))
     exact_dupes = len(image_urls) - len(unique_urls)
 
-    # Perceptual hash dedup on loaded images
-    loaded = []
+    loaded: List[tuple] = []
     for url in unique_urls[:10]:
         img = load_image(url)
-        if img:
+        if img is not None:
             loaded.append((url, img))
 
-    phash_dupes = 0
+    # Group images that are the same photo (union-find) and count how many are
+    # redundant — counting matching PAIRS overstated it (one image that matches
+    # two others was counted twice, so "distinct" went wrong).
+    dup_images = 0
     if len(loaded) > 1:
-        try:
-            import imagehash
-            hashes = [(url, imagehash.phash(img)) for url, img in loaded]
-            seen = set()
-            for i, (url_i, h_i) in enumerate(hashes):
-                for url_j, h_j in hashes[i+1:]:
-                    if h_i - h_j <= 2:  # very similar
-                        phash_dupes += 1
-                        break
-        except ImportError:
-            pass
+        sigs = [(url, img, _dup_signature(img)) for url, img in loaded]
+        parent = list(range(len(sigs)))
 
-    total_dupes = exact_dupes + phash_dupes
-    distinct = len(image_urls) - total_dupes
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for i in range(len(sigs)):
+            for j in range(i + 1, len(sigs)):
+                img_i, img_j = sigs[i][1], sigs[j][1]
+                ratio_i = img_i.width / max(1, img_i.height)
+                ratio_j = img_j.width / max(1, img_j.height)
+                if abs(ratio_i - ratio_j) / max(ratio_i, ratio_j) > _DUP_ASPECT_TOL:
+                    continue
+                if _same_picture(sigs[i][2], sigs[j][2]):
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        parent[rj] = ri
+
+        groups: Dict[int, List[int]] = {}
+        for i in range(len(sigs)):
+            groups.setdefault(find(i), []).append(i)
+        for members in groups.values():
+            if len(members) > 1:
+                dup_images += len(members) - 1
+
+    total_dupes = exact_dupes + dup_images
+    distinct = max(0, len(image_urls) - total_dupes)
     # Flag only when there are >=2 duplicate images: 1 duplicate (3 distinct out
     # of 4) is tolerated; >=2 duplicates (<=2 distinct out of 4, or 3 distinct
     # out of >4) is a real problem.
     if total_dupes >= 2:
         return {"passed": False, "distinct": distinct, "total": len(image_urls),
-                "message": f"{total_dupes} duplicate(s) detected — {distinct} distinct out of {len(image_urls)}"}
+                "message": f"{total_dupes} duplicate image(s) — {distinct} distinct out of {len(image_urls)}"}
     return {"passed": True, "distinct": distinct, "total": len(image_urls),
             "message": f"{len(image_urls)} images ({distinct} distinct, {total_dupes} duplicate) — within tolerance"}
 

@@ -1687,6 +1687,82 @@ def _to_title_case(text: str) -> str:
     return re.sub(r"\b\w+(?:['\u2019]\w+)?\b", _fix, text)
 
 
+
+# ── Brand handling ───────────────────────────────────────────────────────────
+# "Generic" / "Unique International" are placeholder values used when a listing
+# has no real brand. Putting them in a title is worse than leaving it out, and
+# flagging "brand not in title" for every such row is noise.
+GENERIC_BRANDS = {
+    "generic", "generic brand", "unique international", "no brand", "nobrand",
+    "unbranded", "non branded", "non-branded", "n/a", "na", "none",
+    "not applicable", "assorted", "unknown", "without brand", "brand",
+}
+
+
+def _brand_key(brand: str) -> str:
+    """Lower-case, collapse whitespace and strip trailing punctuation."""
+    key = re.sub(r"\s+", " ", (brand or "").strip().lower())
+    return key.strip(" .,-–—_|/\\")
+
+
+def is_generic_brand(brand: str) -> bool:
+    key = _brand_key(brand)
+    return key in GENERIC_BRANDS or key.startswith("generic")
+
+
+def brand_in_text(brand: str, text: str) -> bool:
+    """Word-boundary search — 'Art' must not match 'Martial'."""
+    if not brand or not text:
+        return False
+    return re.search(
+        rf"(?<![A-Za-z0-9]){re.escape(brand)}(?![A-Za-z0-9])", text, re.IGNORECASE
+    ) is not None
+
+
+def dedupe_brand_in_title(title: str, brand: str) -> tuple:
+    """Keep the brand once, as the first word, and drop later occurrences.
+
+    "Nike Running Shoes for Men by Nike" -> "Nike Running Shoes for Men by"
+    (the dangling separator is cleaned up). Only applies when the title already
+    STARTS with the brand; a brand named mid-title is left alone.
+    """
+    if not title or not brand:
+        return title, ""
+    pat = re.compile(
+        rf"(?<![A-Za-z0-9]){re.escape(brand)}(?![A-Za-z0-9])", re.IGNORECASE
+    )
+    head_match = pat.match(title.strip())
+    if not head_match:
+        return title, ""
+    text = title.strip()
+    head = text[: head_match.end()]
+    body = text[head_match.end():]
+    if not pat.search(body):
+        return title, ""
+    body = pat.sub("", body)
+    # tidy the gap the removal left behind: ", Nike," -> ","; "(, )" -> ""
+    body = re.sub(r"\(\s*\)", "", body)
+    body = re.sub(r"\s*([,;|/])\s*[,;|/]\s*", r"\1 ", body)
+    body = re.sub(r"\s{2,}", " ", body)
+    body = re.sub(r"\s+([,;.])", r"\1", body)
+    body = body.strip()
+    body = re.sub(r"^[,;|/\-–—]\s*", "", body)
+    body = re.sub(r"[,;|/\-–—]\s*$", "", body).strip()
+    out = re.sub(r"\s{2,}", " ", f"{head} {body}" if body else head).strip(" ,-")
+    out = re.sub(r"\s+(?:by|from|at|with|of)\s*$", "", out, flags=re.IGNORECASE).strip()
+    if not out or out.lower() == brand.lower():
+        return title, ""
+    return out, f"Brand '{brand}' repeated in title — kept the first word only"
+
+
+def _title_brand(brand: str) -> str:
+    """The brand as it may be used inside a title ('' for placeholders)."""
+    raw = re.sub(r"^#\d+\s*\|\s*", "", (brand or "").strip()).strip()
+    if not raw or is_generic_brand(raw):
+        return ""
+    return raw
+
+
 def correct_product_text(
     title: str,
     description: str,
@@ -1768,54 +1844,63 @@ def correct_product_text(
         if _is_allcaps(t):
             t = _to_title_case(t)
 
-        # Inject brand if missing from title (flagged as "Brand not found in title")
+        # Brand in title:
+        #   • already present  -> leave it (never add a second one)
+        #   • placeholder brand (Generic / Unique International) -> never add
+        #   • present as the first word and repeated later -> keep the first only
         if brand and brand.strip():
-            # Strip a leading "#NNN|" id prefix — sheets store brands as
-            # "#178| blufurn"; without this it leaked into the corrected title
-            # ("#178| Blufurn King …", "#178| - Grey").
-            brand_clean = re.sub(r"^#\d+\s*\|\s*", "", brand.strip()).strip()
-            if brand_clean.lower() not in t.lower():
-                # Check if the title already starts with a DIFFERENT brand-like word
-                # (e.g. title says "Techtiq ..." but sheet brand is "calyxia").
-                # In that case it's a brand MISMATCH — flag it but do NOT prepend
-                # a second brand name.
-                first_word = re.match(r"^([A-Za-z][A-Za-z0-9&.'-]{2,})\b", t)
-                first_lower = first_word.group(1).lower() if first_word else ""
-                # Common descriptor/adjective words that legitimately start titles
-                # (not brands) — safe to prepend the brand before these.
-                non_brand_starters = {
-                    "portable", "rechargeable", "cute", "stainless", "leak",
-                    "waterproof", "new", "best", "premium", "original", "pure",
-                    "natural", "soft", "silicone", "led", "usb", "electric",
-                    "automatic", "manual", "mini", "foldable", "adjustable",
-                    "compact", "multi", "universal", "heavy", "lightweight",
-                    "wireless", "smart", "digital", "kids", "baby", "adult",
-                    "unisex", "men", "women", "ladies", "girls", "boys",
-                    # Product-type / material nouns that legitimately start titles
-                    "yoga", "bamboo", "wooden", "glass", "ceramic", "plastic",
-                    "metal", "steel", "iron", "copper", "aluminum", "aluminium",
-                    "cotton", "linen", "leather", "rubber", "foam", "wood",
-                    "kitchen", "bathroom", "office", "car", "home", "garden",
-                    "pet", "cat", "dog", "travel", "camping", "outdoor", "sports",
-                    "fitness", "exercise", "gym", "hair", "face", "hand", "foot",
-                    "eye", "ear", "neck", "wrist", "breathable", "stretchable",
-                    "washable", "reusable", "disposable", "diy", "handmade",
-                    "toy", "baby", "kitchenware", "storage", "organizer",
-                    "organiser", "holder", "stand", "rack", "mat", "set", "pack",
-                }
-                if first_lower and first_lower not in non_brand_starters:
-                    # Brand MISMATCH: the title starts with a different brand-like
-                    # word. The sheet brand is authoritative, so REPLACE the wrong
-                    # leading brand rather than prepending a second one.
-                    brand_display = _to_title_case(brand_clean)
-                    t = re.sub(rf"^{re.escape(first_word.group(1))}\b", brand_display, t, count=1, flags=re.IGNORECASE)
-                    t = t.strip()
-                    _log(f"  → Brand mismatch: replaced leading '{first_word.group(1)}' with '{brand_display}'")
+            brand_t = _title_brand(brand)
+            if not brand_t:
+                _log(f"  → Brand '{brand.strip()}' is a placeholder — not added to the title")
+            else:
+                t, dedupe_note = dedupe_brand_in_title(t, brand_t)
+                if dedupe_note:
+                    _log(f"  → {dedupe_note}")
+                if brand_in_text(brand_t, t):
+                    _log(f"  → Brand '{brand_t}' already in title — skipped")
                 else:
-                    # Proper-case the brand for prepending
-                    brand_display = _to_title_case(brand_clean)
-                    t = f"{brand_display} {t}".strip()
-                    _log(f"  → Brand missing from title — prepending '{brand_display}'")
+                    brand_clean = brand_t
+                    # Check if the title already starts with a DIFFERENT brand-like word
+                    # (e.g. title says "Techtiq ..." but sheet brand is "calyxia").
+                    # In that case it's a brand MISMATCH — flag it but do NOT prepend
+                    # a second brand name.
+                    first_word = re.match(r"^([A-Za-z][A-Za-z0-9&.'-]{2,})\b", t)
+                    first_lower = first_word.group(1).lower() if first_word else ""
+                    # Common descriptor/adjective words that legitimately start titles
+                    # (not brands) — safe to prepend the brand before these.
+                    non_brand_starters = {
+                        "portable", "rechargeable", "cute", "stainless", "leak",
+                        "waterproof", "new", "best", "premium", "original", "pure",
+                        "natural", "soft", "silicone", "led", "usb", "electric",
+                        "automatic", "manual", "mini", "foldable", "adjustable",
+                        "compact", "multi", "universal", "heavy", "lightweight",
+                        "wireless", "smart", "digital", "kids", "baby", "adult",
+                        "unisex", "men", "women", "ladies", "girls", "boys",
+                        # Product-type / material nouns that legitimately start titles
+                        "yoga", "bamboo", "wooden", "glass", "ceramic", "plastic",
+                        "metal", "steel", "iron", "copper", "aluminum", "aluminium",
+                        "cotton", "linen", "leather", "rubber", "foam", "wood",
+                        "kitchen", "bathroom", "office", "car", "home", "garden",
+                        "pet", "cat", "dog", "travel", "camping", "outdoor", "sports",
+                        "fitness", "exercise", "gym", "hair", "face", "hand", "foot",
+                        "eye", "ear", "neck", "wrist", "breathable", "stretchable",
+                        "washable", "reusable", "disposable", "diy", "handmade",
+                        "toy", "baby", "kitchenware", "storage", "organizer",
+                        "organiser", "holder", "stand", "rack", "mat", "set", "pack",
+                    }
+                    if first_lower and first_lower not in non_brand_starters:
+                        # Brand MISMATCH: the title starts with a different brand-like
+                        # word. The sheet brand is authoritative, so REPLACE the wrong
+                        # leading brand rather than prepending a second one.
+                        brand_display = _to_title_case(brand_clean)
+                        t = re.sub(rf"^{re.escape(first_word.group(1))}\b", brand_display, t, count=1, flags=re.IGNORECASE)
+                        t = t.strip()
+                        _log(f"  → Brand mismatch: replaced leading '{first_word.group(1)}' with '{brand_display}'")
+                    else:
+                        # Proper-case the brand for prepending
+                        brand_display = _to_title_case(brand_clean)
+                        t = f"{brand_display} {t}".strip()
+                        _log(f"  → Brand missing from title — prepending '{brand_display}'")
 
         # Detect claim sentences in the title. Split aggressively first —
         # long mixed-content titles dilute the claim signal. Individual
@@ -1853,7 +1938,7 @@ def correct_product_text(
                 t = _to_title_case(t)
             # If claims ate everything, rebuild from available data
             if not t or len(t.split()) < 2:
-                parts = [re.sub(r"^#\d+\s*\|\s*", "", (brand or "").strip()).strip(), product_type_label]
+                parts = [_title_brand(brand), product_type_label]
                 t = " ".join(p for p in parts if p)
                 if t and not _is_allcaps(t):
                     t = _to_title_case(t)
@@ -1868,7 +1953,7 @@ def correct_product_text(
         elif len(t.strip().split()) < 3 and (brand or product_type_label):
             # Too-short title: rebuild from brand + product type so the title
             # follows [Brand] + [Product Type] + [Key Attributes] structure.
-            parts = [re.sub(r"^#\d+\s*\|\s*", "", (brand or "").strip()).strip(), product_type_label]
+            parts = [_title_brand(brand), product_type_label]
             rebuilt = " ".join(p for p in parts if p and p not in t)
             if rebuilt:
                 t = f"{t} {rebuilt}".strip()

@@ -283,6 +283,27 @@ export function stripIdPrefix(value: string): string {
   return value.replace(/^#\d+\s*\|\s*/, "").trim();
 }
 
+// Placeholder brands that must never be required in a title (and never be
+// flagged as "missing"). Keep in sync with GENERIC_BRANDS in _hsn_suggest.py.
+export const GENERIC_BRANDS = new Set([
+  "generic", "generic brand", "unique international", "no brand", "nobrand",
+  "unbranded", "non branded", "non-branded", "n/a", "na", "none",
+  "not applicable", "assorted", "unknown", "without brand", "brand",
+]);
+
+export function isGenericBrand(brand: string): boolean {
+  const key = (brand || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/^[\s.,\-–—_|/\\]+|[\s.,\-–—_|/\\]+$/g, "");
+  return key === "" || GENERIC_BRANDS.has(key) || key.startsWith("generic");
+}
+
+// Word-boundary test: the brand "Art" must not count as present in "Martial Arts".
+export function brandInText(brand: string, text: string): boolean {
+  const b = (brand || "").trim();
+  if (!b || !text) return false;
+  const escaped = b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9])${escaped}([^A-Za-z0-9]|$)`, "i").test(text);
+}
+
 export function stripHtml(html: string): string {
   if (!html) return "";
   return html.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
@@ -941,8 +962,9 @@ export function validateProduct(
 
     const rawBrand = str(getField(row, "Brand Name *"));
     const brand = stripIdPrefix(rawBrand);
-    const brandInTitle = !isEmpty(brand) && productName.toLowerCase().includes(brand.toLowerCase());
-    if (!isEmpty(brand)) {
+    const brandIsPlaceholder = isGenericBrand(brand);
+    const brandInTitle = !isEmpty(brand) && !brandIsPlaceholder && brandInText(brand, productName);
+    if (!isEmpty(brand) && !brandIsPlaceholder) {
       addCheck(
         "Product Name *",
         "Brand in title",
@@ -961,8 +983,11 @@ export function validateProduct(
     const titleWordCount = productName.split(/\s+/).filter(Boolean).length;
     const brandAtStart =
       !isEmpty(brand) &&
+      !brandIsPlaceholder &&
       titleLower.startsWith(brand.toLowerCase());
-    if (!isEmpty(brand) && brandAtStart) {
+    if (brandIsPlaceholder) {
+      addCheck("Product Name *", "Standard structure", true, `Brand "${brand}" is a placeholder — not required in the title`, "PASS");
+    } else if (!isEmpty(brand) && brandAtStart) {
       addCheck("Product Name *", "Standard structure", true, `Title starts with brand "${brand}"`, "PASS");
     } else if (!isEmpty(brand) && brandInTitle) {
       addCheck("Product Name *", "Standard structure", true, "Brand present in title", "PASS");
