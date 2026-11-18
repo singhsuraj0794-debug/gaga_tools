@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
+import { apiTokenGuard } from "./middlewares/apiToken";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
@@ -25,10 +26,18 @@ app.use(
     },
   }),
 );
-app.use(cors());
+// The API is served over a public tunnel. Keep CORS open by default (the web app
+// and the box share one origin) but allow locking it down with CORS_ORIGINS
+// (comma-separated). Credentials are never used, so a wildcard is harmless.
+const corsOrigins = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(cors(corsOrigins.length > 0 ? { origin: corsOrigins } : {}));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+app.use(apiTokenGuard);
 app.use("/api", router);
 
 // A truncated request body (large catalogue POST over the tunnel) used to throw

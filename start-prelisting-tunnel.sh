@@ -52,11 +52,25 @@ if ! command -v cloudflared >/dev/null 2>&1; then
 fi
 
 echo "=== 1/3: API server on 127.0.0.1:${PORT} ==="
+# The bundle is what actually runs, and it used to be built only when missing —
+# so a checkout that had any dist/ served month-old routes (no image-verify, no
+# sheet-duplicates job). Rebuild whenever src/ or the build script is newer, or
+# when Python scripts are missing from dist/.
+need_build=0
+if [ ! -f "dist/index.mjs" ]; then
+  need_build=1
+elif [ -n "$(find src build.mjs -newer dist/index.mjs -print -quit 2>/dev/null)" ]; then
+  need_build=1
+else
+  src_py=$(ls -1 *.py 2>/dev/null | wc -l | tr -d ' ')
+  dist_py=$(ls -1 dist/*.py 2>/dev/null | wc -l | tr -d ' ')
+  [ "$src_py" != "$dist_py" ] && need_build=1
+fi
+if [ "$need_build" = "1" ]; then
+  echo "    bundle is stale (or missing) — building API server..."
+  node build.mjs || { echo "    ERROR: build failed"; exit 1; }
+fi
 if ! curl -s --max-time 2 "http://127.0.0.1:${PORT}/api/products/status" >/dev/null 2>&1; then
-  if [ ! -f "dist/index.mjs" ]; then
-    echo "    dist/index.mjs not found — building API server..."
-    node build.mjs
-  fi
   PORT="$PORT" node --enable-source-maps ./dist/index.mjs &
   API_PID=$!
   sleep 3

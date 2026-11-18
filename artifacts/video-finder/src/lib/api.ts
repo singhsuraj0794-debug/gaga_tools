@@ -16,6 +16,9 @@ const WINDOWS_API = "https://unneeded-taps-unharmed.ngrok-free.dev";
 // with ?api=https://new-host (it is remembered) or set
 // localStorage.gajab_api_base = "https://new-host".
 const API_OVERRIDE_KEY = "gajab_api_base";
+// The validator stores its tunnel under its own key; treat both as one setting
+// so changing it on either page moves every feature.
+const VALIDATOR_KEY = "plv_api_url";
 function resolveApiOverride(): string {
   try {
     const fromQuery = new URLSearchParams(window.location.search).get("api");
@@ -24,7 +27,8 @@ function resolveApiOverride(): string {
       localStorage.setItem(API_OVERRIDE_KEY, clean);
       return clean;
     }
-    return (localStorage.getItem(API_OVERRIDE_KEY) || "").replace(/\/+$/, "");
+    return (localStorage.getItem(API_OVERRIDE_KEY) ||
+            localStorage.getItem(VALIDATOR_KEY) || "").replace(/\/+$/, "");
   } catch {
     return "";
   }
@@ -33,10 +37,15 @@ function resolveApiOverride(): string {
 // In dev, use the Vite proxy (relative /api → localhost:8080).
 // In production, use the runtime override, then VITE_PRELISTING_API_URL, then
 // the Windows box.
-export const API_BASE =
-  resolveApiOverride() ||
-  import.meta.env.VITE_PRELISTING_API_URL ||
-  (import.meta.env.DEV ? "" : WINDOWS_API);
+export function getApiBase(): string {
+  return (
+    resolveApiOverride() ||
+    import.meta.env.VITE_PRELISTING_API_URL ||
+    (import.meta.env.DEV ? "" : WINDOWS_API)
+  );
+}
+
+export const API_BASE = getApiBase();
 
 // The same gateway serves Supabase (postgrest + storage), so derive it from the
 // API origin. A stale VITE_SUPABASE_URL baked into a previous build must not win.

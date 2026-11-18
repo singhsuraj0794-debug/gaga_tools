@@ -35,7 +35,12 @@ fi
 
 echo "=== 1. compute stack (API 8090, CLIP 8001, analysis 8003, tunnel) ==="
 if up http://127.0.0.1:8090/api/products/status; then
-  echo "    already running"
+  if [ -n "$(find artifacts/api-server/src artifacts/api-server/build.mjs -newer artifacts/api-server/dist/index.mjs -print -quit 2>/dev/null)" ]; then
+    echo "    already running — but the bundle is OLDER than src/."
+    echo "    run: (cd artifacts/api-server && node build.mjs) then ./start-all.sh --restart"
+  else
+    echo "    already running"
+  fi
 else
   rm -f /tmp/prelisting-tunnel-url.txt
   ANALYSIS_WORKERS=1 nohup bash start-prelisting-tunnel.sh > /tmp/prelisting-stack.log 2>&1 &

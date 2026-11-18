@@ -44,6 +44,7 @@ import {
   descriptionPassesAttributes,
   getPrelistingApiBase,
   withApiHeaders,
+  apiHeaders,
   setPrelistingApiBase,
   startSheetDuplicatesJob,
   getSheetDuplicatesJob,
@@ -135,11 +136,37 @@ export default function PreListingValidator() {
   const [dismissedChecks, setDismissedChecks] = useState<Map<string, Set<number>>>(new Map());
   const [correctionFeedback, setCorrectionFeedback] = useState<Map<string, boolean>>(new Map());
 
+  // ── Log plumbing shared by validation and revalidation ──────────────────
+  // Coalesce log writes: calling setLogs per batch re-rendered the whole
+  // (growing) log list on every batch — O(n^2). Buffer entries and flush a few
+  // times a second, keeping the list bounded.
+  const _logBuffer = useRef<LogEntry[]>([]);
+  const _logTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const _flushLogs = useCallback(() => {
+    _logTimer.current = null;
+    if (_logBuffer.current.length === 0) return;
+    const pending = _logBuffer.current.splice(0, _logBuffer.current.length);
+    setLogs((prev) => {
+      const next = prev.concat(pending);
+      return next.length > 600 ? next.slice(next.length - 600) : next;
+    });
+  }, []);
+  const pushLog = useCallback((sku: string, row: number, msg: string) => {
+    _logBuffer.current.push({
+      time: new Date().toLocaleTimeString("en-US", { hour12: false }),
+      row, sku, productName: msg,
+      result: { sku: "", productName: "", category: "", decision: "PASS", score: 0, checks: [] },
+    });
+    if (_logTimer.current) return;
+    _logTimer.current = setTimeout(_flushLogs, 250);
+  }, [_flushLogs]);
+
   // ── Compute API URL (runtime-configurable; survives tunnel restarts) ───────
   const [apiUrl, setApiUrl] = useState<string>(() => {
     const fallback = getPrelistingApiBase();
     if (typeof window === "undefined") return fallback;
-    const stored = window.localStorage.getItem("plv_api_url");
+    const stored = window.localStorage.getItem("plv_api_url")
+      || window.localStorage.getItem("gajab_api_base");
     // Ignore a stale quick-tunnel URL: cloudflared quick tunnels rotate and go
     // dead, which surfaces as "Failed to load" on every image. Migrate to the
     // permanent default (the ngrok domain) automatically.
@@ -246,19 +273,25 @@ export default function PreListingValidator() {
       } catch { /* raw text fallback */ }
       discovered = discovered.trim().replace(/\/+$/, "");
       if (!/^https?:\/\//i.test(discovered)) return;
-      // Prefer the discovered URL when the saved one is empty, localhost, or stale.
+      // Adopt the published URL only when it actually helps: the current base
+      // must be unreachable AND the discovered one must answer. Returning early
+      // for DEFAULT_API_BASE (the old behaviour) meant the Supabase-published
+      // tunnel was never used, so a dead built-in default could not heal itself.
       const current = getPrelistingApiBase();
-      // Only the CURRENT built-in domain is the stable endpoint. Comparing against
-      // any *.ngrok-free.dev kept a dead older ngrok URL pinned forever (it was
-      // saved in localStorage before the domain changed), which made the page
-      // report "pre-listing validation is not reachable".
-      if (current === DEFAULT_API_BASE) {
-        return;
-      }
-      const isDefault = /localhost|127\.0\.0\.1/.test(current) || !current;
-      if (isDefault || current !== discovered) {
-        setApiUrl(discovered);
-      }
+      if (current === discovered) return;
+      const probe = async (url: string): Promise<boolean> => {
+        try {
+          const c = new AbortController();
+          const t = setTimeout(() => c.abort(), 5000);
+          const r = await fetch(`${url}/api/products/status`, withApiHeaders({ signal: c.signal }));
+          clearTimeout(t);
+          return r.ok;
+        } catch {
+          return false;
+        }
+      };
+      if (await probe(current)) return;          // the configured base is healthy
+      if (await probe(discovered)) setApiUrl(discovered);
     } catch { /* ignore — user can paste manually */ }
   };
 
@@ -519,30 +552,6 @@ export default function PreListingValidator() {
       const s = Math.floor((performance.now() - t0) / 1000);
       return `${Math.floor(s/60)}m ${s%60}s`;
     };
-    // Coalesce log writes. Calling setLogs per batch re-rendered the whole
-    // (growing) log list on every batch — O(n^2), which is why image analysis
-    // started fast and then crawled after ~20 batches. Buffer entries and flush
-    // a few times a second instead, and keep the list bounded.
-    const _logBuffer: LogEntry[] = [];
-    let _logTimer: ReturnType<typeof setTimeout> | null = null;
-    const _flushLogs = () => {
-      _logTimer = null;
-      if (_logBuffer.length === 0) return;
-      const pending = _logBuffer.splice(0, _logBuffer.length);
-      setLogs((prev) => {
-        const next = prev.concat(pending);
-        return next.length > 600 ? next.slice(next.length - 600) : next;
-      });
-    };
-    const pushLog = (sku: string, row: number, msg: string) => {
-      _logBuffer.push({
-        time: now(), row, sku, productName: msg,
-        result: { sku: "", productName: "", category: "", decision: "PASS", score: 0, checks: [] },
-      });
-      if (_logTimer) return;
-      _logTimer = setTimeout(_flushLogs, 250);
-    };
-
     pushLog("SYS", 0, `[START] Validation began at ${now()} for ${rows.length} products`);
 
     // ── Step 1: Image Analysis (Marqo/CLIP) ────────────────────────────
@@ -1500,7 +1509,7 @@ export default function PreListingValidator() {
       setImageGenStatus("Enhancing specs with AI extraction...");
       const specResp = await fetch(`${getPrelistingApiBase()}/api/products/extract-specs`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           products: genProducts.map(p => ({
             sku: p.sku,
@@ -1552,7 +1561,7 @@ export default function PreListingValidator() {
           const batch = qwenProducts.slice(i, i + 5);
           const resp = await fetch(`${getPrelistingApiBase()}/api/products/qwen-specs`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: apiHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ products: batch }),
           });
           if (resp.ok) {
@@ -1588,7 +1597,7 @@ export default function PreListingValidator() {
     try {
       const resp = await fetch(`${getPrelistingApiBase()}/api/products/image-gen`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ products: genProducts }),
       });
       if (!resp.ok) {
@@ -1858,7 +1867,7 @@ export default function PreListingValidator() {
       // Step 1: CLIP only (fast)
       const resp = await fetch(`${getPrelistingApiBase()}/api/products/visual-verify`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ products: limitedProducts, skipQwen: true }),
         signal: AbortSignal.timeout(120000),
       });
@@ -1898,7 +1907,7 @@ export default function PreListingValidator() {
 
       const qwenResp = await fetch(`${getPrelistingApiBase()}/api/products/visual-verify`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ products: flaggedProducts, skipQwen: false }),
         signal: AbortSignal.timeout(180000),
       });
@@ -2856,9 +2865,9 @@ export default function PreListingValidator() {
                                                 onClick={(e) => {
                                                   e.stopPropagation();
                                                   setCorrectionFeedback((prev) => new Map(prev).set(key, true));
-                                                  fetch("/api/products/validate-correction", {
+                                                  fetch(`${getPrelistingApiBase()}/api/products/validate-correction`, {
                                                     method: "POST",
-                                                    headers: { "Content-Type": "application/json" },
+                                                    headers: apiHeaders({ "Content-Type": "application/json" }),
                                                     body: JSON.stringify({ sku: result.sku, attribute: c.attribute, original: c.original, observed: c.observed, isCorrect: true }),
                                                   }).catch(() => {});
                                                 }}
@@ -2871,9 +2880,9 @@ export default function PreListingValidator() {
                                                   e.stopPropagation();
                                                   setCorrectionFeedback((prev) => new Map(prev).set(key, false));
                                                   const actual = prompt(`Qwen said "${c.observed}" but it's wrong. What is the actual ${c.attribute}?`);
-                                                  fetch("/api/products/validate-correction", {
+                                                  fetch(`${getPrelistingApiBase()}/api/products/validate-correction`, {
                                                     method: "POST",
-                                                    headers: { "Content-Type": "application/json" },
+                                                    headers: apiHeaders({ "Content-Type": "application/json" }),
                                                     body: JSON.stringify({ sku: result.sku, attribute: c.attribute, original: c.original, observed: c.observed, isCorrect: false, actualValue: actual || undefined }),
                                                   }).catch(() => {});
                                                 }}

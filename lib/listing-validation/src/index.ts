@@ -15,17 +15,43 @@ export const DEFAULT_API_BASE: string =
  * this header is present. The compute API is exposed through the permanent
  * ngrok domain, so every API call must send it.
  */
+export function apiHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra, "ngrok-skip-browser-warning": "true" };
+  // Optional shared secret (server sets API_TOKEN). Baked in at build time via
+  // VITE_API_TOKEN; unset means the header is simply omitted.
+  const token = (import.meta.env?.VITE_API_TOKEN as string | undefined) || "";
+  if (token) headers["x-api-token"] = token;
+  return headers;
+}
+
 export function withApiHeaders(init: RequestInit = {}): RequestInit {
   return {
     ...init,
-    headers: {
-      ...((init.headers as Record<string, string>) || {}),
-      "ngrok-skip-browser-warning": "true",
-    },
+    headers: apiHeaders((init.headers as Record<string, string>) || {}),
   };
 }
 
-let _prelistingApiBase: string = DEFAULT_API_BASE;
+// Both this module and artifacts/video-finder/src/lib/api.ts can be used to
+// point the browser at a tunnel. Share one storage key so a URL typed on the
+// validator also moves Image Verification / Product Sync, and vice versa.
+const SHARED_API_KEY = "gajab_api_base";
+
+function _storedBase(): string {
+  try {
+    const v = (localStorage.getItem("plv_api_url") || localStorage.getItem(SHARED_API_KEY) || "")
+      .trim().replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(v)) return "";
+    // A saved quick-tunnel/localhost address going dead is exactly why the
+    // built-in domain exists — never start from one.
+    if (/localhost|127\.0\.0\.1/.test(v)) return "";
+    if (/trycloudflare\.com/.test(v) && !/trycloudflare\.com/.test(DEFAULT_API_BASE)) return "";
+    return v;
+  } catch {
+    return "";
+  }
+}
+
+let _prelistingApiBase: string = _storedBase() || DEFAULT_API_BASE;
 
 export function getPrelistingApiBase(): string {
   return _prelistingApiBase;
@@ -35,6 +61,7 @@ export function setPrelistingApiBase(url: string): void {
   const trimmed = (url || "").trim().replace(/\/+$/, "");
   if (/^https?:\/\//i.test(trimmed)) {
     _prelistingApiBase = trimmed;
+    try { localStorage.setItem(SHARED_API_KEY, trimmed); } catch { /* private mode */ }
   }
 }
 

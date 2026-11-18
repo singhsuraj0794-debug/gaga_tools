@@ -1040,11 +1040,22 @@ CATEGORY_SCHEMA = {
    "home & garden",
    "home and garden",
    "household supplies",
-   "drinkware"
+   "drinkware",
+   "water bottle",
+   "steel bottle",
+   "stainless steel bottle",
+   "insulated bottle",
+   "vacuum flask",
+   "thermos",
+   "sipper bottle",
+   "tumbler",
+   "travel mug"
   ],
   "hsn": [
-   "6302",
-   "9403"
+   "7323",
+   "3924",
+   "9617",
+   "7013"
   ],
   "unit": "optional",
   "attributes": {
@@ -2949,6 +2960,26 @@ def get_value_set(cat, attr):
 def build_clip_taxonomy():
     return [(cid, d.get("label", "")) for cid, d in CATEGORY_SCHEMA.items()]
 
+# Keywords like "bottle", "bag" or "mat" are everyday nouns shared by several
+# categories, so a single match used to hand the category to whichever entry had
+# the longest keyword list — "Stainless Steel Water Bottle 1 Litre" came back as
+# Kids & Baby > Baby Feeding (and text correction then demanded nipple_flow /
+# colic_prevention). These categories only count when the listing also mentions
+# their own context.
+_REQUIRED_CONTEXT = {
+    "cat_cat_086": ("baby", "infant", "newborn", "toddler", "kid", "nip", "feeding", "breast", "milk", "weaning", "bpa"),
+    "cat_cat_087": ("baby", "infant", "newborn", "toddler", "kid"),
+    "cat_cat_088": ("baby", "infant", "newborn", "toddler", "kid"),
+    "cat_cat_089": ("baby", "infant", "newborn", "toddler", "kid"),
+    "cat_cat_090": ("baby", "infant", "newborn", "toddler", "kid", "diaper", "nappy"),
+    "cat_cat_091": ("baby", "infant", "newborn", "toddler", "kid"),
+}
+
+
+def _word_in(token: str, haystack: str) -> bool:
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", haystack))
+
+
 def classify_category(title, description, image_sources=None):
     text = ((title or "") + " " + (description or "")).lower()
     title_lower = (title or "").lower()
@@ -2956,6 +2987,9 @@ def classify_category(title, description, image_sources=None):
     for cid, data in CATEGORY_SCHEMA.items():
         kws = data.get("keywords", [])
         if not kws: continue
+        req = _REQUIRED_CONTEXT.get(cid)
+        if req and not any(_word_in(t, text) for t in req):
+            continue
         total_tokens = 0
         matched_tokens = 0
         for kw in kws:

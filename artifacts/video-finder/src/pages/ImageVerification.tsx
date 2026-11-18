@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { API_BASE } from "@/lib/api";
+import { getApiBase } from "@/lib/api";
 import { withApiHeaders } from "@/lib/listingValidator";
 import {
   ArrowLeft, Upload, FileSpreadsheet, Loader2, CheckCircle2, AlertTriangle, Download, Image as ImageIcon,
@@ -35,7 +35,7 @@ export default function ImageVerification() {
     form.append("file", file);
     form.append("mode", mode);
     try {
-      const res = await fetch(`${API_BASE}/api/products/image-verify/start`, withApiHeaders({
+      const res = await fetch(`${getApiBase()}/api/products/image-verify/start`, withApiHeaders({
         method: "POST",
         body: form,
       }));
@@ -45,7 +45,7 @@ export default function ImageVerification() {
       setJobId(id);
       pollRef.current = window.setInterval(async () => {
         try {
-          const r = await fetch(`${API_BASE}/api/products/image-verify/${id}`, withApiHeaders());
+          const r = await fetch(`${getApiBase()}/api/products/image-verify/${id}`, withApiHeaders());
           const p = (await r.json()) as Progress;
           setProgress(p);
           if (p.state === "done" || p.state === "failed") stopPolling();
@@ -61,7 +61,7 @@ export default function ImageVerification() {
 
   const download = () => {
     if (!jobId) return;
-    window.open(`${API_BASE}/api/products/image-verify/${jobId}/download`, "_blank");
+    window.open(`${getApiBase()}/api/products/image-verify/${jobId}/download`, "_blank");
   };
 
   return (

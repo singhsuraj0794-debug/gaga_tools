@@ -1712,6 +1712,24 @@ type SheetDupJob = {
 };
 const sheetDupJobs = new Map<string, SheetDupJob>();
 
+// Background job maps are in-memory and were never trimmed, so a long-lived
+// server accumulated one entry per request (and a stuck entry per crash).
+// Drop finished jobs after 6 h and cap the map so a burst cannot grow unbounded.
+const JOB_TTL_MS = 6 * 60 * 60 * 1000;
+function pruneJobMap(map: Map<string, any>, cap = 64): void {
+  const now = Date.now();
+  for (const [key, v] of map) {
+    const started = Number(v?.startedAt ?? v?.started ?? 0);
+    const finished = v?.status !== "running" && v?.state !== "running";
+    if (finished && now - started > JOB_TTL_MS) map.delete(key);
+  }
+  while (map.size > cap) {
+    const oldest = map.keys().next().value as string | undefined;
+    if (!oldest) break;
+    map.delete(oldest);
+  }
+}
+
 router.post("/products/sheet-duplicates/job", async (req, res): Promise<void> => {
   try {
     const { products, threshold } = req.body as {
@@ -1736,6 +1754,7 @@ router.post("/products/sheet-duplicates/job", async (req, res): Promise<void> =>
     const args = [scriptPath, inputPath];
     if (threshold !== undefined) args.push(String(threshold));
 
+    pruneJobMap(sheetDupJobs);
     const child = spawn(pythonBin(), args, { stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.pipe(createWriteStream(resultPath));
     child.stderr.pipe(createWriteStream(logPath));
@@ -1745,9 +1764,17 @@ router.post("/products/sheet-duplicates/job", async (req, res): Promise<void> =>
       inputPath, resultPath, logPath,
     };
     sheetDupJobs.set(jobId, job);
+    // Without an `error` listener a missing interpreter (PYTHON_BIN unset on a
+    // fresh host) emits 'error' and never 'exit' — the job then reported
+    // "running" forever and the client polled until its 1-hour timeout.
+    child.on("error", (err) => {
+      job.status = "failed";
+      job.error = `could not start detector (${pythonBin()}): ${err.message}`;
+      void import("node:fs/promises").then((m) => m.unlink(inputPath).catch(() => {}));
+    });
     child.on("exit", (code) => {
       job.status = code === 0 ? "completed" : "failed";
-      if (code !== 0) job.error = `detector exited with code ${code}`;
+      if (code !== 0 && !job.error) job.error = `detector exited with code ${code}`;
       void import("node:fs/promises").then((m) => m.unlink(inputPath).catch(() => {}));
     });
 
@@ -1974,6 +2001,7 @@ router.post("/products/image-verify/start", ivUpload.single("file"), async (req,
     const src = path.join(dir, "input" + (path.extname(file.originalname || "").toLowerCase() || ".xlsx"));
     renameSync(file.path, src);
     const out = path.join(dir, "verified.xlsx");
+    pruneJobMap(ivJobs);
     const job = { dir, out, started: Date.now(), state: "running" as string, total: undefined as number | undefined };
     ivJobs.set(jobId, job);
     const env = { ...process.env, PYTHONUTF8: "1" };
@@ -1986,6 +2014,14 @@ router.post("/products/image-verify/start", ivUpload.single("file"), async (req,
     let tail = "";
     child.stdout.on("data", (b) => { tail = (tail + b.toString()).slice(-4000); });
     child.stderr.on("data", (b) => { tail = (tail + b.toString()).slice(-4000); });
+    child.on("error", (err) => {
+      job.state = "failed";
+      logger.error({ jobId, err }, "image-verify could not start");
+      try {
+        writeFileSync(path.join(dir, "progress.json"),
+          JSON.stringify({ state: "failed", error: `could not start ${pythonBin()}: ${err.message}` }));
+      } catch { /* best effort */ }
+    });
     child.on("exit", (code) => {
       job.state = code === 0 ? "done" : "failed";
       if (code !== 0) {
