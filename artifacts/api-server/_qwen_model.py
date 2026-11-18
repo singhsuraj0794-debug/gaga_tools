@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Shared lazy loader for the Qwen2.5-VL model.
+"""Shared vision-model backend for _qwen_correct / _qwen_specs / CLIP-verify.
 
-Both _qwen_correct.py and _qwen_specs.py (and the CLIP-verify second pass) need
-the same 3B vision model. This module keeps exactly ONE model loaded per Python
-process — two copies of a 3B model blew past 16GB RAM and crashed the machine.
+Primary backend: HTTP to a llama.cpp chat server (DeepSeek-V4-Pro-Qwen3.5-9B on
+the GPU host, :8082) via the OpenAI-compatible `/v1/chat/completions` API. This
+is the same server the category/text agents use, so one process serves every
+LLM call and no transformers weights are loaded locally.
 
-Backend: Hugging Face `transformers` (Qwen2_5_VL), which runs on CUDA, Apple
-MPS, or CPU. It replaced the previous MLX-only path so the same code runs on the
-Windows/NVIDIA host and on the Mac. On CUDA the model is loaded in bfloat16;
-elsewhere float32.
+Fallback backend: Hugging Face `transformers` (Qwen2_5_VL), which runs on CUDA,
+Apple MPS, or CPU — used when no HTTP server is reachable (e.g. local Mac dev).
+
+Select explicitly with QWEN_BACKEND=http|transformers; otherwise it probes
+QWEN_AGENT_URL (default http://127.0.0.1:8082) and picks HTTP when it answers.
 """
 from __future__ import annotations
 
+import base64
+import json
+import mimetypes
 import os
 import sys
 import threading
 import time
+import urllib.request
 from typing import Optional
 
 _model = None
@@ -43,14 +49,70 @@ def _pick_device() -> str:
             return "mps"
     except Exception:
         pass
-    return "cpu"
+_backend: Optional[str] = None
 
 
+def _agent_url() -> str:
+    return (
+        os.environ.get("QWEN_AGENT_URL")
+        or os.environ.get("VISION_AGENT_URL")
+        or os.environ.get("CATEGORY_AGENT_URL")
+        or "http://127.0.0.1:8082"
+    ).rstrip("/")
+
+
+def _http_available() -> bool:
+    try:
+        req = urllib.request.Request(_agent_url() + "/v1/models", method="GET")
+        with urllib.request.urlopen(req, timeout=4) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _pick_backend() -> str:
+    global _backend
+    if _backend:
+        return _backend
+    forced = (os.environ.get("QWEN_BACKEND") or "").strip().lower()
+    if forced in ("http", "transformers"):
+        _backend = forced
+    elif forced in ("", "auto") and _http_available():
+        _backend = "http"
+    else:
+        _backend = "transformers"
+    return _backend
+
+
+def _http_generate(prompt_text: str, image_path: Optional[str], max_tokens: int) -> str:
+    content = []
+    if image_path:
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+    content.append({"type": "text", "text": prompt_text})
+    payload = {
+        "messages": [{"role": "user", "content": content}],
+        "max_tokens": int(max_tokens),
+        "temperature": 0,
+    }
+    req = urllib.request.Request(
+        _agent_url() + "/v1/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=300) as r:
+        data = json.loads(r.read())
+    return (data["choices"][0]["message"].get("content") or "")
 def get_model():
-    """Lazy-load Qwen2.5-VL-3B via transformers, sharing one instance per process.
+    """Return the shared local model, or (None, None) for the HTTP backend.
 
+    Lazy-loads Qwen2.5-VL-3B via transformers, sharing one instance per process.
     Returns (model, processor).
     """
+    if _pick_backend() == "http":
+        return None, None
     global _model, _processor, _model_path
     if _model is not None:
         return _model, _processor
@@ -108,11 +170,15 @@ def get_model():
 
 
 def generate(prompt_text: str, image_path: Optional[str] = None, max_tokens: int = 256) -> str:
-    """Run a single generation against the shared model.
+    """Run a single generation against the shared vision/chat model.
 
     Image is optional — pass a path for the vision model, or omit for text-only.
-    Returns the decoded response string (without the prompt tokens).
+    Returns the decoded response string (without the prompt tokens). Uses the
+    HTTP llama.cpp backend when available, else local transformers.
     """
+    if _pick_backend() == "http":
+        return _http_generate(prompt_text, image_path, max_tokens)
+
     import torch
     from PIL import Image
 
