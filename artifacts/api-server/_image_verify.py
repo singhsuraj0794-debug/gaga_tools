@@ -430,7 +430,7 @@ def _flatten_hole(img, filled, mask, scale=8, sigma=9):
     return out.clip(0, 255).astype(np.uint8)
 
 
-def _region_composite(img, filled, mask, tol=45, feather=1.4):
+def _region_composite(img, filled, mask, tol=45, feather=4.5):
     """Photoshop-style split fill: page background vs product.
 
     A model inpaints the hole as ONE surface, so a badge that straddles the
@@ -463,36 +463,65 @@ def _region_composite(img, filled, mask, tol=45, feather=1.4):
     if len(flat_px) and float(np.percentile(flat_px.sum(1), 95) -
                               np.percentile(flat_px.sum(1), 5)) > 90:
         return filled                     # shadowed/gradient backdrop: model is safer
-    # split the hole between product and page by nearest untouched pixel of each
-    # kind (a Voronoi bisector) - a badge sitting INSIDE the product band is then
-    # rebuilt as product, which a dilated silhouette can never reach
-    nonprod = (valid & (np.linalg.norm(img.astype(float) - bg, axis=2) <= tol)).astype(np.uint8)
-    # only the page's own region counts as background: it must reach the frame.
-    # Specular highlights inside the product are also near-white, and treating
-    # them as page would paint flat white boxes across the product.
-    nn, ll, stt, _ce = cv2.connectedComponentsWithStats(nonprod, 8)
-    # page regions: genuinely large (a specular highlight is not) - frame contact
-    # alone is not reliable because product frames often box the page in
-    big = [i for i in range(1, nn) if stt[i, cv2.CC_STAT_AREA] >= max(0.02 * H * W, 3000)]
-    if not big:
-        return filled
-    bg_seed = np.isin(ll, big).astype(np.uint8)
-    prod_seed = valid.astype(np.uint8) - bg_seed
-    if prod_seed.sum() < 50 or bg_seed.sum() < 50:
+    # split each hole into product vs page by CLOSING the product silhouette
+    # across it: a product band cut by a badge is bridged, while a badge sitting
+    # on the page stays page. Plain dilation cannot reach the middle of a band and
+    # nearest-seed Voronoi happily hands background to the product.
+    prod_seed = ((np.linalg.norm(img.astype(float) - bg, axis=2) > tol) & valid).astype(np.uint8)
+    if int(prod_seed.sum()) < 50 or int(valid.sum() - prod_seed.sum()) < 50:
         return filled
     d_prod = cv2.distanceTransform(1 - prod_seed, cv2.DIST_L2, 5)
-    d_bg = cv2.distanceTransform(1 - bg_seed, cv2.DIST_L2, 5)
-    prod_hole = hole & (d_prod <= d_bg)
+    thick = cv2.distanceTransform(prod_seed, cv2.DIST_L2, 5)   # local product radius
+    bgseed = (valid.astype(np.uint8) - prod_seed)
+    d_bg = cv2.distanceTransform(1 - bgseed, cv2.DIST_L2, 5)
+    nh, hlab, hstats, _ = cv2.connectedComponentsWithStats(hole.astype(np.uint8), 8)
+    prod_hole = np.zeros((H, W), bool)
+    for i in range(1, nh):
+        hx, hy = int(hstats[i, cv2.CC_STAT_LEFT]), int(hstats[i, cv2.CC_STAT_TOP])
+        hw, hh_ = int(hstats[i, cv2.CC_STAT_WIDTH]), int(hstats[i, cv2.CC_STAT_HEIGHT])
+        pad_ = int(max(hw, hh_) * 0.35) + 8
+        x0, y0 = max(0, hx - pad_), max(0, hy - pad_)
+        x1, y1 = min(W, hx + hw + pad_), min(H, hy + hh_ + pad_)
+        win = prod_seed[y0:y1, x0:x1]
+        k = max(3, int(max(hw, hh_) * 0.50)) | 1
+        pc = cv2.morphologyEx(win, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+        # closed silhouette: also take the areas it encloses
+        wh_, ww_ = pc.shape
+        flood = pc.copy()
+        fm = np.zeros((wh_ + 2, ww_ + 2), np.uint8)
+        cv2.floodFill(flood, fm, (0, 0), 1)
+        pc = cv2.bitwise_or(pc, ((flood == 0) & (pc == 0)).astype(np.uint8))
+        # A hole sitting inside a SOLID body (a ball, a thick box) belongs to the
+        # product, even where the model's fill happens to be pale. A hole on a
+        # THIN band (an arm, a ring) is split: inside the band stays product, the
+        # rest is page. Thickness = radius of the product at its own edge.
+        win_lab = (hlab[y0:y1, x0:x1] == i)
+        edge = cv2.dilate(win_lab.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+        adj = edge & (prod_seed[y0:y1, x0:x1] > 0)
+        local_r = float(thick[y0:y1, x0:x1][adj].max()) if adj.any() else 0.0
+        # How much of this hole's own border is page? A badge sitting on the page
+        # (the seal, a delivery strip) can be repainted as page; a badge sitting
+        # INSIDE the product (a ribbon on a ball, a label on a ring) must keep the
+        # model's fill, or the split bites a notch out of the product.
+        ring = edge & ~win_lab
+        ring_px = prod_seed[y0:y1, x0:x1][ring]
+        page_frac = float((ring_px == 0).mean()) if ring_px.size else 0.0
+        if page_frac < 0.6 or local_r >= 60.0:
+            prod_hole[y0:y1, x0:x1] |= win_lab
+        else:
+            near = (d_prod[y0:y1, x0:x1] <= d_bg[y0:y1, x0:x1])
+            prod_hole[y0:y1, x0:x1] |= (pc > 0) & win_lab & near
     bgh = hole & ~prod_hole
     out = filled.astype(np.float32)
     if bgh.any():
         near_bg = valid & (np.linalg.norm(img.astype(float) - bg, axis=2) <= tol)
-        grain = float(img[near_bg].astype(float).std()) if near_bg.any() else 3.0
-        grain = min(max(grain, 1.2), 6.0)
-        rng = np.random.default_rng(7)
-        flat = np.clip(bg[None, None, :] +
-                       rng.normal(0.0, grain, (H, W, 1)).repeat(3, axis=2), 0, 255)
-        out[bgh] = flat[bgh]
+        grain = float(img[near_bg].astype(float).std()) if near_bg.any() else 0.0
+        grain = min(max(grain, 0.0), 4.0) if grain > 2.5 else 0.0   # flat page stays flat
+        flat = np.repeat(bg[None, None, :], H, axis=0).repeat(W, axis=1)
+        if grain > 0:
+            rng = np.random.default_rng(7)
+            flat = np.clip(flat + rng.normal(0.0, grain, (H, W, 1)).repeat(3, axis=2), 0, 255)
+        out[bgh] = flat[bgh].astype(np.float32)
     soft = cv2.GaussianBlur(hole.astype(np.float32), (0, 0), feather)[..., None]
     return np.clip(out * soft + img.astype(np.float32) * (1 - soft), 0, 255).astype(np.uint8)
 
@@ -606,6 +635,93 @@ def _grow_mask_to_graphics(img, mask, boxes, max_scale=1.6, max_gain=2.6):
     return cv2.dilate(grown, np.ones((5, 5), np.uint8))
 
 
+def _grow_mask_to_badge_ink(img, mask, boxes, max_gain=2.2, tol=45):
+    """Take the badge's GRAPHICS too, not just its words.
+
+    A ribbon/seal carries more than letters: a coloured border, an icon (a
+    thumbs-up) that is drawn in white with a dark outline, an arrow. OCR sees
+    only the text, so those survive. Here, near each claim block, we add
+      - saturated red/gold strokes (badge borders, arrows), and
+      - white ISLANDS that do not touch the frame (an icon or ribbon face lying
+        on the product - page white is far too large to qualify),
+    then dilate a little so thin outlines go too. Area-capped per block so a
+    product's own print is never swallowed.
+    """
+    cv2, np = _load_cv()
+    H, W = img.shape[:2]
+    b_, g_, r_ = (img[:, :, 0].astype(np.int16), img[:, :, 1].astype(np.int16),
+                  img[:, :, 2].astype(np.int16))
+    ss = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:, :, 1]
+    ink = (((r_ - b_) > 115) & (r_ > 140) & (ss > 110)).astype(np.uint8)
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    px = img.reshape(-1, 3).astype(float)
+    bright = px.min(axis=1) > 200
+    if bright.sum() < max(200, len(px) * 0.15):
+        bright = np.zeros(len(px), bool)
+        bright[np.argsort(px.sum(axis=1))[-max(500, len(px) // 5):]] = True
+    page = np.median(px[bright], axis=0)
+    white = (np.linalg.norm(img.astype(float) - page, axis=2) <= tol).astype(np.uint8)
+    base = int((mask > 0).sum())
+    add = np.zeros((H, W), np.uint8)
+    for (x, y, w, h) in boxes:
+        ex = int(max(w, h) * 0.6) + 10
+        x0, y0 = max(0, x - ex), max(0, y - ex)
+        x1, y1 = min(W, x + w + ex), min(H, y + h + ex)
+        cap = int(w * h * 4.0) + 600
+        for kind in (ink, white):
+            n, lab, stats, _ = cv2.connectedComponentsWithStats(kind, 8)
+            for i in range(1, n):
+                area = int(stats[i, cv2.CC_STAT_AREA])
+                if area > cap or area > 0.10 * H * W:
+                    continue
+                comp = (lab[y0:y1, x0:x1] == i)
+                if comp.any():
+                    add[y0:y1, x0:x1][comp] = 1
+    if not add.any():
+        return mask
+    grown = cv2.bitwise_or(mask, add)
+    grown = cv2.dilate(grown, np.ones((11, 11), np.uint8))
+    if base and int((grown > 0).sum()) > base * max_gain:
+        return mask                      # too much: keep the text-only mask
+    return grown
+
+
+def _finish_clean(img, out, mask):
+    """Final pass so the patch reads as one photograph, not a patch.
+
+    Seams are despeckled, grain matching the untouched photo is put back inside
+    the fill (a perfectly smooth patch is what reads as "smudge"), and a light
+    unsharp is applied to the fill only - the original pixels are left alone.
+    """
+    cv2, np = _load_cv()
+    hole = mask > 0
+    if not hole.any():
+        return out
+    soft = cv2.GaussianBlur(hole.astype(np.uint8) * 255, (5, 5), 0).astype(np.float32) / 255.0
+    soft = soft[..., None]
+    med = cv2.medianBlur(out, 3).astype(np.float32)
+    o = med * soft + out.astype(np.float32) * (1 - soft)
+    valid = ~hole
+    g = float(img[valid].astype(np.float32).std()) if valid.any() else 2.0
+    g = min(max(g * 0.45, 0.8), 4.0) if g > 3.0 else 0.0
+    if g > 0:
+        # never sprinkle grain over flat page: it is what reads as a smudge
+        px = img[valid].reshape(-1, 3).astype(float)
+        bright = px.min(axis=1) > 200
+        if bright.sum() < max(200, len(px) * 0.15):
+            bright = np.zeros(len(px), bool)
+            bright[np.argsort(px.sum(axis=1))[-max(500, len(px) // 5):]] = True
+        page = np.median(px[bright], axis=0) if len(px) else np.array([255.0, 255.0, 255.0])
+        textured = (np.linalg.norm(out.astype(float) - page, axis=2) > 25)[..., None].astype(np.float32)
+        rng = np.random.default_rng(11)
+        o = o + rng.normal(0.0, g, (out.shape[0], out.shape[1], 1)).repeat(3, axis=2) * soft * textured
+    o = np.clip(o, 0, 255).astype(np.uint8)
+    blur = cv2.GaussianBlur(o, (0, 0), 1.2).astype(np.float32)
+    sharp = np.clip(o.astype(np.float32) * 1.45 - blur * 0.45, 0, 255)
+    return np.clip(sharp * soft + o.astype(np.float32) * (1 - soft), 0, 255).astype(np.uint8)
+
+
+
 def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     """Content-aware fill: copy plausible surrounding texture into each hole.
 
@@ -626,7 +742,10 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
     mask, painted = build_mask(img, boxes, pad)
     if boxes and os.environ.get("IMAGE_VERIFY_GROW_GRAPHICS", "1") == "1":
         try:
-            mask = _grow_mask_to_graphics(img, mask, [(b["x1"], b["y1"], b["x2"] - b["x1"], b["y2"] - b["y1"]) for b in boxes])
+            _bx = [(b["x1"], b["y1"], b["x2"] - b["x1"], b["y2"] - b["y1"]) for b in boxes]
+            mask = _grow_mask_to_graphics(img, mask, _bx)
+            if os.environ.get("IMAGE_VERIFY_BADGE_INK", "1") == "1":
+                mask = _grow_mask_to_badge_ink(img, mask, _bx)
         except Exception as exc:  # noqa: BLE001
             print(f"[verify] mask grow skipped: {exc}", file=sys.stderr)
     if not painted:
@@ -646,6 +765,11 @@ def remove_claims(img, boxes: list[dict], pad: int = 6, radius: int = 5):
                     out = _region_composite(img, out, mask)
                 except Exception as exc:  # noqa: BLE001
                     print(f"[verify] region composite skipped: {exc}", file=sys.stderr)
+            if os.environ.get("IMAGE_VERIFY_FINISH", "1") == "1":
+                try:
+                    out = _finish_clean(img, out, mask)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[verify] finish skipped: {exc}", file=sys.stderr)
             return out, painted
         except Exception as exc:  # noqa: BLE001
             print(f"[verify] LaMa unavailable ({type(exc).__name__}: {exc}); spill", file=sys.stderr)
