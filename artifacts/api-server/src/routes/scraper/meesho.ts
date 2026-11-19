@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from "express";
 import { logger } from "../../lib/logger.js";
 import ExcelJS from "exceljs";
+import * as xlsx from "xlsx";
+import multer from "multer";
 import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -584,6 +586,160 @@ router.post("/clear-cache", async (_req: Request, res: Response): Promise<void> 
     res.json({ status: "success", message: result.message || "Cache cleared" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/scraper/meesho/upload ─────────────────────────────────────────
+// Second entry point alongside the store link: a sheet that already lists Meesho
+// product links. Mirrors /amazon/upload and /flipkart/upload — the client gets
+// back plain URLs and then runs the ordinary scrape job, so enrichment, pause/
+// resume, L2 export and the Gajab workbook all work unchanged.
+const meeshoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
+
+function _findMeeshoUrlColumn(rows: any[][]): number {
+  let bestIdx = -1;
+  let bestScore = 0;
+  for (let col = 0; col < Math.max(...rows.map((r) => (Array.isArray(r) ? r.length : 0)), 0); col++) {
+    let score = 0;
+    for (const row of rows) {
+      const val = String((Array.isArray(row) ? row[col] : "") ?? "").toLowerCase();
+      if (val.includes("meesho.com") || val.includes("meesho.io") || /\/p\/[a-z0-9]{4,}/.test(val)) score++;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = col;
+    }
+  }
+  return bestScore > 0 ? bestIdx : -1;
+}
+
+/** Normalise one cell to a Meesho product URL, or null if it is not one. */
+function normalizeMeeshoUrl(raw: string): string | null {
+  let s = String(raw ?? "").trim();
+  if (!s) return null;
+  // Sheets exported from tools often carry "=HYPERLINK(...)" or surrounding quotes.
+  const hyperlink = s.match(/HYPERLINK\("([^"]+)"/i);
+  if (hyperlink) s = hyperlink[1];
+  s = s.replace(/^["'\s]+|["'\s]+$/g, "");
+  s = s.split("#")[0].split("?")[0].trim();
+  if (!s) return null;
+
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      const u = new URL(s);
+      if (!/(^|\.)meesho\.(com|io)$/i.test(u.hostname)) return null;
+      // Canonical product pages live on www.meesho.com; the bare host redirects,
+      // and the scraper should not spend a hop doing it.
+      const host = u.hostname.toLowerCase() === "meesho.com" ? "www.meesho.com" : u.hostname;
+      return `https://${host}${u.pathname}`.replace(/\/+$/, "");
+    } catch {
+      return null;
+    }
+  }
+  // "www.meesho.com/…" or "meesho.com/…"
+  if (/^(www\.)?meesho\.(com|io)\//i.test(s)) {
+    return `https://${s.replace(/^meesho\.com\//i, "www.meesho.com/").replace(/\/+$/, "")}`;
+  }
+  // "/slug/p/code" (path only)
+  if (/^\//.test(s)) return `https://www.meesho.com${s.replace(/\/+$/, "")}`;
+  // "slug/p/code"
+  if (/^[a-z0-9][a-z0-9._-]*\/p\/[a-z0-9]+/i.test(s)) return `https://www.meesho.com/${s.replace(/\/+$/, "")}`;
+  return null;
+}
+
+/** Readable fallback label from a product URL: /prestige-veggie-cutter/p/abc123 */
+function titleFromMeeshoUrl(url: string): string {
+  const parts = url.split("/").filter(Boolean);
+  const pIdx = parts.indexOf("p");
+  const slug = pIdx > 0 ? parts[pIdx - 1] : parts[parts.length - 1] || "";
+  return slug
+    .replace(/-{2,}/g, "-")
+    .split("-")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+router.post("/upload", (req: Request, res: Response, next) => {
+  meeshoUpload.single("file")(req, res, (err: any) => {
+    if (err) {
+      const msg = err?.code === "LIMIT_FILE_SIZE" ? "file too large (max 100 MB)" : (err?.message || "upload error");
+      logger.warn({ err: msg }, "Meesho upload rejected");
+      res.status(413).json({ error: `Upload failed: ${msg}` });
+      return;
+    }
+    next();
+  });
+}, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      res.status(400).json({ error: "No file uploaded" });
+      return;
+    }
+    const name = (file.originalname || "").toLowerCase();
+    const workbook = name.endsWith(".csv")
+      ? xlsx.read(file.buffer.toString("utf8"), { type: "string" })
+      : xlsx.read(file.buffer, { type: "buffer" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    if (!sheet) {
+      res.status(400).json({ error: "The workbook has no readable sheet" });
+      return;
+    }
+    const rows: any[][] = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: "", blankrows: false });
+
+    // URL column: whichever column holds the most Meesho product links.
+    const urlCol = _findMeeshoUrlColumn(rows);
+    const candidates: string[] = [];
+    if (urlCol >= 0) {
+      const header = String(rows[0]?.[urlCol] ?? "").toLowerCase();
+      const start = header.includes("url") || header.includes("link") || header.includes("product") ? 1 : 0;
+      for (const row of rows.slice(start)) {
+        const v = String((Array.isArray(row) ? row[urlCol] : "") ?? "").trim();
+        if (v) candidates.push(v);
+      }
+    } else {
+      // No obvious column — keep every cell that could be a link.
+      for (const row of rows) {
+        if (!Array.isArray(row)) continue;
+        for (const cell of row) {
+          const v = String(cell ?? "").trim();
+          if (v.toLowerCase().includes("meesho")) candidates.push(v);
+        }
+      }
+    }
+
+    // Optional title column so the list is readable before scraping.
+    let titleCol = -1;
+    const headerRow = rows[0] || [];
+    for (let c = 0; c < headerRow.length; c++) {
+      if (/product\s*name|title|product/i.test(String(headerRow[c] ?? ""))) { titleCol = c; break; }
+    }
+
+    const seen = new Set<string>();
+    const items: { url: string; title: string }[] = [];
+    let duplicates = 0;
+    let invalid = 0;
+    for (let i = 0; i < candidates.length; i++) {
+      const normalized = normalizeMeeshoUrl(candidates[i]);
+      if (!normalized) { invalid++; continue; }
+      if (seen.has(normalized)) { duplicates++; continue; }
+      seen.add(normalized);
+      const sheetTitle = titleCol >= 0 ? String((rows[i + 1] ?? [])[titleCol] ?? "").trim() : "";
+      items.push({ url: normalized, title: sheetTitle || titleFromMeeshoUrl(normalized) });
+    }
+
+    res.json({
+      totalUrls: candidates.length,
+      validUrls: items.length,
+      duplicates,
+      invalid,
+      urls: items.map((i) => i.url),
+      items,
+    });
+  } catch (err: any) {
+    logger.error({ err }, "Failed to read Meesho sheet");
+    res.status(500).json({ error: "Failed to read the sheet: " + err.message });
   }
 });
 

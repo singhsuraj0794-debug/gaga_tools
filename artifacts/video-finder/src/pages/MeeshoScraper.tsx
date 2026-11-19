@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, type ChangeEvent, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,9 @@ import {
   RotateCcw,
   Store,
   SlidersHorizontal,
+  Upload,
+  FileSpreadsheet,
+  X,
 } from "lucide-react";
 import { Link } from "wouter";
 import { API_BASE } from "@/lib/api";
@@ -191,6 +194,133 @@ export default function MeeshoScraper() {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Sheet upload (second entry point, same as the Amazon/Flipkart scrapers) ──
+  // A sheet of Meesho product links needs no store walk: the rows become the
+  // product list and the ordinary scrape job fills in title/price/images.
+  const [file, setFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{ total: number; valid: number; duplicates: number; invalid: number } | null>(null);
+
+  const makeUploadedProduct = (url: string, title: string, i: number): MeeshoDetailedProduct => ({
+    id: url.match(/\/p\/([^/?#]+)/)?.[1] || url.split("/").filter(Boolean).pop() || `row-${i + 1}`,
+    title: title || "Untitled product",
+    description: null,
+    meta_description: null,
+    imageUrl: null,
+    images: [],
+    hsn: null,
+    gst: null,
+    dimensions: null,
+    weight: null,
+    specifications: null,
+    variants: null,
+    price: null,
+    url,
+    status: "pending",
+    error: null,
+  });
+
+  const applyUploadedUrls = (
+    items: { url: string; title?: string }[],
+    meta: { total: number; valid: number; duplicates: number; invalid: number },
+  ) => {
+    const productsFromSheet = items.map((it, i) => makeUploadedProduct(it.url, it.title || "", i));
+    setProducts(productsFromSheet);
+    setFilteredProducts(productsFromSheet);
+    setSelectedUrls(new Set(productsFromSheet.map((p) => p.url)));
+    setRange([1, productsFromSheet.length || 1]);
+    setStoreName("Uploaded sheet");
+    setSearchQuery("");
+    setUploadStatus({ total: meta.total, valid: meta.valid, duplicates: meta.duplicates, invalid: meta.invalid });
+    // A new list supersedes anything scraped from a previous store/sheet, and
+    // must also stop the store-extract / scrape pollers — otherwise a store walk
+    // that finishes later would overwrite the uploaded list.
+    setScrapedProducts([]);
+    sessionStorage.removeItem("meesho_scraped");
+    sessionStorage.removeItem("meesho_jobId");
+    sessionStorage.removeItem("meesho_extract_jobId");
+    if (extractPollRef.current) clearInterval(extractPollRef.current);
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = null;
+    setExtractJobId(null);
+    setIsExtracting(false);
+    setExtractProgress(null);
+    setIsScraping(false);
+    setScrapeJobId(null);
+  };
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0]);
+      setUploadStatus(null);
+    }
+  };
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const dropped = e.dataTransfer.files?.[0];
+    if (dropped && /\.(xlsx|xls|csv)$/i.test(dropped.name)) {
+      setFile(dropped);
+      setUploadStatus(null);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!file) return;
+    setIsUploading(true);
+    setExtractError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch(`${API_BASE}/api/scraper/meesho/upload`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        alert("Upload failed: " + (data.error || "Unknown error"));
+        return;
+      }
+      if (!data.items || data.items.length === 0) {
+        alert("No Meesho product links found in that sheet.");
+        return;
+      }
+      applyUploadedUrls(data.items, {
+        total: data.totalUrls ?? data.items.length,
+        valid: data.validUrls ?? data.items.length,
+        duplicates: data.duplicates ?? 0,
+        invalid: data.invalid ?? 0,
+      });
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert("Upload failed: " + (error as Error)?.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const clearUpload = () => {
+    setFile(null);
+    setUploadStatus(null);
+    setProducts([]);
+    setFilteredProducts([]);
+    setSelectedUrls(new Set());
+    setStoreName("");
+    setRange([1, 1]);
+  };
 
   const handleExtract = async () => {
     if (!storeUrl.trim()) return;
@@ -528,6 +658,64 @@ export default function MeeshoScraper() {
                 </div>
               </div>
             </div>
+
+            {/* Step 1b: Upload a sheet of product links (same two entry points as Amazon) */}
+            {products.length === 0 && (
+              <div
+                className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                  isDragOver ? "border-orange-500 bg-orange-50" : "border-orange-300"
+                }`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <input
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  id="meesho-file-upload"
+                />
+                <label htmlFor="meesho-file-upload" className="cursor-pointer flex flex-col items-center gap-2">
+                  <Upload className="w-12 h-12 text-orange-600" />
+                  <span className="text-lg font-medium text-orange-800">
+                    {file ? file.name : "…or drop a sheet of Meesho product links here"}
+                  </span>
+                  <span className="text-sm text-orange-600">
+                    Supports .xlsx, .xls and .csv — every link in the sheet becomes a product to scrape
+                  </span>
+                </label>
+                {file && (
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    <Button onClick={handleUpload} disabled={isUploading} className="bg-orange-600 hover:bg-orange-700">
+                      {isUploading ? (
+                        <div className="w-4 h-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2" />
+                      ) : (
+                        <FileSpreadsheet className="w-4 h-4 mr-2" />
+                      )}
+                      Upload and Read Links
+                    </Button>
+                    <Button variant="outline" onClick={() => setFile(null)} className="border-orange-300 text-orange-700">
+                      <X className="w-4 h-4" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {uploadStatus && (
+              <div className="flex items-center gap-2 p-4 bg-orange-100 text-orange-800 rounded-lg">
+                <CheckCircle2 className="w-5 h-5 shrink-0" />
+                <span>
+                  Read <strong>{uploadStatus.valid}</strong> product link(s) from the sheet
+                  {uploadStatus.duplicates > 0 && <> &mdash; {uploadStatus.duplicates} duplicate(s) skipped</>}
+                  {uploadStatus.invalid > 0 && <> &mdash; {uploadStatus.invalid} invalid skipped</>}
+                </span>
+                <Button variant="ghost" size="sm" onClick={clearUpload} className="ml-auto text-orange-700 hover:text-orange-900">
+                  Clear
+                </Button>
+              </div>
+            )}
 
             {storeName && (
               <div className="flex items-center gap-2 p-4 bg-orange-100 text-orange-800 rounded-lg">
