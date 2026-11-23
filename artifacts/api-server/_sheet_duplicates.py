@@ -15,6 +15,7 @@ import os
 import re
 import time
 import tempfile
+import random
 import warnings
 from typing import List, Dict, Optional, Tuple, Set
 from collections import defaultdict
@@ -46,6 +47,21 @@ except OSError:
 _IMAGE_CACHE: Dict[str, Optional[str]] = {}
 
 STOCK_PHOTO_THRESHOLD = 0.30  # pHash cluster shared by >30% of products = stock
+
+# Download tuning. A 46 KB full-size marketplace photo hashes exactly like the
+# 5.7 KB 300px variant (pHash works on 32x32), and Meesho's CDN resizes on the
+# fly, so fetching full size was ~8x the transfer for zero accuracy. Sheets used
+# to take 30+ min because of it.
+DUPE_IMAGE_WIDTH = int(os.environ.get("DUPE_IMAGE_WIDTH", "300"))
+DUPE_PREFETCH_WORKERS = int(os.environ.get("DUPE_PREFETCH_WORKERS", "64"))
+# Candidate generation can run on the first N images of every product and fetch
+# the rest only for products that land in a candidate pair. That helps a sheet of
+# mostly-unique products, but MEASURED on a sheet where nearly every row is a
+# re-upload of the same few products (all 4,000 rows were in a candidate pair)
+# it saved nothing and cost an extra pass — so the default is a single pass
+# (10 = all images). Set DUPE_PREFETCH_IMAGES=2 for unique-heavy sheets.
+DUPE_PREFETCH_IMAGES = int(os.environ.get("DUPE_PREFETCH_IMAGES", "10"))
+DUPE_FETCH_RETRIES = int(os.environ.get("DUPE_FETCH_RETRIES", "2"))
 MAX_CANDIDATE_PAIRS = 50000   # safety cap
 MAX_PRODUCTS_IN_BUCKET = 500  # skip LSH buckets larger than this
 
@@ -62,6 +78,21 @@ def _cache_path(url: str) -> str:
     return os.path.join(_CACHE_DIR, hashlib.sha256(url.encode("utf-8")).hexdigest() + ".img")
 
 
+def _small_variant(url: str) -> str:
+    """CDN-resized copy of a product image, where the host supports it.
+
+    images.meesho.com accepts ?width=N (measured 5.7 KB at 300 vs 46 KB full).
+    Other hosts are left untouched — their resize syntax differs and a bad query
+    can turn a 200 into a 404.
+    """
+    if DUPE_IMAGE_WIDTH <= 0 or not url or "width=" in url:
+        return url
+    m = re.match(r"https?://([^/]+)", url)
+    if not m or "images.meesho.com" not in m.group(1).lower():
+        return url
+    return f"{url}{'&' if '?' in url else '?'}width={DUPE_IMAGE_WIDTH}"
+
+
 def _fetch_one(url: str, timeout: int = 8) -> Optional[str]:
     """Download an image to the disk cache and return its file path (or None).
     Reuses a previously cached file, so memory stays flat and re-runs are fast."""
@@ -74,63 +105,87 @@ def _fetch_one(url: str, timeout: int = 8) -> Optional[str]:
     if os.path.exists(cache_path) and os.path.getsize(cache_path) > 0:
         _IMAGE_CACHE[url] = cache_path
         return cache_path
-    candidates = [url]
     cleaned = clean_url(url)
-    if cleaned != url:
+    candidates = [_small_variant(url)]
+    if url not in candidates:
+        candidates.append(url)
+    if cleaned != url and cleaned not in candidates:
+        candidates.append(_small_variant(cleaned))
         candidates.append(cleaned)
     for u in candidates:
-        try:
-            resp = requests.get(u, timeout=timeout, headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                "Accept": "image/png,image/jpeg,*/*",
-            })
-            if resp.status_code == 200 and len(resp.content) > 0:
-                tmp = cache_path + ".tmp"
-                with open(tmp, "wb") as f:
-                    f.write(resp.content)
-                # Verify it decodes as a valid image before caching.
-                try:
-                    with Image.open(tmp) as im:
-                        im.verify()
-                except Exception:
-                    try:
-                        os.unlink(tmp)
-                    except OSError:
-                        pass
+        for attempt in range(DUPE_FETCH_RETRIES + 1):
+            try:
+                resp = requests.get(u, timeout=timeout, headers={
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                    "Accept": "image/png,image/jpeg,*/*",
+                })
+                # Akamai throttles bursts: retrying after a short pause recovers
+                # the image instead of silently marking it missing for the run
+                # (a missing image can hide a duplicate pair as well as slow it).
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < DUPE_FETCH_RETRIES:
+                    time.sleep(0.5 * (attempt + 1) + random.random() * 0.5)
                     continue
-                os.replace(tmp, cache_path)
-                _IMAGE_CACHE[url] = cache_path
-                return cache_path
-        except Exception:
-            pass
+                if resp.status_code == 200 and len(resp.content) > 0:
+                    tmp = cache_path + ".tmp"
+                    with open(tmp, "wb") as f:
+                        f.write(resp.content)
+                    # Header-only sanity check: Image.verify() fully decoded every
+                    # download, then the image was decoded AGAIN for the hash.
+                    try:
+                        with Image.open(tmp) as im:
+                            im.size
+                    except Exception:
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+                        break
+                    os.replace(tmp, cache_path)
+                    _IMAGE_CACHE[url] = cache_path
+                    return cache_path
+                break
+            except Exception:
+                if attempt < DUPE_FETCH_RETRIES:
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                break
     _IMAGE_CACHE[url] = None
     return None
 
 
-def _collect_urls(products: List[dict]) -> List[str]:
+def _collect_urls(products: List[dict], limit: int = 10) -> List[str]:
     urls = []
     seen = set()
     for p in products:
         # `p.get("images", [])` returns None when the sheet has "images": null —
         # the default only applies to a MISSING key — and None[:10] crashed the
         # whole detector ("detector exited with code 1").
-        for url in (p.get("images") or [])[:10]:
+        for url in (p.get("images") or [])[:limit]:
             if url and url not in seen:
                 seen.add(url)
                 urls.append(url)
     return urls
 
 
-def _prefetch_images(urls: List[str], workers: int = 80) -> None:
+def _prefetch_images(urls: List[str], workers: int = None) -> None:
+    if not urls:
+        return
+    workers = workers or DUPE_PREFETCH_WORKERS
+    failed = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_fetch_one, u): u for u in urls}
         done = 0
         total = len(futures)
         for f in as_completed(futures):
             done += 1
+            try:
+                if f.result() is None:
+                    failed += 1
+            except Exception:
+                failed += 1
             if done % 100 == 0 or done == total:
                 pct = int(done * 100 / total) if total else 0
-                print(f"[DUP]   Downloaded {done}/{total} images ({pct}%)", file=sys.stderr)
+                print(f"[DUP]   Downloaded {done}/{total} images ({pct}%) — {failed} failed", file=sys.stderr)
                 sys.stderr.flush()
 
 
@@ -202,9 +257,9 @@ def _unpack_hash_entry(entry):
     return entry[0], entry[1], None
 
 
-def _compute_product_hashes(product: dict) -> List[Tuple[str, object]]:
+def _compute_product_hashes(product: dict, start: int = 0, stop: int = 10) -> List[Tuple[str, object]]:
     hashes = []
-    for url in (product.get("images") or [])[:10]:
+    for url in (product.get("images") or [])[start:stop]:
         path = _fetch_one(url)
         if path is None:
             continue
@@ -522,10 +577,14 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     print(f"[DUP] {n} products to check", file=sys.stderr)
     sys.stderr.flush()
 
-    # Phase 1: Download ALL images and compute pHash
-    print(f"[DUP] Phase 1: Downloading all images ({n} products)...", file=sys.stderr)
+    # Phase 1: Download the first N images per product and compute pHash.
+    # The remaining images are fetched later, only for products that appear in a
+    # candidate pair — on a mostly-unique sheet that is 2x fewer downloads.
+    pre = max(1, min(DUPE_PREFETCH_IMAGES, 10))
+    print(f"[DUP] Phase 1: Downloading first {pre} image(s) of {n} products "
+          f"({DUPE_PREFETCH_WORKERS} workers, {DUPE_IMAGE_WIDTH}px)...", file=sys.stderr)
     sys.stderr.flush()
-    all_urls = _collect_urls(products)
+    all_urls = _collect_urls(products, limit=pre)
     print(f"[DUP]   {len(all_urls)} unique images to prefetch", file=sys.stderr)
     sys.stderr.flush()
     _prefetch_images(all_urls, workers=24)
@@ -539,7 +598,7 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     def _hash_product(i_p):
         i, p = i_p
         try:
-            return i, _compute_product_hashes(p)
+            return i, _compute_product_hashes(p, 0, pre)
         except Exception:
             return i, []
 
@@ -656,6 +715,40 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
 
     print(f"[DUP] Phase 2 done: {len(candidate_pairs)} total candidates ({time.time()-t1:.1f}s)", file=sys.stderr)
     sys.stderr.flush()
+
+    # Phase 2b: pull the REMAINING images of the products that are actually in a
+    # candidate pair, so the full-image comparison in phase 3 still sees all of
+    # them (this is what keeps recall identical while downloading far less).
+    needed = sorted({idx for pair in candidate_pairs for idx in pair})
+    missing_urls: List[str] = []
+    for idx in needed:
+        for url in (products[idx].get("images") or [])[pre:10]:
+            if url:
+                missing_urls.append(url)
+    if missing_urls:
+        t2 = time.time()
+        print(f"[DUP] Phase 2b: fetching {len(missing_urls)} extra image(s) for {len(needed)} candidate products...",
+              file=sys.stderr)
+        sys.stderr.flush()
+        _prefetch_images(list(dict.fromkeys(missing_urls)))
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            def _extend(i):
+                extra_hashes = _compute_product_hashes(products[i], pre, 10)
+                return i, extra_hashes
+            for i, extra_hashes in pool.map(_extend, needed):
+                if extra_hashes:
+                    product_hashes[i] = list(product_hashes.get(i, [])) + extra_hashes
+        # Re-apply the stock-photo filter to the extended lists so phase 3 does
+        # not credit a stock photo that only appeared in image 3 or 4.
+        for idx in needed:
+            product_hashes[idx] = [
+                entry for entry in product_hashes[idx]
+                if _hash_int(_unpack_hash_entry(entry)[1]) not in stock_hashes
+            ]
+        filtered_product_hashes = {idx: product_hashes[idx] for idx in needed if product_hashes.get(idx)}
+        print(f"[DUP] Phase 2b done: {len(needed)} products have full image sets ({time.time()-t2:.1f}s)",
+              file=sys.stderr)
+        sys.stderr.flush()
 
     # Union-find
     parent = list(range(n))

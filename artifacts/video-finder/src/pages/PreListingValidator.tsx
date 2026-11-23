@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
+  X,
   ChevronDown,
   ChevronRight,
   Download,
@@ -48,6 +49,7 @@ import {
   setPrelistingApiBase,
   startSheetDuplicatesJob,
   getSheetDuplicatesJob,
+  cancelSheetDuplicatesJob,
   titleTextSimilarity,
   TEXT_DUPLICATE_THRESHOLD,
   type ValidationResult,
@@ -132,6 +134,10 @@ export default function PreListingValidator() {
   const [skipTextCorrection, setSkipTextCorrection] = useState(false);
   const [crossSellerDuplicates, setCrossSellerDuplicates] = useState(false);
   const [revalidating, setRevalidating] = useState(false);
+  // Duplicate runs: the API keeps one active job and reuses it for the same
+  // sheet, so the page tracks the id to be able to stop it.
+  const [dupJobId, setDupJobId] = useState<string | null>(null);
+  const [dupRunning, setDupRunning] = useState(false);
 
   const [dismissedChecks, setDismissedChecks] = useState<Map<string, Set<number>>>(new Map());
   const [correctionFeedback, setCorrectionFeedback] = useState<Map<string, boolean>>(new Map());
@@ -1629,6 +1635,7 @@ export default function PreListingValidator() {
 
   const findSheetDuplicates = async () => {
     if (rows.length < 2) return;
+    setDupRunning(true);
     // Capture the pre-duplicate baseline once (reused across re-runs) so the
     // text check can restore the image-duplicates it does not confirm.
     _rowsPreDup.current = _rowsPreDup.current ?? rows;
@@ -1668,7 +1675,11 @@ export default function PreListingValidator() {
         // again instead of failing the user's run.
         let restarts = 0;
         for (;;) {
-          const { jobId, total } = await startSheetDuplicatesJob(prods);
+          const { jobId, total, reused } = await startSheetDuplicatesJob(prods);
+          setDupJobId(jobId);
+          if (reused) {
+            setDuplicateStatus("Attached to the duplicate check already running for this sheet...");
+          }
           const t0 = Date.now();
           let blips = 0;
           for (;;) {
@@ -1690,7 +1701,11 @@ export default function PreListingValidator() {
               continue;
             }
             blips = 0;
-            if (s.status === "completed") return s;
+            if (s.status === "completed") { setDupJobId(null); return s; }
+            if (s.status === "cancelled") {
+              setDupJobId(null);
+              throw new Error(s.error || "Duplicate check was stopped");
+            }
             if (s.status === "failed") {
               if (restarts < 2) {
                 restarts += 1;
@@ -1779,6 +1794,8 @@ export default function PreListingValidator() {
     } catch (e) {
       setDuplicateStatus(`Duplicate check failed: ${e}. Compute API: ${getPrelistingApiBase()} — ensure the tunnel is running and this URL is correct (use the Test button).`);
     }
+    setDupRunning(false);
+    setDupJobId(null);
   };
 
   // ── Check with Texts ─────────────────────────────────────────────────────
@@ -2257,9 +2274,23 @@ export default function PreListingValidator() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3 mt-2">
-                    <Button onClick={findSheetDuplicates} size="lg" variant="outline" className="border-rose-300 text-rose-700 hover:bg-rose-50" disabled={rows.length < 2}>
-                      <Copy className="w-4 h-4 mr-2" /> Find Duplicates
+                    <Button onClick={findSheetDuplicates} size="lg" variant="outline" className="border-rose-300 text-rose-700 hover:bg-rose-50" disabled={rows.length < 2 || dupRunning}>
+                      {dupRunning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Copy className="w-4 h-4 mr-2" />}
+                      {dupRunning ? "Checking..." : "Find Duplicates"}
                     </Button>
+                    {dupRunning && dupJobId && (
+                      <Button
+                        size="lg" variant="outline"
+                        className="border-slate-300 text-slate-700 hover:bg-slate-50"
+                        onClick={async () => {
+                          // Stops the Python process server-side, not just the poll.
+                          setDuplicateStatus("Stopping the duplicate check...");
+                          try { await cancelSheetDuplicatesJob(dupJobId); } catch { /* job may already be gone */ }
+                        }}
+                      >
+                        <X className="w-4 h-4 mr-2" /> Stop
+                      </Button>
+                    )}
                     <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none" title="Compare across all sellers (slower but catches cross-seller duplicates)">
                       <input
                         type="checkbox"

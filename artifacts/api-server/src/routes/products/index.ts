@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { logger } from "../../lib/logger";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { getSupabase } from "../../lib/supabase";
 import { tmpPath } from "../../lib/tmp";
 import { pythonBin } from "../../lib/py";
@@ -1702,15 +1703,52 @@ router.post("/products/sheet-duplicates", async (req, res): Promise<void> => {
 // Run it in the background so every HTTP request stays short and the client
 // polls for progress/results, exactly like category-validate/job.
 type SheetDupJob = {
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   startedAt: number;
   products: number;
   inputPath: string;
   resultPath: string;
   logPath: string;
+  fingerprint: string;
   error?: string;
 };
 const sheetDupJobs = new Map<string, SheetDupJob>();
+// fingerprint -> jobId, so a second tab (or the client's own retry loop) attaches
+// to the run already in flight instead of starting another. Two concurrent jobs
+// do not add throughput — they share one egress IP, one disk cache and one CPU,
+// and Meesho throttles per IP, so a second run made the first ~3x slower
+// (measured: 20 img/s alone vs 6.5 img/s with three jobs).
+const sheetDupByFingerprint = new Map<string, string>();
+// Only one duplicate run at a time: a new submission supersedes the old job.
+let activeSheetDupJob: { jobId: string; child: any } | null = null;
+
+function sheetFingerprint(products: any[]): string {
+  // Stable across row order and irrelevant fields: what matters is which images
+  // belong to which SKU.
+  const lines = products
+    .map((p) => `${String(p?.sku ?? "")}|${((p?.images as string[]) || []).join(",")}`)
+    .sort();
+  return createHash("sha1").update(lines.join("\n")).digest("hex");
+}
+
+function stopSheetDupJob(jobId: string, reason: string): void {
+  const job = sheetDupJobs.get(jobId);
+  if (!job) return;
+  if (activeSheetDupJob?.jobId === jobId && activeSheetDupJob.child) {
+    try { activeSheetDupJob.child.kill(); } catch { /* already gone */ }
+    activeSheetDupJob = null;
+  }
+  if (job.status === "running") {
+    job.status = "cancelled";
+    job.error = reason;
+  }
+  if (sheetDupByFingerprint.get(job.fingerprint) === jobId) {
+    sheetDupByFingerprint.delete(job.fingerprint);
+  }
+  // The child is gone, so the input file can go now; result/log stay for the
+  // poller that may still read them (pruned with the map).
+  try { unlinkSync(job.inputPath); } catch { /* best effort */ }
+}
 
 // Background job maps are in-memory and were never trimmed, so a long-lived
 // server accumulated one entry per request (and a stuck entry per crash).
@@ -1744,6 +1782,18 @@ router.post("/products/sheet-duplicates/job", async (req, res): Promise<void> =>
     const { createWriteStream } = await import("node:fs");
     const { randomUUID } = await import("node:crypto");
 
+    const fingerprint = sheetFingerprint(products);
+    const existingId = sheetDupByFingerprint.get(fingerprint);
+    const existing = existingId ? sheetDupJobs.get(existingId) : undefined;
+    if (existingId && existing && existing.status === "running") {
+      // Same sheet already running (second tab, or the client retried): attach.
+      res.json({ jobId: existingId, total: existing.products, reused: true });
+      return;
+    }
+    // Different sheet: this submission wins, the previous run is stopped so the
+    // two do not fight over the same IP budget.
+    if (activeSheetDupJob) stopSheetDupJob(activeSheetDupJob.jobId, "superseded by a newer duplicate run");
+
     const jobId = randomUUID();
     const scriptPath = resolveScript("_sheet_duplicates.py");
     const inputPath = tmpPath(`sheet_dup_in_${jobId}.json`);
@@ -1761,9 +1811,11 @@ router.post("/products/sheet-duplicates/job", async (req, res): Promise<void> =>
 
     const job: SheetDupJob = {
       status: "running", startedAt: Date.now(), products: products.length,
-      inputPath, resultPath, logPath,
+      inputPath, resultPath, logPath, fingerprint,
     };
     sheetDupJobs.set(jobId, job);
+    sheetDupByFingerprint.set(fingerprint, jobId);
+    activeSheetDupJob = { jobId, child };
     // Without an `error` listener a missing interpreter (PYTHON_BIN unset on a
     // fresh host) emits 'error' and never 'exit' — the job then reported
     // "running" forever and the client polled until its 1-hour timeout.
@@ -1773,8 +1825,12 @@ router.post("/products/sheet-duplicates/job", async (req, res): Promise<void> =>
       void import("node:fs/promises").then((m) => m.unlink(inputPath).catch(() => {}));
     });
     child.on("exit", (code) => {
-      job.status = code === 0 ? "completed" : "failed";
-      if (code !== 0 && !job.error) job.error = `detector exited with code ${code}`;
+      if (job.status !== "cancelled") {
+        job.status = code === 0 ? "completed" : "failed";
+        if (code !== 0 && !job.error) job.error = `detector exited with code ${code}`;
+      }
+      if (activeSheetDupJob?.jobId === jobId) activeSheetDupJob = null;
+      if (sheetDupByFingerprint.get(fingerprint) === jobId) sheetDupByFingerprint.delete(fingerprint);
       void import("node:fs/promises").then((m) => m.unlink(inputPath).catch(() => {}));
     });
 
@@ -1808,8 +1864,8 @@ router.get("/products/sheet-duplicates/job/:jobId", async (req, res): Promise<vo
     });
     return;
   }
-  if (job.status === "failed") {
-    res.json({ status: "failed", error: job.error || "duplicate detection failed", total: job.products });
+  if (job.status === "failed" || job.status === "cancelled") {
+    res.json({ status: job.status, error: job.error || "duplicate detection stopped", total: job.products });
     return;
   }
   try {
@@ -1839,6 +1895,19 @@ async function saveValidations(validations: any[]): Promise<void> {
   const { writeFile } = await import("node:fs/promises");
   await writeFile(VALIDATION_FILE, JSON.stringify(validations, null, 2));
 }
+
+// POST /api/products/sheet-duplicates/job/:jobId/cancel — stop a run and kill
+// its Python process. Previously an abandoned job kept scraping images for
+// hours (two were found at 49% after 1h45m), stealing bandwidth from new runs.
+router.post("/products/sheet-duplicates/job/:jobId/cancel", (req, res): void => {
+  const jobId = req.params.jobId;
+  if (!sheetDupJobs.has(jobId)) {
+    res.status(404).json({ error: "job not found" });
+    return;
+  }
+  stopSheetDupJob(jobId, "cancelled by the user");
+  res.json({ status: "cancelled" });
+});
 
 router.post("/products/validate-correction", async (req, res): Promise<void> => {
   try {

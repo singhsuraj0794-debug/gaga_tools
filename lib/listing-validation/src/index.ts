@@ -2233,7 +2233,7 @@ export function titleKey(s: string): string {
 export async function startSheetDuplicatesJob(
   products: SheetDupProduct[],
   apiBase: string = "",
-): Promise<{ jobId: string; total: number }> {
+): Promise<{ jobId: string; total: number; reused?: boolean }> {
   const baseUrl = apiBase || getPrelistingApiBase();
   const resp = await fetchWithRetry(`${baseUrl}/api/products/sheet-duplicates/job`, withApiHeaders({
     method: "POST",
@@ -2262,6 +2262,20 @@ export async function getSheetDuplicatesJob(
   }));
   if (!resp.ok) throw new Error(`Duplicate job fetch failed: ${resp.status} ${resp.statusText}`);
   return resp.json();
+}
+
+/** Stop a duplicate run and kill its Python process server-side. Without this an
+ *  abandoned run keeps downloading images for hours and slows every new run. */
+export async function cancelSheetDuplicatesJob(
+  jobId: string,
+  apiBase: string = "",
+): Promise<{ status: string }> {
+  const baseUrl = apiBase || getPrelistingApiBase();
+  const resp = await fetchWithRetry(`${baseUrl}/api/products/sheet-duplicates/job/${jobId}/cancel`, withApiHeaders({
+    method: "POST",
+    signal: AbortSignal.timeout(15000),
+  }));
+  return resp.json().catch(() => ({ status: "cancelled" }));
 }
 
 /**
