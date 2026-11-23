@@ -62,8 +62,15 @@ DUPE_PREFETCH_WORKERS = int(os.environ.get("DUPE_PREFETCH_WORKERS", "64"))
 # (10 = all images). Set DUPE_PREFETCH_IMAGES=2 for unique-heavy sheets.
 DUPE_PREFETCH_IMAGES = int(os.environ.get("DUPE_PREFETCH_IMAGES", "10"))
 DUPE_FETCH_RETRIES = int(os.environ.get("DUPE_FETCH_RETRIES", "2"))
-MAX_CANDIDATE_PAIRS = 50000   # safety cap
-MAX_PRODUCTS_IN_BUCKET = 500  # skip LSH buckets larger than this
+# Phase 3 costs ~75 µs per pair (26k pairs = 1.9 s measured), so a 50k cap was
+# far too low: an 11k-product sheet produces ~70k candidate pairs and a 29k
+# sheet ~200k, and the old cap silently truncated them (dropping real
+# duplicates). Raise it to a genuine safety valve only.
+MAX_CANDIDATE_PAIRS = 3000000
+# A bucket bigger than this is almost certainly a stock/blank image, but it can
+# also be a legitimately huge family of identical listings — so raise it and log
+# every skip instead of silently losing those duplicates.
+MAX_PRODUCTS_IN_BUCKET = 1500
 
 
 def clean_url(url: str) -> str:
@@ -297,13 +304,18 @@ def compute_image_overlap(
             if j in used_b:
                 continue
             _url_b, hash_b, sig_b = _unpack_hash_entry(entry_b)
+            # Integer reject first: colour_similarity() runs two numpy histogram
+            # intersections + a Lab delta, and it was computed for every one of
+            # the 16 image combinations in each pair even when the hashes were
+            # nowhere near. On an 11k sheet that was 1.27M pairs x 2 directions.
+            dist = hash_a - hash_b
+            if dist > threshold or dist >= best_dist:
+                continue
             # Recoloured artwork hashes identically — require matching colour.
             if not colors_match(sig_a, sig_b):
                 continue
-            dist = hash_a - hash_b
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = j
+            best_dist = dist
+            best_idx = j
         if best_idx is not None and best_dist <= threshold:
             matched += 1
             used_b.add(best_idx)
@@ -659,7 +671,10 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
         if len(members) < 2:
             continue
         if len(members) > MAX_PRODUCTS_IN_BUCKET:
-            continue  # skip huge buckets (likely missed stock photos)
+            print(f"[DUP]   exact-hash bucket with {len(members)} products skipped (> {MAX_PRODUCTS_IN_BUCKET})",
+                  file=sys.stderr)
+            sys.stderr.flush()
+            continue
         members = sorted(members)
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
@@ -679,7 +694,10 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     for t in range(N_TABLES):
         for k, prod_map in table_buckets[t].items():
             if len(prod_map) > MAX_PRODUCTS_IN_BUCKET:
-                continue  # skip oversized buckets
+                print(f"[DUP]   LSH bucket with {len(prod_map)} products skipped (> {MAX_PRODUCTS_IN_BUCKET})",
+                      file=sys.stderr)
+                sys.stderr.flush()
+                continue
             items = list(prod_map.items())
             for i in range(len(items)):
                 idx_a, hs_a = items[i]
@@ -787,24 +805,24 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
             return (a, b, max(matched_ab, matched_ba), len(hashes_a), len(hashes_b))
         return None
 
+    total = len(pair_list)
+    done = 0
+    CHUNK = 25000
     with ThreadPoolExecutor(max_workers=20) as pool:
-        futures = {pool.submit(_compare_pair, p): p for p in pair_list}
-        done = 0
-        total = len(futures)
-        for f in as_completed(futures):
-            done += 1
-            if done % 500 == 0 or done == total:
-                print(f"[DUP]   Compared {done}/{total} pairs", file=sys.stderr)
-                sys.stderr.flush()
-            result = f.result()
-            if result:
-                a, b, matched, ta, tb = result
-                union(a, b)
-                overlap_info[(min(a, b), max(a, b))] = {
-                    "matched": matched,
-                    "total_a": ta,
-                    "total_b": tb,
-                }
+        for start in range(0, total, CHUNK):
+            chunk = pair_list[start:start + CHUNK]
+            for result in pool.map(_compare_pair, chunk):
+                done += 1
+                if result:
+                    a, b, matched, ta, tb = result
+                    union(a, b)
+                    overlap_info[(min(a, b), max(a, b))] = {
+                        "matched": matched,
+                        "total_a": ta,
+                        "total_b": tb,
+                    }
+            print(f"[DUP]   Compared {done}/{total} pairs", file=sys.stderr)
+            sys.stderr.flush()
 
     out_groups = _build_groups(products, find, n, overlap_info)
 
