@@ -383,6 +383,21 @@ def _same_variant_family(a: dict, b: dict) -> bool:
     return fa is not None and fa == fb
 
 
+def _title_key(p: dict) -> str:
+    """Normalised title used to keep duplicate groups within one product.
+
+    Supplier photos are shared across pack sizes (a 4-pack and an 8-pack of the
+    same straws use the same 4 images), so an image-only group merged them and
+    the single "keep" was the 8-pack — the 4-pack listings were then deleted as
+    duplicates (or, with "Check with Texts", every 4-pack was restored and the
+    identical 4-pack pairs stayed). Splitting a group by title keeps the keep
+    inside the same product.
+    """
+    t = (p.get("title") or "").strip().lower()
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _build_groups(products, find_fn, n, overlap_info):
     groups_map: Dict[int, List[int]] = defaultdict(list)
     for i in range(n):
@@ -396,15 +411,7 @@ def _build_groups(products, find_fn, n, overlap_info):
             fam_counts[k] += 1
     out_groups = []
     all_remove_skus = []
-    for root, members in groups_map.items():
-        if len(members) < 2:
-            continue
-        # Variants: if every member belongs to the same variant family, this is
-        # one product with several variants (e.g. NEEM_BASIL_FACE_PACK and
-        # NEEM_BASIL_FACE_PACK_100GM) — never a duplicate.
-        fam_keys = {_variant_family_key(products[i]) for i in members}
-        if len(fam_keys) == 1 and None not in fam_keys:
-            continue
+    def _emit_group(members):
         def sort_key(idx):
             p = products[idx]
             return (-(len(p.get("title", "") or "")), p.get("sku", ""))
@@ -428,7 +435,7 @@ def _build_groups(products, find_fn, n, overlap_info):
             if not (lambda k: k and fam_counts.get(k, 0) > 1)(_variant_family_key(products[ri]))
         ]
         if not remove_idxs:
-            continue
+            return None
         best_overlap = {"matched": 0, "total_a": 0, "total_b": 0}
         for ri in remove_idxs:
             key = (min(keep_idx, ri), max(keep_idx, ri))
@@ -453,7 +460,7 @@ def _build_groups(products, find_fn, n, overlap_info):
         # overlaps are not duplicates (a product can legitimately share one or
         # two generic images) so they are skipped entirely.
         if match_type != "all_images_match":
-            continue
+            return None
 
         remove_items = []
         for ri in remove_idxs:
@@ -463,15 +470,37 @@ def _build_groups(products, find_fn, n, overlap_info):
             else:
                 reason = f"Duplicate of {keep_product.get('sku', '?')}: {matched_count}/{total_images} images match ({match_type})"
             remove_items.append({"sku": p.get("sku", ""), "title": p.get("title", ""), "reason": reason})
-            all_remove_skus.append(p.get("sku", ""))
-        out_groups.append({
+        return {
             "keep": {"sku": keep_product.get("sku", ""), "title": keep_product.get("title", ""), "reason": f"Kept: {len(keep_product.get('images', []))} images"},
             "remove": remove_items,
             "similarity": round(similarity, 3),
             "match_type": match_type,
             "matched_images": matched_count,
             "total_images": total_images,
-        })
+        }
+    for root, members in groups_map.items():
+        if len(members) < 2:
+            continue
+        # Variants: if every member belongs to the same variant family, this is
+        # one product with several variants (e.g. NEEM_BASIL_FACE_PACK and
+        # NEEM_BASIL_FACE_PACK_100GM) — never a duplicate.
+        fam_keys = {_variant_family_key(products[i]) for i in members}
+        if len(fam_keys) == 1 and None not in fam_keys:
+            continue
+        # Split the image-union by title first: shared supplier photos across
+        # pack sizes are NOT duplicates. Each sub-group keeps one row of its own
+        # product and removes only exact-title repeats.
+        by_title: Dict[str, List[int]] = defaultdict(list)
+        for _i in members:
+            by_title[_title_key(products[_i])].append(_i)
+        for part in by_title.values():
+            if len(part) < 2:
+                continue
+            g = _emit_group(part)
+            if g:
+                out_groups.append(g)
+                for item in g["remove"]:
+                    all_remove_skus.append(item["sku"])
     out_groups.sort(key=lambda g: len(g["remove"]), reverse=True)
     return out_groups
 
