@@ -62,6 +62,9 @@ DUPE_PREFETCH_WORKERS = int(os.environ.get("DUPE_PREFETCH_WORKERS", "64"))
 # (10 = all images). Set DUPE_PREFETCH_IMAGES=2 for unique-heavy sheets.
 DUPE_PREFETCH_IMAGES = int(os.environ.get("DUPE_PREFETCH_IMAGES", "10"))
 DUPE_FETCH_RETRIES = int(os.environ.get("DUPE_FETCH_RETRIES", "2"))
+# A duplicate needs ALL images to match; one shared image (or a blank) is not
+# evidence. Products with a single image are never reported.
+DUPE_MIN_IMAGES = int(os.environ.get("DUPE_MIN_IMAGES", "2"))
 # Phase 3 costs ~75 µs per pair (26k pairs = 1.9 s measured), so a 50k cap was
 # far too low: an 11k-product sheet produces ~70k candidate pairs and a 29k
 # sheet ~200k, and the old cap silently truncated them (dropping real
@@ -398,7 +401,7 @@ def _title_key(p: dict) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _build_groups(products, find_fn, n, overlap_info):
+def _build_groups(products, find_fn, n, overlap_info, full_hashes=None, threshold=6):
     groups_map: Dict[int, List[int]] = defaultdict(list)
     for i in range(n):
         groups_map[find_fn(i)].append(i)
@@ -436,31 +439,34 @@ def _build_groups(products, find_fn, n, overlap_info):
         ]
         if not remove_idxs:
             return None
-        best_overlap = {"matched": 0, "total_a": 0, "total_b": 0}
-        for ri in remove_idxs:
-            key = (min(keep_idx, ri), max(keep_idx, ri))
-            info = overlap_info.get(key, {})
-            if info.get("matched", 0) > best_overlap["matched"]:
-                best_overlap = info
-        matched_count = best_overlap.get("matched", 0)
-        total_a = best_overlap.get("total_a", 0)
-        total_b = best_overlap.get("total_b", 0)
-        total_images = max(total_a, total_b, 1)
-        similarity = matched_count / total_images if total_images > 0 else 0.0
-        if matched_count == 0 and total_a == 0 and total_b == 0:
-            match_type = "no_images_loaded"
-        elif similarity >= 0.95:
-            match_type = "all_images_match"
-        elif similarity >= 0.6:
-            match_type = "most_images_match"
+        # Re-verify every candidate removal against the keep using the COMPLETE
+        # image sets: groups are built transitively, so a member can be linked
+        # through a third row without matching the keep itself. A duplicate must
+        # have the same number of images as the keep and every one must match.
+        keep_hashes = (full_hashes or {}).get(keep_idx, [])
+        verified_removes = []
+        total_images = len(keep_hashes)
+        if full_hashes and len(keep_hashes) >= DUPE_MIN_IMAGES:
+            for ri in remove_idxs:
+                rh = full_hashes.get(ri, [])
+                if len(rh) != len(keep_hashes) or len(rh) < DUPE_MIN_IMAGES:
+                    continue
+                m_ab, _ = compute_image_overlap(keep_hashes, rh, threshold)
+                if m_ab != len(keep_hashes):
+                    continue
+                m_ba, _ = compute_image_overlap(rh, keep_hashes, threshold)
+                if m_ba != len(rh):
+                    continue
+                verified_removes.append(ri)
+            remove_idxs = verified_removes
+            matched_count = len(keep_hashes) if verified_removes else 0
         else:
-            match_type = "partial_image_match"
+            matched_count = 0
 
-        # Report a duplicate ONLY when EVERY image matches. Partial/most
-        # overlaps are not duplicates (a product can legitimately share one or
-        # two generic images) so they are skipped entirely.
-        if match_type != "all_images_match":
+        if not remove_idxs or matched_count == 0:
             return None
+        similarity = 1.0
+        match_type = "all_images_match"
 
         remove_items = []
         for ri in remove_idxs:
@@ -687,6 +693,13 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     print(f"[DUP] Phase 1b: {len(stock_hashes)} stock hashes detected", file=sys.stderr)
     sys.stderr.flush()
 
+    # Keep the complete sets: candidate generation below may drop non-
+    # discriminating images, but the verdict "all images match" must look at
+    # every image of both products (2/2, 3/3, 4/4).
+    full_product_hashes: Dict[int, List[Tuple[str, object]]] = {
+        idx: list(hashes) for idx, hashes in product_hashes.items()
+    }
+
     # Filter product_hashes to exclude stock hashes
     filtered_product_hashes: Dict[int, List[Tuple[str, object]]] = {}
     for idx, hashes in product_hashes.items():
@@ -850,17 +863,26 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
 
     def _compare_pair(pair):
         a, b = pair
-        hashes_a = filtered_product_hashes.get(a, [])
-        hashes_b = filtered_product_hashes.get(b, [])
+        # FULL image sets here — the stock/wide filter is only used to keep the
+        # candidate list small, never to weaken the verdict.
+        hashes_a = full_product_hashes.get(a, [])
+        hashes_b = full_product_hashes.get(b, [])
         if not hashes_a or not hashes_b:
             return None
+        # Same number of images, and EVERY image matches on both sides:
+        # 2 images -> 2/2, 4 images -> 4/4. A product with 4 images is never a
+        # duplicate of one with 3, and a single matching image is not enough.
+        if len(hashes_a) != len(hashes_b):
+            return None
+        if len(hashes_a) < DUPE_MIN_IMAGES:
+            return None
         matched_ab, _ = compute_image_overlap(hashes_a, hashes_b, threshold)
+        if matched_ab != len(hashes_a):
+            return None
         matched_ba, _ = compute_image_overlap(hashes_b, hashes_a, threshold)
-        min_total = min(len(hashes_a), len(hashes_b))
-        min_match = min(matched_ab, matched_ba)
-        if min_total > 0 and min_match / min_total >= 0.5:
-            return (a, b, max(matched_ab, matched_ba), len(hashes_a), len(hashes_b))
-        return None
+        if matched_ba != len(hashes_b):
+            return None
+        return (a, b, len(hashes_a), len(hashes_a), len(hashes_b))
 
     total = len(pair_list)
     done = 0
@@ -881,7 +903,8 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
             print(f"[DUP]   Compared {done}/{total} pairs", file=sys.stderr)
             sys.stderr.flush()
 
-    out_groups = _build_groups(products, find, n, overlap_info)
+    out_groups = _build_groups(products, find, n, overlap_info,
+                               full_hashes=full_product_hashes, threshold=threshold)
 
     # Merge in exact-SKU duplicates (listings sharing a SKU but different images).
     # Avoid double-counting SKUs already caught by the image-based groups.
