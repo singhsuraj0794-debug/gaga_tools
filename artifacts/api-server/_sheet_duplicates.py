@@ -66,7 +66,7 @@ DUPE_FETCH_RETRIES = int(os.environ.get("DUPE_FETCH_RETRIES", "2"))
 # far too low: an 11k-product sheet produces ~70k candidate pairs and a 29k
 # sheet ~200k, and the old cap silently truncated them (dropping real
 # duplicates). Raise it to a genuine safety valve only.
-MAX_CANDIDATE_PAIRS = 3000000
+MAX_CANDIDATE_PAIRS = 10000000
 # A bucket bigger than this is almost certainly a stock/blank image, but it can
 # also be a legitimately huge family of identical listings — so raise it and log
 # every skip instead of silently losing those duplicates.
@@ -289,6 +289,20 @@ def _compute_product_hashes(product: dict, start: int = 0, stop: int = 10) -> Li
     return hashes
 
 
+_COLOR_CACHE: Dict[tuple, bool] = {}
+_COLOR_CACHE_MAX = 400000
+
+
+def _colors_match_cached(url_a: str, sig_a, url_b: str, sig_b) -> bool:
+    key = (url_a, url_b) if url_a <= url_b else (url_b, url_a)
+    hit = _COLOR_CACHE.get(key)
+    if hit is None:
+        hit = colors_match(sig_a, sig_b)
+        if len(_COLOR_CACHE) < _COLOR_CACHE_MAX:
+            _COLOR_CACHE[key] = hit
+    return hit
+
+
 def compute_image_overlap(
     hashes_a: List[Tuple[str, object]],
     hashes_b: List[Tuple[str, object]],
@@ -312,7 +326,7 @@ def compute_image_overlap(
             if dist > threshold or dist >= best_dist:
                 continue
             # Recoloured artwork hashes identically — require matching colour.
-            if not colors_match(sig_a, sig_b):
+            if not _colors_match_cached(url_a, sig_a, _url_b, sig_b):
                 continue
             best_dist = dist
             best_idx = j
@@ -599,7 +613,7 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
     all_urls = _collect_urls(products, limit=pre)
     print(f"[DUP]   {len(all_urls)} unique images to prefetch", file=sys.stderr)
     sys.stderr.flush()
-    _prefetch_images(all_urls, workers=24)
+    _prefetch_images(all_urls)
     print(f"[DUP]   Images prefetched in {time.time()-t0:.1f}s", file=sys.stderr)
     sys.stderr.flush()
 
@@ -627,6 +641,20 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
 
     # Phase 1b: Identify stock photos using pHash distance clustering
     stock_hashes = _detect_stock_hashes(product_hashes, loaded, threshold)
+    # A single image shared by >MAX_PRODUCTS_IN_BUCKET products (category banner,
+    # generic pack shot) cannot discriminate — every pair sharing it would match.
+    # Ignore THAT IMAGE rather than skipping the whole bucket of products, which
+    # silently dropped 7 families of 2,257-4,376 products on a 29k sheet.
+    wide_counts: Dict[int, set] = {}
+    for _idx, _hashes in product_hashes.items():
+        for _entry in _hashes:
+            wide_counts.setdefault(_hash_int(_unpack_hash_entry(_entry)[1]), set()).add(_idx)
+    wide = {h for h, members in wide_counts.items() if len(members) > MAX_PRODUCTS_IN_BUCKET}
+    if wide:
+        print(f"[DUP] Phase 1b: {len(wide)} image(s) shared by > {MAX_PRODUCTS_IN_BUCKET} products ignored",
+              file=sys.stderr)
+        sys.stderr.flush()
+        stock_hashes |= wide
     print(f"[DUP] Phase 1b: {len(stock_hashes)} stock hashes detected", file=sys.stderr)
     sys.stderr.flush()
 
@@ -727,7 +755,7 @@ def find_sheet_duplicates(products: List[dict], threshold: int = 6) -> dict:
 
     # Cap candidates
     if len(candidate_pairs) > MAX_CANDIDATE_PAIRS:
-        print(f"[DUP]   WARNING: {len(candidate_pairs)} candidates exceeds cap {MAX_CANDIDATE_PAIRS}, capping", file=sys.stderr)
+        print(f"[DUP]   WARNING: {len(candidate_pairs)} candidates exceeds cap {MAX_CANDIDATE_PAIRS} — results may be incomplete", file=sys.stderr)
         sys.stderr.flush()
         candidate_pairs = set(list(candidate_pairs)[:MAX_CANDIDATE_PAIRS])
 

@@ -1682,6 +1682,15 @@ export default function PreListingValidator() {
           }
           const t0 = Date.now();
           let blips = 0;
+          // A 29k-product sheet legitimately takes over an hour on a cold cache,
+          // and the old fixed 1-hour cap aborted it ("duplicate check timed out")
+          // while the server kept working. Judge by PROGRESS instead: the job
+          // reports the download counter every ~3 s, so 15 minutes without a new
+          // progress line means it is genuinely stuck.
+          let lastProgress = Date.now();
+          let lastProgressText = "";
+          const STALL_MS = 15 * 60 * 1000;
+          const HARD_LIMIT_MS = 6 * 60 * 60 * 1000;
           for (;;) {
             await new Promise((r) => setTimeout(r, 3000));
             let s: any;
@@ -1714,10 +1723,16 @@ export default function PreListingValidator() {
               }
               throw new Error(s.error || "duplicate detection failed");
             }
-            setDuplicateStatus(
-              s.progress || `Checking ${total} products... (${Math.round((Date.now() - t0) / 1000)}s)`,
-            );
-            if (Date.now() - t0 > 3600000) throw new Error("duplicate check timed out");
+            const progressText = s.progress || `Checked ${s.completed ?? 0} of ${total} products`;
+            if (progressText !== lastProgressText) {
+              lastProgressText = progressText;
+              lastProgress = Date.now();
+            }
+            setDuplicateStatus(`${progressText} (${Math.round((Date.now() - t0) / 60000)} min)`);
+            if (Date.now() - lastProgress > STALL_MS) {
+              throw new Error("duplicate check has made no progress for 15 minutes — it may have been stopped or the box is unreachable");
+            }
+            if (Date.now() - t0 > HARD_LIMIT_MS) throw new Error("duplicate check exceeded the 6-hour limit");
           }
         }
       };
